@@ -1,0 +1,111 @@
+# Config version - do not modify
+config_version: 1
+
+# World players are sent to when using /challengecomplete or when time limit expires.
+spawn-world: world
+
+# Party system settings
+party-radius: 10  # Radius in blocks for party members to be detected (default: 10)
+pending-challenge-timeout-seconds: 15  # Seconds before a pending challenge is automatically cancelled (default: 15)
+solo-countdown-seconds: 10  # Countdown time in seconds before solo players are teleported to challenge (default: 10)
+party-countdown-seconds: 45  # Countdown time in seconds before party members are teleported to challenge (default: 45)
+
+# GateKeeper NPC UUID list (set via /conradchallenges setnpc)
+npcs: [12fb852c-0d06-4d9f-b343-f0d12a4b102c]
+
+# Anti-forgery settings (fake challenge books)
+anti-forgery:
+  enabled: true
+  fine-amount: 50.0        # amount to charge for a fake book
+  drain-if-less: true      # if player has less than fine-amount, drain entire balance
+  broadcast: true          # announce to the server when detected
+  required-author: OfficerConradd      # books must be signed by this author name (leave empty to disable author check)
+
+anger:
+  enabled: true
+  duration-seconds: 300    # 5 minutes
+  # Insults have been moved to messages.yml under anger.insults
+  # Edit messages.yml to customize GateKeeper's angry responses
+
+# Challenges are created via /conradchallenges challenge create <id>
+# Use /conradchallenges challenge setbook, setdestination, etc. to configure them
+# All fields are always saved, even if empty/unset, to maintain consistent structure
+challenges:
+  fear_hole:
+    book-title: fear_hole
+    
+    world: ConradsChallenges
+    x: 4790.694567645066
+    y: 27.0
+    z: 1391.3905485604657
+    yaw: -90.75004
+    pitch: -15.7499695
+    
+    cooldown-seconds: 3600 # 1 hour cooldown
+    max-party-size: 1 # max players per party; -1 = unlimited
+    
+    # Hard cap on how long players can stay in this challenge (to prevent farming)
+    time-limit-seconds: 600 # 10 minutes
+    time-limit-warnings: # seconds remaining when warnings should fire
+      - 60
+      - 10
+    
+    completion:
+      type: SPEED
+      boss-type: ""
+      boss-name: ""
+      seconds: 0
+      item: ""
+      amount: 0
+      consume-on-complete: false
+      max-seconds: 300
+      tiers:
+        - name: GOLD
+          max-seconds: 90
+          reward-commands:
+            - eco give %player% 5000
+        - name: SILVER
+          max-seconds: 180
+          reward-commands:
+            - eco give %player% 2500
+        - name: BRONZE
+          max-seconds: 300
+          reward-commands:
+            - eco give %player% 1000
+    
+    # Extra reward commands that always run if the player successfully completes and turns in
+    reward-commands: []
+    
+  piratechallenge:
+    book-title: piratechallenge
+    
+    world: ConradsChallenges
+    x: 3456.874491614848
+    y: 70.0
+    z: 4590.311149967554
+    yaw: 2.2500844
+    pitch: -1.3499929
+    
+    cooldown-seconds: 60
+    max-party-size: -1
+    
+    # Hard cap on how long players can stay in this challenge (to prevent farming)
+    time-limit-seconds: 2400
+    time-limit-warnings: # seconds remaining when warnings should fire
+      - 60
+      - 10
+    
+    completion:
+      type: NONE
+      boss-type: ""
+      boss-name: ""
+      seconds: 0
+      item: ""
+      amount: 0
+      consume-on-complete: false
+      max-seconds: 0
+      tiers: []
+    
+    # Extra reward commands that always run if the player successfully completes and turns in
+    reward-commands:
+    - '7000'

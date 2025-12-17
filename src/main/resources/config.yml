@@ -1,0 +1,33 @@
+# Config version - do not modify
+config_version: 1
+
+# World players are sent to when using /challengecomplete or when time limit expires.
+spawn-world: world
+
+# Party system settings
+party-radius: 10  # Radius in blocks for party members to be detected (default: 10)
+pending-challenge-timeout-seconds: 15  # Seconds before a pending challenge is automatically cancelled (default: 15)
+solo-countdown-seconds: 10  # Countdown time in seconds before solo players are teleported to challenge (default: 10)
+party-countdown-seconds: 45  # Countdown time in seconds before party members are teleported to challenge (default: 10)
+
+# GateKeeper NPC UUID list (set via /conradchallenges setnpc)
+npcs: []
+
+# Anti-forgery settings (fake challenge books)
+anti-forgery:
+  enabled: true
+  fine-amount: 50.0        # amount to charge for a fake book
+  drain-if-less: true      # if player has less than fine-amount, drain entire balance
+  broadcast: true          # announce to the server when detected
+  required-author: ""      # books must be signed by this author name (leave empty to disable author check)
+
+anger:
+  enabled: true
+  duration-seconds: 300    # 5 minutes
+  # Insults have been moved to messages.yml under anger.insults
+  # Edit messages.yml to customize GateKeeper's angry responses
+
+# Challenges are created via /conradchallenges challenge create <id>
+# Use /conradchallenges challenge setbook, setdestination, etc. to configure them
+challenges: []
+

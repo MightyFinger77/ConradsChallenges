@@ -1,0 +1,440 @@
+# Config version - do not modify
+messages_version: 1
+
+# ConradChallenges Messages Configuration
+# Use & for color codes (e.g., &a for green, &c for red, &e for yellow)
+# 
+# Available placeholders:
+#   %player% - Player name
+#   %challenge% - Challenge display name
+#   %id% - Challenge ID
+#   %seconds% - Number of seconds
+#   %count% - Count/number
+#   %position% - Queue position
+#   %remaining% - Remaining amount
+#   %amount% - Money amount
+#   %time% - Time in seconds
+#   %elapsed% - Elapsed time
+#   %max% - Maximum value
+#   %tier% - Tier name
+#   %insult% - Random insult
+#   %title% - Book title
+#   %was% - Previous value (for clearbook)
+#   %type% - Type/EntityType
+#   %name% - Name (boss name, etc.)
+#   %entity% - Entity type
+#   %material% - Material name
+#   %consume% - Consume boolean
+#   %size% - Size/number
+#   %command% - Command string
+#   %book% - Book title
+#   %world% - World name
+#   %x%, %y%, %z% - Coordinates
+#   %cooldown% - Cooldown seconds
+#   %limit% - Time limit
+#   %num% - Number
+#   %plural% - Plural suffix (s or empty)
+
+# General messages
+general:
+  no-permission: "&cNo permission."
+  players-only: "Players only."
+  reloaded: "&aConradChallenges reloaded."
+  command-players-only: "Only players can use this command."
+
+# Command help messages
+commands:
+  help-header: "&e=== ConradChallenges Commands ==="
+  setnpc: "&e/conradchallenges setnpc"
+  removenpc: "&e/conradchallenges removenpc"
+  removeallnpcs: "&e/conradchallenges removeallnpcs"
+  reload: "&e/conradchallenges reload"
+  challenge: "&e/conradchallenges challenge ..."
+  party: "&e/conradchallenges party ..."
+
+# NPC management
+npc:
+  setnpc-look: "&cLook at an entity and run /conradchallenges setnpc."
+  setnpc-tip: "&7Tip: Make sure you're looking directly at the entity within 10 blocks."
+  setnpc-success: "&aThat entity is now GateKeeper, a Conrad Challenge NPC."
+  npc-display-name: "&5&lGateKeeper"
+  setnpc-already: "&eThat entity is already a GateKeeper NPC."
+  removenpc-look: "&cLook at an entity and run /conradchallenges removenpc."
+  removenpc-tip: "&7Tip: Make sure you're looking directly at the entity within 10 blocks."
+  removenpc-success: "&aThat entity is no longer a GateKeeper NPC."
+  removenpc-not: "&eThat entity was not a GateKeeper NPC."
+  removeall-none: "&eThere are no GateKeeper NPCs to remove."
+  removeall-success: "&aRemoved all &e%count%&a GateKeeper NPC(s)."
+
+# Challenge interaction
+challenge:
+  no-pending: "&cYou have no pending Conrad Challenge."
+  no-pending-click: "&cYou have no pending Conrad Challenge. Click a book on a GateKeeper first."
+  no-active: "&cYou are not currently in a Conrad Challenge."
+  config-invalid: "&cThat challenge is not configured correctly. Contact an admin."
+  no-destination: "&cThat challenge has no destination set."
+  spawn-not-configured: "&cSpawn location is not configured. Contact an admin."
+  already-prompted: "&eYou already have a pending challenge. Type &c/deny &eto cancel it first."
+  book-required: "&cYou must have a Conrad Challenge Book in your inventory to start a challenge."
+  no-book-detected: "&cYou do not have the required Conrad Challenge Book for &e%challenge%&c and will not enter."
+  gatekeeper-message: "&e\"I see you have a Conrad Challenge Book! Are you wanting to start this now?\""
+  warning: "&cWarning: You may die and lose your items in this challenge!"
+  accept-deny-startparty: "&eType &a/accept &e to begin solo, &6/startparty &e to start a party, or &c/deny &e to cancel."
+  accept-deny: "&eType &a/accept &e to begin, or &c/deny &e to cancel."
+  cooldown-active: "&cYou have recently completed this challenge. You can try again in &e%seconds%&c seconds."
+  locked: "&cAnother player or party is currently attempting this challenge. Please wait until they finish."
+  locked-queue: "&cAnother player or party is currently attempting this challenge. You have been added to the queue."
+  locked-down: "&cThis challenge is currently disabled. Please check back later."
+  queue-position: "&eYou are in queue. Your position: &7#%position%"
+  queue-wait: "&7Please wait for your turn. Type &c/deny &7to leave the queue."
+  queue-added: "&eThis challenge is currently in use. You have been added to the queue."
+  queue-your-turn: "&7Your position in queue: &e#%position%"
+  queue-notify: "&7You will be notified when it's your turn. Type &c/deny &7to leave the queue."
+  queue-turn: "&aIt's your turn! Starting countdown..."
+  queue-expired: "&cYour party session has expired. Removing from queue."
+  queue-no-accept: "&cNo players have accepted. Removing from queue."
+  queue-unavailable: "&cThe challenge became unavailable. You have been re-added to the queue."
+  queue-no-pending: "&cYou don't have a pending challenge. Removing from queue."
+  died: "&cYou have died and been removed from the challenge. You have been returned to town."
+  teleport-blocked: "&cYou cannot teleport while in a challenge! Use &a/exit &cor &a/challengecomplete &cto leave."
+  teleport-blocked-into: "&cYou cannot teleport into challenge areas! Use a Conrad Challenge Book at the GateKeeper to enter."
+  command-blocked: "&cYou cannot use teleportation commands while in a challenge! Use &a/exit &cor &a/challengecomplete &cto leave."
+  all-died: "&cAll party members have died. The challenge has failed. You have been returned to town."
+
+# Accept/Deny commands
+accept:
+  already-accepted-party: "&eYou have already accepted this party challenge."
+  accepted-party: "&a%player% &ehas accepted the party challenge."
+  waiting-more: "&7Waiting for &e%remaining%&7 more player(s) to accept..."
+  confirm-hint: "&7Or type &a/confirm&7 to start with current accepted players."
+  all-accepted-speedup: "&aAll party members have accepted! Countdown reduced to %seconds% seconds!"
+  party-full: "&cThis party is full! Maximum party size is &e%limit%&c players."
+  party-full-hint: "&7Ask an admin to increase the limit or form your own party."
+
+# Deny command
+deny:
+  cancelled: "&eYou cancelled the Conrad Challenge. You keep your book."
+  removed-queue: "&7You have been removed from the queue."
+  countdown-cancelled: "&7Countdown cancelled."
+  nothing-pending: "&cYou have no pending Conrad Challenge, queue entry, or active countdown."
+
+# Party system
+party:
+  no-session: "&cYou have no pending party challenge. Use /startparty first."
+  leader-only: "&cOnly the party leader can confirm the challenge."
+  no-accepted: "&cNo players have accepted the challenge yet."
+  starting-with: "&eStarting challenge with &a%count%&e accepted player(s)."
+  not-accepted-wont-join: "&7%count% eligible player(s) did not accept and will not join."
+  all-accepted: "&aAll eligible players have accepted!"
+  entering: "&aYour party is entering the &e%challenge%&a challenge!"
+  accept-prompt: "&7Type &a/accept &7to confirm your participation. If all players accept, the countdown will speed up to 10 seconds!"
+  eligible-members: "&eEligible party members:"
+  eligible-none: "&7  (none)"
+  eligible-player: "&a  - %player%"
+  eligible-notify: "&aYou are eligible to enter the &e%challenge%&a challenge!"
+  eligible-accept: "&eType &a/accept &e to join the party challenge."
+  ineligible: "&eIneligible (no book detected):"
+  ineligible-player: "&c  - %player%"
+  ineligible-notify: "&cYou do not have the required Conrad Challenge Book for &e%challenge%&c and will not enter."
+  waiting-accept: "&7Waiting for all eligible players to &a/accept&7..."
+  gatekeeper-book-required: "&e[GateKeeper] Each player entering this challenge must have their own Conrad Challenge Book for &6%challenge%&e in their inventory."
+  confirmed: "&aParty confirmed! &e%count%&a players will enter &6%challenge%&a."
+  max-size: "&cThis challenge allows a maximum party size of &e%max%&c players."
+  max-size-accepted: "&eAccepted players: &f%count%"
+  max-size-reduce: "&cReduce your party size and try again."
+  no-eligible: "&cNo eligible players were found. Party start cancelled."
+
+# Countdown
+countdown:
+  teleporting: "&eStarting in &6%seconds%s"
+  subtitle-cancel: "&c/deny &eto cancel"
+  current: "&7Your countdown display is set to: &e%type%"
+  set: "&aCountdown display set to: &e%type%"
+  invalid-type: "&cInvalid countdown type! Use: title, actionbar, bossbar, or chat"
+  usage: "&7Usage: &e/countdown <title|actionbar|bossbar|chat>"
+
+# Challenge entry
+entry:
+  entered: "&aYou have entered the Conrad Challenge: &e%challenge%"
+  boss-instruction: "&7Defeat the required boss, then use &a/challengecomplete &7(or &a/cc&7) to return to town."
+  timer-instruction: "&7Survive here for &e%seconds%&7 seconds. You'll be notified when time is up."
+  item-instruction: "&7Collect the required item, then use &a/challengecomplete &7(or &a/cc&7) to return to town."
+  speed-instruction: "&7Complete this challenge as fast as you can, then use &a/challengecomplete &7(or &a/cc&7) to return to town."
+  speed-time-limit: "&7You must finish within &e%seconds%&7 seconds to earn a reward."
+  none-instruction: "&7When you're done here, use &a/challengecomplete &7(or &a/cc&7) to return to town."
+  book-lost: "&cYou lost your Conrad Challenge Book! Keeping you here."
+  book-required: "&7You must have the book in your inventory to enter the challenge."
+  not-accepted: "&7You did not accept the party challenge. You will not be teleported."
+
+# Challenge completion
+completion:
+  no-completion: "&cYou have not completed the challenge requirements yet."
+  boss-required: "&cYou must defeat the required boss first."
+  item-required: "&cYou must collect the required item first."
+  timer-active: "&cYou must wait for the timer to complete."
+  speed-failed: "&cYou did not complete the challenge in time. No reward."
+  rewards-given: "&aRewards have been given!"
+  rewards-given-party: "&aRewards have been given to all party members!"
+  money-received: "&aYou received &e$%amount%&a!"
+  returned: "&aYou have been returned to town."
+  returned-party: "&aAll party members have been returned to town."
+
+# Exit command
+exit:
+  exited: "&eYou have exited the challenge without completing it."
+  exited-party: "&eYou have exited the challenge. Your party members may continue."
+
+# Anti-forgery
+forgery:
+  detected: "&c[GateKeeper] I see what you're trying to do..."
+  fake-book: "&cThis is a fake Conrad Challenge Book. Cheaters are not welcome here."
+  fine-charged: "&eI am keeping this fake book and charging you &c$%amount%&e for attempting to cheat."
+  no-money: "&c[GateKeeper] Trying to cheat without even $%amount% to your name?"
+  drained: "&eI am keeping this fake book and draining what little money you have (&c$%amount%&e)."
+  nothing-taken: "&eI am keeping this fake book. Be glad you had nothing for me to take."
+  no-economy: "&c[GateKeeper] I caught you trying to use a fake challenge book."
+  no-economy-kept: "&eI'll be keeping this forgery. You're lucky the economy system isn't set up."
+  broadcast-detected: "&c⚠ &ePlayer &6%player% &ejust tried turning in a &cFAKE&e Conrad Challenge Book%challenge%!"
+  broadcast-punished: "&cGateKeeper&e has confiscated the forgery and punished them."
+  broadcast-challenge-part: " for &d%challenge%"
+
+# Anger system
+anger:
+  use-sorry: "&7Use &a/sorry &7to apologize to GateKeeper."
+  not-angry: "&e[GateKeeper] I'm not angry with you."
+  forgiven: "&a[GateKeeper] I accept your apology. You may try again."
+  still-angry: "&c[GateKeeper] %insult%"
+  # List of insults GateKeeper says when angry (randomly selected)
+  insults:
+    - "&c[GateKeeper] Oh, it's you again. The forger."
+    - "&c[GateKeeper] My time is for challengers, not cheaters."
+    - "&c[GateKeeper] You really thought that fake book would work? Pathetic."
+    - "&c[GateKeeper] Come back when you remember how honesty works."
+
+# Top times
+top:
+  no-times: "&eNo recorded times for this challenge yet."
+  header: "&eTop times for &6%challenge%&e:"
+  entry: "&7- &f%player% &8- &f%time%s"
+
+# Admin commands
+admin:
+  challenge-unknown: "&cUnknown challenge id: %id%"
+  challenge-exists: "&cA challenge with that id already exists."
+  challenge-created: "&aChallenge &e%id%&a created."
+  challenge-deleted: "&aChallenge &e%id%&a deleted."
+  challenge-not-found: "&cChallenge not found: %id%"
+  challenge-list-header: "&e=== Challenges ==="
+  challenge-list-entry: "&7- &f%id%"
+  challenge-list-empty: "&7(no challenges)"
+  challenge-info-header: "&e=== Challenge Info: %id% ==="
+  challenge-info-book: "&7Book: &f%book%"
+  challenge-info-world: "&7World: &f%world%"
+  challenge-info-location: "&7Location: &f%x%, %y%, %z%"
+  challenge-info-type: "&7Type: &f%type%"
+  challenge-info-cooldown: "&7Cooldown: &f%cooldown%s"
+  challenge-info-max-party: "&7Max Party Size: &f%max%"
+  challenge-info-time-limit: "&7Time Limit: &f%limit%s"
+  top-usage: "&eUsage: /conradchallenges top <challengeId>"
+  unknown-subcommand: "&eUnknown subcommand. Use /conradchallenges for help."
+  challenge-create-usage: "&eUsage: /conradchallenges challenge create <id>"
+  challenge-exists: "&cChallenge with id '%id%' already exists."
+  challenge-created: "&aCreated challenge '%id%'."
+  challenge-delete-usage: "&eUsage: /conradchallenges challenge delete <id>"
+  challenge-cannot-delete: "&cCannot delete challenge '%id%' - it is currently active or reserved."
+  challenge-cannot-delete-hint: "&7Wait until all players have finished this challenge."
+  challenge-deleted: "&aDeleted challenge '%id%'."
+  challenge-setbook-usage: "&eUsage: /conradchallenges challenge setbook <id>"
+  challenge-setbook-hold: "&cHold the written challenge book in your main hand."
+  challenge-setbook-no-title: "&cBook must have a title."
+  challenge-setbook-success: "&aSet book title for '%id%' to '%title%', and marked it as an official challenge book."
+  challenge-clearbook-usage: "&eUsage: /conradchallenges challenge clearbook <id>"
+  challenge-clearbook-success: "&aCleared book title for challenge '%id%'%was%."
+  challenge-setdestination-usage: "&eUsage: /conradchallenges challenge setdestination <id>"
+  challenge-setdestination-success: "&aSet destination for '%id%' to your current location."
+  challenge-settype-usage: "&eUsage: /conradchallenges challenge settype <id> <BOSS|TIMER|ITEM|SPEED|NONE>"
+  challenge-settype-invalid: "&cInvalid type: %type%"
+  challenge-settype-success: "&aSet completion type for '%id%' to %type%"
+  challenge-setboss-usage: "&eUsage: /conradchallenges challenge setboss <id> <EntityType> [Name...]"
+  challenge-setboss-success: "&aSet boss for '%id%' to %entity% %name%"
+  challenge-setboss-invalid: "&cInvalid EntityType: %type%"
+  challenge-settimer-usage: "&eUsage: /conradchallenges challenge settimer <id> <seconds>"
+  challenge-settimer-success: "&aSet timer for '%id%' to %seconds% seconds."
+  challenge-settimer-invalid: "&cInvalid number: %num%"
+  challenge-setitem-usage: "&eUsage: /conradchallenges challenge setitem <id> <Material> <amount> <consume:true|false>"
+  challenge-setitem-success: "&aSet item requirement for '%id%' to %amount%x %material% (consume=%consume%)."
+  challenge-setitem-invalid-amount: "&cInvalid amount."
+  challenge-setitem-invalid-material: "&cInvalid material."
+  challenge-setspeed-usage: "&eUsage: /conradchallenges challenge setspeed <id> <maxSeconds>"
+  challenge-setcooldown-usage: "&eUsage: /conradchallenges challenge setcooldown <id> <seconds>"
+  challenge-setcooldown-success: "&aSet cooldown for '%id%' to %seconds% seconds."
+  challenge-settimelimit-usage: "&eUsage: /conradchallenges challenge settimelimit <id> <seconds>"
+  challenge-settimelimit-success: "&aSet time limit for '%id%' to %seconds% seconds."
+  challenge-setmaxparty-usage: "&eUsage: /conradchallenges challenge setmaxparty <id> <size|-1>"
+  challenge-setmaxparty-success: "&aSet max party size for '%id%' to %size%."
+  challenge-addreward-usage: "&eUsage: /conradchallenges challenge addreward <id> <command...>"
+  challenge-addreward-success: "&aAdded reward command to '%id%': %command%"
+  challenge-clearrewards-usage: "&eUsage: /conradchallenges challenge clearrewards <id>"
+  challenge-clearrewards-success: "&aCleared all reward commands for '%id%'."
+  challenge-setspeed-success: "&aSet speed challenge max time for '%id%' to %seconds% seconds."
+  challenge-setspeed-invalid: "&cInvalid number: %num%"
+  challenge-list-empty: "&7No challenges configured."
+  challenge-info-not-found: "&cChallenge not found: %id%"
+  challenge-info-no-book: "&7Book: &c(not set)"
+  challenge-info-no-destination: "&7Destination: &c(not set)"
+  challenge-info-no-type: "&7Type: &c(not set)"
+  challenge-info-no-cooldown: "&7Cooldown: &c(not set)"
+  challenge-info-no-max-party: "&7Max Party Size: &c(not set)"
+  challenge-info-no-time-limit: "&7Time Limit: &c(not set)"
+  challenge-info-rewards: "&7Reward Commands: &f%count%"
+  challenge-info-no-rewards: "&7Reward Commands: &c(none)"
+  challenge-info-speed-tiers: "&7Speed Tiers: &f%count%"
+  challenge-info-no-speed-tiers: "&7Speed Tiers: &c(none)"
+  challenge-info-boss: "&7Boss: &f%type% %name%"
+  challenge-info-timer: "&7Timer: &f%seconds%s"
+  challenge-info-item: "&7Item: &f%amount%x %material% (consume=%consume%)"
+  challenge-info-speed: "&7Max Time: &f%seconds%s"
+  challenge-info-speed-tier: "&8  - &f%name% ≤ %seconds%s (%count% cmds)"
+  party-teleporting: " Teleporting in %seconds% seconds..."
+  challenge-list-entry-book: "&8(%book%)"
+  challenge-list-entry-no-book: "&8(no book title)"
+  challenge-info-time-limit-warnings: " (warnings: %warnings%)"
+  challenge-info-boss-name: " (%name%)"
+  challenge-create-command: "&e/conradchallenges challenge create <id>"
+  challenge-delete-command: "&e/conradchallenges challenge delete <id>"
+  challenge-setbook-command: "&e/conradchallenges challenge setbook <id>"
+  challenge-clearbook-command: "&e/conradchallenges challenge clearbook <id>"
+  challenge-setdestination-command: "&e/conradchallenges challenge setdestination <id>"
+  challenge-settype-command: "&e/conradchallenges challenge settype <id> <BOSS|TIMER|ITEM|SPEED|NONE>"
+  challenge-setboss-command: "&e/conradchallenges challenge setboss <id> <EntityType> [Name...]"
+  challenge-settimer-command: "&e/conradchallenges challenge settimer <id> <seconds>"
+  challenge-setitem-command: "&e/conradchallenges challenge setitem <id> <Material> <amount> <consume:true|false>"
+  challenge-setspeed-command: "&e/conradchallenges challenge setspeed <id> <maxSeconds>"
+  challenge-setcooldown-command: "&e/conradchallenges challenge setcooldown <id> <seconds>"
+  challenge-settimelimit-command: "&e/conradchallenges challenge settimelimit <id> <seconds>"
+  challenge-setmaxparty-command: "&e/conradchallenges challenge setmaxparty <id> <size|-1>"
+  challenge-addreward-command: "&e/conradchallenges challenge addreward <id> <command...>"
+  challenge-clearrewards-command: "&e/conradchallenges challenge clearrewards <id>"
+  challenge-list-command: "&e/conradchallenges challenge list"
+  challenge-info-command: "&e/conradchallenges challenge info <id>"
+  challenge-setregenerationarea-command: "&e/conradchallenges challenge setregenerationarea <id>"
+  challenge-clearregenerationarea-command: "&e/conradchallenges challenge clearregenerationarea <id>"
+  challenge-captureregeneration-command: "&e/conradchallenges challenge captureregeneration <id>"
+  challenge-edit-command: "&e/conradchallenges challenge edit <id>"
+  challenge-save-command: "&e/conradchallenges challenge save"
+  challenge-cancel-command: "&e/conradchallenges challenge cancel"
+  challenge-setregenerationarea-usage: "&eUsage: /conradchallenges challenge setregenerationarea <id>"
+  challenge-setregenerationarea-corner1: "&aSet corner 1 for regeneration area of challenge '%id%' to your location (&7%x%, %y%, %z%&a)."
+  challenge-setregenerationarea-corner2: "&aSet corner 2 for regeneration area of challenge '%id%' to your location (&7%x%, %y%, %z%&a)."
+  challenge-setregenerationarea-corner2-updated: "&aUpdated corner 2 for regeneration area of challenge '%id%' to your location (&7%x%, %y%, %z%&a)."
+  challenge-setregenerationarea-hint: "&7Now go to the opposite corner and run the command again to set corner 2."
+  challenge-setregenerationarea-we-hint: "&7Tip: Use WorldEdit selection (//pos1 and //pos2) to set both corners at once!"
+  challenge-setregenerationarea-we-corner1: "&aSet corner 1 for regeneration area of challenge '%id%' from WorldEdit selection (&7%x%, %y%, %z%&a)."
+  challenge-setregenerationarea-we-corner2: "&aSet corner 2 for regeneration area of challenge '%id%' from WorldEdit selection (&7%x%, %y%, %z%&a)."
+  challenge-setregenerationarea-captured: "&aInitial state captured! The challenge area will regenerate when players enter."
+  challenge-setregenerationarea-capture-failed: "&cFailed to capture initial state. Check that both corners are in the same world."
+  challenge-clearregenerationarea-usage: "&eUsage: /conradchallenges challenge clearregenerationarea <id>"
+  challenge-clearregenerationarea-success: "&aCleared regeneration area for challenge '%id%'."
+  challenge-captureregeneration-usage: "&eUsage: /conradchallenges challenge captureregeneration <id>"
+  challenge-captureregeneration-no-area: "&cChallenge '%id%' does not have a regeneration area set. Use setregenerationarea first."
+  challenge-captureregeneration-success: "&aCaptured initial state for challenge '%id%'."
+  challenge-captureregeneration-failed: "&cFailed to capture initial state for challenge '%id%'."
+  challenge-info-regeneration-area: "&7Regeneration Area: &fCorner 1: %x1%, %y1%, %z1% | Corner 2: %x2%, %y2%, %z2%"
+  challenge-info-regeneration-captured: "&7  Initial state: &a%count% blocks captured"
+  challenge-info-no-regeneration-area: "&7Regeneration Area: &c(not set)"
+  challenge-edit-usage: "&eUsage: /conradchallenges challenge edit <id>"
+  challenge-edit-entered: "&aEntered edit mode for challenge '%id%'. Make your changes, then use &e/challenge save &aor &c/challenge cancel&a."
+  challenge-edit-instructions: "&7You can now modify the challenge area. Use &e/challenge save &7to save changes or &c/challenge cancel &7to revert."
+  challenge-edit-already-editing: "&cChallenge '%id%' is already being edited by %admin%."
+  challenge-edit-already-editing-another: "&cYou are already editing challenge '%id%'."
+  challenge-edit-cancel-hint: "&7Use &c/challenge cancel &7to exit edit mode first."
+  challenge-save-not-editing: "&cYou are not currently editing any challenge."
+  challenge-save-regeneration-captured: "&aRegeneration state recaptured with your changes."
+  challenge-save-regeneration-failed: "&cFailed to recapture regeneration state. Changes saved but regeneration may not work correctly."
+  challenge-save-success: "&aChanges saved for challenge '%id%'! You have been returned to your original location."
+  challenge-cancel-not-editing: "&cYou are not currently editing any challenge."
+  challenge-cancel-restored: "&aChallenge '%id%' restored to state before editing."
+  challenge-cancel-no-backup: "&cNo backup found for challenge '%id%'. Exiting edit mode without restoring."
+  challenge-cancel-success: "&eEdit mode cancelled for challenge '%id%'. You have been returned to your original location."
+  challenge-maintenance: "&cThis challenge is currently undergoing maintenance by %admin%. Please wait."
+  challenge-edit-teleport-blocked: "&cYou cannot teleport while in edit mode! Use &e/challenge save &cor &c/challenge cancel &cto exit edit mode first."
+  challenge-lockdown-command: "&e/conradchallenges challenge lockdown <id>"
+  challenge-unlockdown-command: "&e/conradchallenges challenge unlockdown <id>"
+  challenge-lockdown-usage: "&eUsage: /conradchallenges challenge lockdown <id>"
+  challenge-lockdown-success: "&aChallenge '%id%' has been locked down. Players cannot start it."
+  challenge-lockdown-already: "&cChallenge '%id%' is already locked down."
+  challenge-unlockdown-usage: "&eUsage: /conradchallenges challenge unlockdown <id>"
+  challenge-unlockdown-success: "&aChallenge '%id%' has been unlocked. Players can now start it."
+  challenge-unlockdown-not-locked: "&cChallenge '%id%' is not locked down."
+  challenge-info-locked-down: "&7Status: &cLOCKED DOWN"
+  challenge-edit-mode-required: "&cYou must be in edit mode to modify challenges. Use &e/challenge edit <id> &cto enter edit mode."
+  party-start-command: "&e/conradchallenges party start <challengeId>"
+  party-confirm-command: "&e/conradchallenges party confirm"
+  party-start-usage: "&eUsage: /conradchallenges party start <challengeId>"
+  party-unknown-subcommand: "&eUnknown party subcommand."
+  invalid-number: "&cInvalid number: %num%"
+  no-party-confirm: "&cYou have no pending party challenge to confirm."
+  no-book-found: "&cNo eligible players with the required challenge book were found. Party start cancelled."
+  eligible-detected: "&eEligible players detected: &f%count%"
+  timer-survived: "&aYou have survived the required time for &e%challenge%&a!"
+  timer-remaining: "&e[GateKeeper] You have &c%seconds% seconds&e remaining in this challenge!"
+  time-expired: "&c[GateKeeper] Your time in &e%challenge%&c has expired."
+  time-expired-retry: "&7If you wish to try again, obtain another Conrad Challenge Book."
+  boss-defeated: "&aYou have defeated the boss for &e%challenge%&a!"
+  conditions-not-met: "&cYou haven't met the conditions for this challenge yet. Keep going!"
+  gatekeeper-survived: "&e\"I see you survived the challenge of &6%challenge%&e...\""
+  gatekeeper-well-done: "&a\"Well done! Here are your rewards.\""
+  anger-fallback: "&c[GateKeeper] I'm not dealing with cheaters until they apologize."
+  first-completion-broadcast: "&6%player% &ecompleted &d%challenge% &efor the first time!"
+  challenge-locked: "&cSomeone is already attempting this challenge. Please wait until they finish."
+  challenge-locked-party: "&cAnother player or party is currently attempting this challenge. Please wait until they finish."
+  challenge-no-destination-admin: "&cThat challenge has no destination set. Contact an admin."
+  challenge-misconfigured-item: "&cThis challenge is misconfigured (no item requirement)."
+  challenge-item-not-found: "&cYou don't have the required item for this challenge yet."
+  challenge-item-brought: "&e\"Ah, you brought what I asked for from &6%challenge%&e.\""
+  challenge-returned: "&e\"So, you've returned from &6%challenge%&e...\""
+  challenge-no-rewards: "&eChallenge completed, but no rewards are configured for this challenge."
+  challenge-completed-party: "&aChallenge completed! Rewards have been given."
+  challenge-completed-rewards: "&aChallenge completed! You received: %rewards%&a."
+  npc-no-book: "&eConrad Challenge Books are for purchase at the Book Bazaar! Come back and see me once you have one."
+  npc-ouch: "&cOuch, Asshole!"
+  npc-thank-you: "&aThank you! That was delicious!"
+  npc-pending-exists: "&eYou already have a pending challenge! Type &c/deny &e to cancel it first."
+  npc-book-detected: "&e\"I see you have a Conrad Challenge Book! Are you wanting to start this now?\""
+  npc-warning: "&cWarning: You may die and lose your items in this challenge!"
+  npc-options: "&eType &a/accept &e to begin solo, &6/startparty &e to start a party, or &c/deny &e to cancel."
+
+# Party messages (additional) - these extend the party section above
+party-additional:
+  eligible-none-display: "&7  (none)"
+  ineligible-none-display: "&7  (none)"
+  confirm-starting: "&eChallenge will start with &a%count%&e accepted player(s)."
+  confirm-not-accepted: "&7%count% eligible player(s) did not accept and will not join."
+
+# Completion messages (additional)
+completion:
+  no-key-party: "&cNo one in your party has a Completion Key!"
+  key-required: "&7A Completion Key is required to finish and receive rewards."
+  key-required-party: "&7One Completion Key will complete the challenge for the entire party."
+  no-key: "&cYou need a Completion Key to complete this challenge!"
+  key-consumed: "&e%player% used /challengecomplete. Your Completion Key was consumed to complete the challenge for the party."
+  completed-speed: "&aYou completed &e%challenge% &ain &e%seconds%&a seconds!"
+  completed-speed-tier: "&7Tier: &6%tier%&7. Speak to GateKeeper to receive your reward."
+  completed-speed-failed: "&cYou took &e%elapsed%&c seconds, slower than the required maximum of &e%max%&c seconds."
+  completed-speed-retry: "&7You can try again by using another Conrad Challenge Book."
+  completed-speed-no-time: "&cCould not determine your start time for this challenge."
+  party-returned: "&aYour party feels a strange pull... and returns to town."
+  solo-returned: "&aYou feel a strange pull... and return to town."
+  speak-gatekeeper: "&7Speak to GateKeeper to see if you completed the challenge."
+
+# Exit messages (additional)
+exit:
+  exited-returned: "&eYou have exited the challenge and returned to town."
+  exited-no-rewards: "&7You did not complete the challenge, so no rewards will be given."
+
+# Sorry command messages
+sorry:
+  what-apologizing: "&e[GateKeeper] ...What are you apologizing for?"
+  forgiven-message: "&e[GateKeeper] Hmph. At least you admit you were wrong."
+  forgiven-hint: "&e[GateKeeper] I'll forgive you this once. Don't try to trick me again."
+

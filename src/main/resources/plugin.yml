@@ -1,0 +1,78 @@
+name: ConradChallenges
+version: '${project.version}'
+main: com.gix.conradchallenges.ConradChallengesPlugin
+api-version: '1.21'
+authors: [OfficerConradd, MightyFinger77]
+description: GateKeeper-based challenge system using written books, NPCs, parties, time limits, and anti-forgery.
+softdepend:
+  - Vault
+  - FancyNPCs
+  - WorldEdit
+  - FastAsyncWorldEdit
+  - PlaceholderAPI
+
+commands:
+  conradchallenges:
+    description: Admin and party commands for ConradChallenges
+    usage: /<command> [setnpc|removenpc|removeallnpcs|reload|challenge|party|top|challenge create|challenge setbook|challenge clearbook|challenge setdestination|challenge settype|challenge setboss|challenge settimer|challenge setitem|challenge setspeed|challenge setcooldown|challenge settimelimit|challenge setmaxparty|challenge addreward|challenge clearrewards|challenge list|challenge info|challenge setregenerationarea|challenge clearregenerationarea|challenge captureregeneration|challenge edit|challenge save|challenge cancel|challenge lockdown|challenge unlockdown|party start|party confirm]
+    aliases: [cchallenges]
+  accept:
+    description: Accept your pending Conrad Challenge
+    usage: /<command>
+  deny:
+    description: Deny your pending Conrad Challenge
+    usage: /<command>
+  challengecomplete:
+    description: Complete your current Conrad Challenge and return to spawn
+    usage: /<command>
+    aliases: [cc]
+  exit:
+    description: Exit your current Conrad Challenge without completing it
+    usage: /<command>
+  sorry:
+    description: Apologize to GateKeeper if he is angry with you
+    usage: /<command>
+  startparty:
+    description: Start a party challenge from your pending challenge
+    usage: /<command>
+  confirm:
+    description: Confirm your party challenge to begin the countdown
+    usage: /<command>
+  countdown:
+    description: Set your countdown display preference (title, actionbar, bossbar, chat)
+    usage: /<command> [title|actionbar|bossbar|chat]
+
+permissions:
+  conradchallenges.use:
+    description: Allows the player to use the conradchallenges command
+    default: true
+  conradchallenges.accept:
+    description: Allows the player to accept pending challenges
+    default: true
+  conradchallenges.deny:
+    description: Allows the player to deny pending challenges
+    default: true
+  conradchallenges.complete:
+    description: Allows the player to complete challenges
+    default: true
+  conradchallenges.exit:
+    description: Allows the player to exit challenges without completing them
+    default: true
+  conradchallenges.challenge:
+    description: Allows the player to use challenge commands
+    default: true
+  conradchallenges.sorry:
+    description: Allows the player to apologize to GateKeeper
+    default: true
+  conradchallenges.admin:
+    description: Allows admin to manage Conrad Challenge NPCs and challenges
+    default: op
+  conradchallenges.party:
+    description: Allows the player to use party commands
+    default: true
+  conradchallenges.startparty:
+    description: Allows the player to start a party challenge
+    default: true
+  conradchallenges.confirm:
+    description: Allows the player to confirm a party challenge
+    default: true
