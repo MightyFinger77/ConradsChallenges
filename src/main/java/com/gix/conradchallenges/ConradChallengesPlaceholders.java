@@ -28,13 +28,16 @@ public class ConradChallengesPlaceholders {
             // Get PlaceholderExpansion class
             Class<?> expansionClass = Class.forName("me.clip.placeholderapi.expansion.PlaceholderExpansion");
             
-            // Create a dynamic proxy that implements PlaceholderExpansion
+            // Create an anonymous inner class that extends PlaceholderExpansion
+            // We'll use a proxy but ensure all required methods are handled
             expansionInstance = java.lang.reflect.Proxy.newProxyInstance(
                 expansionClass.getClassLoader(),
                 new Class[]{expansionClass},
                 (proxy, method, args) -> {
                     String methodName = method.getName();
+                    Class<?> returnType = method.getReturnType();
                     
+                    // Handle all PlaceholderExpansion methods
                     if (methodName.equals("getIdentifier")) {
                         return "conradchallenges";
                     }
@@ -55,23 +58,88 @@ public class ConradChallengesPlaceholders {
                         String params = (String) args[1];
                         return onPlaceholderRequest(player, params);
                     }
+                    if (methodName.equals("onPlaceholderRequest") && args.length == 2) {
+                        // Alternative method name
+                        OfflinePlayer player = (OfflinePlayer) args[0];
+                        String params = (String) args[1];
+                        return onPlaceholderRequest(player, params);
+                    }
+                    if (methodName.equals("toString")) {
+                        return "ConradChallengesPlaceholderExpansion";
+                    }
+                    if (methodName.equals("equals") && args.length == 1) {
+                        return proxy == args[0];
+                    }
+                    if (methodName.equals("hashCode")) {
+                        return proxy.hashCode();
+                    }
                     
+                    // Return default value for other methods
+                    if (returnType == boolean.class || returnType == Boolean.class) {
+                        return false;
+                    }
+                    if (returnType == int.class || returnType == Integer.class) {
+                        return 0;
+                    }
                     return null;
                 }
             );
             
-            // Register the expansion
+            // Register the expansion using PlaceholderAPI's method
             Class<?> papiClass = Class.forName("me.clip.placeholderapi.PlaceholderAPI");
-            Method registerMethod = papiClass.getMethod("registerExpansion", expansionClass);
-            boolean registered = (Boolean) registerMethod.invoke(null, expansionInstance);
             
-            if (registered) {
-                plugin.getLogger().info("PlaceholderAPI expansion registered successfully!");
+            // Try multiple registration approaches
+            try {
+                // Method 1: Static method
+                Method registerMethod = papiClass.getMethod("registerExpansion", expansionClass);
+                boolean registered = (Boolean) registerMethod.invoke(null, expansionInstance);
+                
+                if (registered) {
+                    plugin.getLogger().info("PlaceholderAPI expansion registered successfully via static method!");
+                    return true;
+                } else {
+                    plugin.getLogger().warning("PlaceholderAPI returned false when registering expansion.");
+                }
+            } catch (NoSuchMethodException e) {
+                plugin.getLogger().fine("Static registerExpansion method not found, trying instance method...");
             }
             
-            return registered;
+            // Method 2: Instance method
+            try {
+                Object papiInstance = papiClass.getMethod("getInstance").invoke(null);
+                Method registerMethod = papiInstance.getClass().getMethod("registerExpansion", expansionClass);
+                boolean registered = (Boolean) registerMethod.invoke(papiInstance, expansionInstance);
+                
+                if (registered) {
+                    plugin.getLogger().info("PlaceholderAPI expansion registered successfully via instance method!");
+                    return true;
+                } else {
+                    plugin.getLogger().warning("PlaceholderAPI returned false when registering expansion via instance method.");
+                }
+            } catch (Exception e) {
+                plugin.getLogger().fine("Instance method registration failed: " + e.getMessage());
+            }
+            
+            // Method 3: Try using ExpansionManager directly
+            try {
+                Class<?> expansionManagerClass = Class.forName("me.clip.placeholderapi.expansion.ExpansionManager");
+                Object expansionManager = papiClass.getMethod("getExpansionManager").invoke(null);
+                Method registerMethod = expansionManagerClass.getMethod("register", expansionClass);
+                boolean registered = (Boolean) registerMethod.invoke(expansionManager, expansionInstance);
+                
+                if (registered) {
+                    plugin.getLogger().info("PlaceholderAPI expansion registered successfully via ExpansionManager!");
+                    return true;
+                }
+            } catch (Exception e) {
+                plugin.getLogger().fine("ExpansionManager registration failed: " + e.getMessage());
+            }
+            
+            plugin.getLogger().warning("All PlaceholderAPI registration methods failed. Check server logs for details.");
+            return false;
+            
         } catch (Exception e) {
-            plugin.getLogger().warning("Failed to register PlaceholderAPI expansion: " + e.getMessage());
+            plugin.getLogger().severe("Failed to register PlaceholderAPI expansion: " + e.getMessage());
             e.printStackTrace();
             return false;
         }

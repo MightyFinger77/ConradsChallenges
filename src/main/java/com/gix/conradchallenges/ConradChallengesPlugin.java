@@ -348,12 +348,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     // ====== PLACEHOLDERAPI ======
 
     private void setupPlaceholderAPI() {
-        if (getServer().getPluginManager().getPlugin("PlaceholderAPI") != null) {
-            new ConradChallengesPlaceholders(this).register();
-            getLogger().info("PlaceholderAPI expansion registered!");
-        } else {
-            getLogger().info("PlaceholderAPI not found. Placeholders will not be available.");
-        }
+        // Use a delayed task to ensure PlaceholderAPI is fully loaded
+        getServer().getScheduler().runTaskLater(this, () -> {
+            if (getServer().getPluginManager().getPlugin("PlaceholderAPI") != null && 
+                getServer().getPluginManager().isPluginEnabled(getServer().getPluginManager().getPlugin("PlaceholderAPI"))) {
+                boolean registered = new ConradChallengesPlaceholders(this).register();
+                if (registered) {
+                    getLogger().info("PlaceholderAPI expansion registered successfully!");
+                } else {
+                    getLogger().warning("Failed to register PlaceholderAPI expansion. Check console for errors.");
+                }
+            } else {
+                getLogger().info("PlaceholderAPI not found or not enabled. Placeholders will not be available.");
+            }
+        }, 20L); // 1 second delay to ensure PlaceholderAPI is ready
     }
 
     // ====== DATA.YML ======
@@ -3648,7 +3656,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
         if (sub.equals("edit")) {
             if (args.length < 2) {
-                player.sendMessage(getMessage("challenge-edit-usage"));
+                player.sendMessage(getMessage("admin.challenge-edit-usage"));
                 return true;
             }
             String id = args[1];
@@ -3663,15 +3671,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             if (currentEditor != null && !currentEditor.equals(player.getUniqueId())) {
                 Player currentEditorPlayer = Bukkit.getPlayer(currentEditor);
                 String editorName = currentEditorPlayer != null && currentEditorPlayer.isOnline() ? currentEditorPlayer.getName() : "an admin";
-                player.sendMessage(getMessage("challenge-edit-already-editing", "id", id, "admin", editorName));
+                player.sendMessage(getMessage("admin.challenge-edit-already-editing", "id", id, "admin", editorName));
                 return true;
             }
             
             // Check if player is already editing another challenge
             for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
                 if (entry.getValue().equals(player.getUniqueId()) && !entry.getKey().equals(id)) {
-                    player.sendMessage(getMessage("challenge-edit-already-editing-another", "id", entry.getKey()));
-                    player.sendMessage(getMessage("challenge-edit-cancel-hint"));
+                    player.sendMessage(getMessage("admin.challenge-edit-already-editing-another", "id", entry.getKey()));
+                    player.sendMessage(getMessage("admin.challenge-edit-cancel-hint"));
                     return true;
                 }
             }
@@ -3712,15 +3720,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     @Override
                     public void run() {
                         player.teleport(cfg.destination);
-                        player.sendMessage(getMessage("challenge-edit-entered", "id", id));
-                        player.sendMessage(getMessage("challenge-edit-instructions"));
+                        player.sendMessage(getMessage("admin.challenge-edit-entered", "id", id));
+                        player.sendMessage(getMessage("admin.challenge-edit-instructions"));
                     }
                 }.runTaskLater(this, 20L); // 1 second delay
             } else {
                 // No regeneration area, teleport immediately
                 player.teleport(cfg.destination);
-                player.sendMessage(getMessage("challenge-edit-entered", "id", id));
-                player.sendMessage(getMessage("challenge-edit-instructions"));
+                player.sendMessage(getMessage("admin.challenge-edit-entered", "id", id));
+                player.sendMessage(getMessage("admin.challenge-edit-instructions"));
             }
             
             return true;
@@ -3737,7 +3745,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             
             if (editingChallengeId == null) {
-                player.sendMessage(getMessage("challenge-save-not-editing"));
+                player.sendMessage(getMessage("admin.challenge-save-not-editing"));
                 return true;
             }
             
@@ -3751,9 +3759,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Recapture initial state if regeneration area exists
             if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
                 if (captureInitialState(cfg)) {
-                    player.sendMessage(getMessage("challenge-save-regeneration-captured"));
+                    player.sendMessage(getMessage("admin.challenge-save-regeneration-captured"));
                 } else {
-                    player.sendMessage(getMessage("challenge-save-regeneration-failed"));
+                    player.sendMessage(getMessage("admin.challenge-save-regeneration-failed"));
                 }
             }
             
@@ -3771,7 +3779,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.teleport(originalLoc);
             }
             
-            player.sendMessage(getMessage("challenge-save-success", "id", editingChallengeId));
+            player.sendMessage(getMessage("admin.challenge-save-success", "id", editingChallengeId));
             
             // Process queue if there are players waiting
             if (!isChallengeLocked(editingChallengeId)) {
@@ -3792,7 +3800,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             
             if (editingChallengeId == null) {
-                player.sendMessage(getMessage("challenge-cancel-not-editing"));
+                player.sendMessage(getMessage("admin.challenge-cancel-not-editing"));
                 return true;
             }
             
@@ -3812,9 +3820,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     regenerateChallengeArea(cfg);
                 }
                 
-                player.sendMessage(getMessage("challenge-cancel-restored", "id", editingChallengeId));
+                player.sendMessage(getMessage("admin.challenge-cancel-restored", "id", editingChallengeId));
             } else {
-                player.sendMessage(getMessage("challenge-cancel-no-backup", "id", editingChallengeId));
+                player.sendMessage(getMessage("admin.challenge-cancel-no-backup", "id", editingChallengeId));
             }
             
             // Exit edit mode
@@ -3828,7 +3836,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.teleport(originalLoc);
             }
             
-            player.sendMessage(getMessage("challenge-cancel-success", "id", editingChallengeId));
+            player.sendMessage(getMessage("admin.challenge-cancel-success", "id", editingChallengeId));
             
             // Process queue if there are players waiting
             if (!isChallengeLocked(editingChallengeId)) {
@@ -4755,7 +4763,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             
             // Block all other teleports during edit mode
             event.setCancelled(true);
-            player.sendMessage(getMessage("challenge-edit-teleport-blocked"));
+            player.sendMessage(getMessage("admin.challenge-edit-teleport-blocked"));
             return;
         }
         
@@ -4804,7 +4812,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 command.startsWith("/claimspawn") || command.startsWith("/spawn") ||
                 command.startsWith("/tp ") || command.startsWith("/teleport ")) {
                 event.setCancelled(true);
-                player.sendMessage(getMessage("challenge-edit-teleport-blocked"));
+                player.sendMessage(getMessage("admin.challenge-edit-teleport-blocked"));
             }
             return;
         }
