@@ -6412,7 +6412,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks)");
                     }
                     if (callback != null) {
-                        callback.accept(true);
+                        // Ensure callback runs on main thread
+                        final java.util.function.Consumer<Boolean> finalCallback = callback;
+                        new BukkitRunnable() {
+                            @Override
+                            public void run() {
+                                finalCallback.accept(true);
+                            }
+                        }.runTask(ConradChallengesPlugin.this);
                     }
                 } else {
                     // More blocks to process, schedule next batch (recursive call)
@@ -6574,7 +6581,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                     getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks)");
                                 }
                                 if (callback != null) {
-                                    callback.accept(true);
+                                    // Ensure callback runs on main thread
+                                    final java.util.function.Consumer<Boolean> finalCallback = callback;
+                                    new BukkitRunnable() {
+                                        @Override
+                                        public void run() {
+                                            finalCallback.accept(true);
+                                        }
+                                    }.runTask(ConradChallengesPlugin.this);
                                 }
                             } else {
                                 // More blocks to process, schedule next batch (create new instance)
