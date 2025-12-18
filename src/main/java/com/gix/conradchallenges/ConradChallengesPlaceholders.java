@@ -1,6 +1,10 @@
 package com.gix.conradchallenges;
 
 import org.bukkit.OfflinePlayer;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -9,81 +13,33 @@ import java.util.*;
 /**
  * PlaceholderAPI expansion for ConradChallenges
  * Provides placeholders for challenge data, times, completions, etc.
- * Uses reflection to avoid compile-time dependency on PlaceholderAPI.
+ * Uses reflection and ASM to avoid compile-time dependency on PlaceholderAPI.
  */
 public class ConradChallengesPlaceholders {
 
     private final ConradChallengesPlugin plugin;
     private Object expansionInstance;
+    private static final String EXPANSION_CLASS_NAME = "com.gix.conradchallenges.ConradChallengesExpansion";
 
     public ConradChallengesPlaceholders(ConradChallengesPlugin plugin) {
         this.plugin = plugin;
     }
 
     /**
-     * Registers this expansion with PlaceholderAPI using reflection.
+     * Registers this expansion with PlaceholderAPI using reflection and ASM.
+     * Creates a concrete class that extends PlaceholderExpansion dynamically.
      */
     public boolean register() {
         try {
             // Get PlaceholderExpansion class
             Class<?> expansionClass = Class.forName("me.clip.placeholderapi.expansion.PlaceholderExpansion");
             
-            // Create an anonymous inner class that extends PlaceholderExpansion
-            // We'll use a proxy but ensure all required methods are handled
-            expansionInstance = java.lang.reflect.Proxy.newProxyInstance(
-                expansionClass.getClassLoader(),
-                new Class[]{expansionClass},
-                (proxy, method, args) -> {
-                    String methodName = method.getName();
-                    Class<?> returnType = method.getReturnType();
-                    
-                    // Handle all PlaceholderExpansion methods
-                    if (methodName.equals("getIdentifier")) {
-                        return "conradchallenges";
-                    }
-                    if (methodName.equals("getAuthor")) {
-                        return String.join(", ", plugin.getDescription().getAuthors());
-                    }
-                    if (methodName.equals("getVersion")) {
-                        return plugin.getDescription().getVersion();
-                    }
-                    if (methodName.equals("persist")) {
-                        return true;
-                    }
-                    if (methodName.equals("canRegister")) {
-                        return true;
-                    }
-                    if (methodName.equals("onRequest") && args.length == 2) {
-                        OfflinePlayer player = (OfflinePlayer) args[0];
-                        String params = (String) args[1];
-                        return onPlaceholderRequest(player, params);
-                    }
-                    if (methodName.equals("onPlaceholderRequest") && args.length == 2) {
-                        // Alternative method name
-                        OfflinePlayer player = (OfflinePlayer) args[0];
-                        String params = (String) args[1];
-                        return onPlaceholderRequest(player, params);
-                    }
-                    if (methodName.equals("toString")) {
-                        return "ConradChallengesPlaceholderExpansion";
-                    }
-                    if (methodName.equals("equals") && args.length == 1) {
-                        return proxy == args[0];
-                    }
-                    if (methodName.equals("hashCode")) {
-                        return proxy.hashCode();
-                    }
-                    
-                    // Return default value for other methods
-                    if (returnType == boolean.class || returnType == Boolean.class) {
-                        return false;
-                    }
-                    if (returnType == int.class || returnType == Integer.class) {
-                        return 0;
-                    }
-                    return null;
-                }
-            );
+            // Create a concrete implementation using ASM
+            Class<?> generatedClass = generateExpansionClass(expansionClass);
+            
+            // Create an instance of the generated class
+            Constructor<?> constructor = generatedClass.getConstructor(ConradChallengesPlugin.class);
+            expansionInstance = constructor.newInstance(plugin);
             
             // Register the expansion using PlaceholderAPI's method
             Class<?> papiClass = Class.forName("me.clip.placeholderapi.PlaceholderAPI");
@@ -143,6 +99,182 @@ public class ConradChallengesPlaceholders {
             e.printStackTrace();
             return false;
         }
+    }
+    
+    /**
+     * Generates a concrete class that extends PlaceholderExpansion using ASM.
+     */
+    private Class<?> generateExpansionClass(Class<?> expansionClass) throws Exception {
+        String internalName = EXPANSION_CLASS_NAME.replace('.', '/');
+        String superName = expansionClass.getName().replace('.', '/');
+        
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
+        cw.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, internalName, null, superName, null);
+        
+        // Add plugin field
+        cw.visitField(Opcodes.ACC_PRIVATE | Opcodes.ACC_FINAL, "plugin", 
+            Type.getDescriptor(ConradChallengesPlugin.class), null, null).visitEnd();
+        
+        // Constructor
+        MethodVisitor mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", 
+            "(" + Type.getDescriptor(ConradChallengesPlugin.class) + ")V", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitMethodInsn(Opcodes.INVOKESPECIAL, superName, "<init>", "()V", false);
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitFieldInsn(Opcodes.PUTFIELD, internalName, "plugin", 
+            Type.getDescriptor(ConradChallengesPlugin.class));
+        mv.visitInsn(Opcodes.RETURN);
+        mv.visitMaxs(2, 2);
+        mv.visitEnd();
+        
+        // getIdentifier()
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "getIdentifier", "()Ljava/lang/String;", null, null);
+        mv.visitCode();
+        mv.visitLdcInsn("conradchallenges");
+        mv.visitInsn(Opcodes.ARETURN);
+        mv.visitMaxs(1, 1);
+        mv.visitEnd();
+        
+        // getAuthor()
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "getAuthor", "()Ljava/lang/String;", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitFieldInsn(Opcodes.GETFIELD, internalName, "plugin", 
+            Type.getDescriptor(ConradChallengesPlugin.class));
+        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "com/gix/conradchallenges/ConradChallengesPlaceholders", 
+            "getAuthorString", "(Lcom/gix/conradchallenges/ConradChallengesPlugin;)Ljava/lang/String;", false);
+        mv.visitInsn(Opcodes.ARETURN);
+        mv.visitMaxs(1, 1);
+        mv.visitEnd();
+        
+        // getVersion()
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "getVersion", "()Ljava/lang/String;", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitFieldInsn(Opcodes.GETFIELD, internalName, "plugin", 
+            Type.getDescriptor(ConradChallengesPlugin.class));
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "org/bukkit/plugin/java/JavaPlugin", 
+            "getDescription", "()Lorg/bukkit/plugin/PluginDescriptionFile;", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "org/bukkit/plugin/PluginDescriptionFile", 
+            "getVersion", "()Ljava/lang/String;", false);
+        mv.visitInsn(Opcodes.ARETURN);
+        mv.visitMaxs(2, 1);
+        mv.visitEnd();
+        
+        // persist()
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "persist", "()Z", null, null);
+        mv.visitCode();
+        mv.visitInsn(Opcodes.ICONST_1);
+        mv.visitInsn(Opcodes.IRETURN);
+        mv.visitMaxs(1, 1);
+        mv.visitEnd();
+        
+        // canRegister()
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "canRegister", "()Z", null, null);
+        mv.visitCode();
+        mv.visitInsn(Opcodes.ICONST_1);
+        mv.visitInsn(Opcodes.IRETURN);
+        mv.visitMaxs(1, 1);
+        mv.visitEnd();
+        
+        // onRequest(OfflinePlayer, String)
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "onRequest", 
+            "(Lorg/bukkit/OfflinePlayer;Ljava/lang/String;)Ljava/lang/String;", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitFieldInsn(Opcodes.GETFIELD, internalName, "plugin", 
+            Type.getDescriptor(ConradChallengesPlugin.class));
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitVarInsn(Opcodes.ALOAD, 2);
+        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "com/gix/conradchallenges/ConradChallengesPlaceholders", 
+            "handlePlaceholderRequest", 
+            "(Lcom/gix/conradchallenges/ConradChallengesPlugin;Lorg/bukkit/OfflinePlayer;Ljava/lang/String;)Ljava/lang/String;", 
+            false);
+        mv.visitInsn(Opcodes.ARETURN);
+        mv.visitMaxs(3, 3);
+        mv.visitEnd();
+        
+        // onPlaceholderRequest(OfflinePlayer, String) - alternative method name
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "onPlaceholderRequest", 
+            "(Lorg/bukkit/OfflinePlayer;Ljava/lang/String;)Ljava/lang/String;", null, null);
+        mv.visitCode();
+        mv.visitVarInsn(Opcodes.ALOAD, 0);
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitVarInsn(Opcodes.ALOAD, 2);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, internalName, "onRequest", 
+            "(Lorg/bukkit/OfflinePlayer;Ljava/lang/String;)Ljava/lang/String;", false);
+        mv.visitInsn(Opcodes.ARETURN);
+        mv.visitMaxs(3, 3);
+        mv.visitEnd();
+        
+        // getPlaceholders() - Returns list of available placeholders for tab completion
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "getPlaceholders", "()Ljava/util/List;", 
+            "()Ljava/util/List<Ljava/lang/String;>;", null);
+        mv.visitCode();
+        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "com/gix/conradchallenges/ConradChallengesPlaceholders", 
+            "getPlaceholdersList", "()Ljava/util/List;", false);
+        mv.visitInsn(Opcodes.ARETURN);
+        mv.visitMaxs(1, 1);
+        mv.visitEnd();
+        
+        cw.visitEnd();
+        
+        // Define the class
+        byte[] classBytes = cw.toByteArray();
+        ClassLoader classLoader = new ExpansionClassLoader(plugin.getClass().getClassLoader());
+        return ((ExpansionClassLoader) classLoader).defineClass(EXPANSION_CLASS_NAME, classBytes);
+    }
+    
+    /**
+     * Custom ClassLoader for defining the generated expansion class.
+     */
+    private static class ExpansionClassLoader extends ClassLoader {
+        public ExpansionClassLoader(ClassLoader parent) {
+            super(parent);
+        }
+        
+        public Class<?> defineClass(String name, byte[] bytes) {
+            return defineClass(name, bytes, 0, bytes.length);
+        }
+    }
+    
+    /**
+     * Static method to handle placeholder requests (called from generated class).
+     */
+    public static String handlePlaceholderRequest(ConradChallengesPlugin plugin, OfflinePlayer player, String params) {
+        return new ConradChallengesPlaceholders(plugin).onPlaceholderRequest(player, params);
+    }
+    
+    /**
+     * Static method to get author string (called from generated class).
+     */
+    public static String getAuthorString(ConradChallengesPlugin plugin) {
+        return String.join(", ", plugin.getDescription().getAuthors());
+    }
+    
+    /**
+     * Static method to get list of placeholders (called from generated class for tab completion).
+     */
+    public static List<String> getPlaceholdersList() {
+        return Arrays.asList(
+            "active",
+            "active_name",
+            "besttime_<challengeid>",
+            "besttime_formatted_<challengeid>",
+            "completed_<challengeid>",
+            "cooldown_<challengeid>",
+            "cooldown_formatted_<challengeid>",
+            "completions_<challengeid>",
+            "top_<challengeid>_<position>",
+            "top_time_<challengeid>_<position>",
+            "top_time_formatted_<challengeid>_<position>",
+            "leaderboard_count_<challengeid>",
+            "rank_<challengeid>",
+            "total_completions",
+            "challenges_completed"
+        );
     }
 
     /**

@@ -162,35 +162,61 @@ The regeneration system automatically resets the challenge area when new players
 
 ### Setting Up Regeneration Area
 
+**Important**: Regeneration area commands require edit mode. Enter edit mode first:
+```
+/conradchallenges challenge edit <id>
+```
+
 #### Option 1: Using WorldEdit (Recommended)
-1. Use WorldEdit to set two positions:
+1. While in edit mode, use WorldEdit to set two positions:
    - `//pos1` at one corner of the challenge area
    - `//pos2` at the opposite corner
-2. Run:
+2. Run (no ID needed in edit mode):
 ```
-/conradchallenges challenge setregenerationarea [id]
+/conradchallenges challenge setregenerationarea
 ```
 This will automatically use your WorldEdit selection.
 
 #### Option 2: Manual Setup
-1. Stand at one corner of the challenge area
-2. Run: `/conradchallenges challenge setregenerationarea [id]`
+1. While in edit mode, stand at one corner of the challenge area
+2. Run: `/conradchallenges challenge setregenerationarea` (no ID needed)
 3. Stand at the opposite corner
 4. Run the command again
 
 The plugin will capture the initial state of all blocks in the area.
 
 ### Capturing Initial State
-After setting the regeneration area, capture the initial state:
+After setting the regeneration area, capture the initial state (while in edit mode):
 ```
-/conradchallenges challenge captureregeneration [id]
+/conradchallenges challenge captureregeneration
 ```
 
 **Note**: This is usually done automatically, but you can manually trigger it if needed.
 
-### Clearing Regeneration Area
+### Auto-Extend Y Range
+
+By default, regeneration uses the Y coordinates from your two corners. However, you can enable auto-extend mode to regenerate from bedrock to build height, ignoring the corner Y values.
+
+**While in edit mode:**
 ```
-/conradchallenges challenge clearregenerationarea [id]
+/conradchallenges challenge setautoregenerationy [true|false]
+```
+
+- **`true`** (or `on`, `enable`, `yes`): Enables auto-extend - regeneration spans from bedrock to build height
+- **`false`** (or `off`, `disable`, `no`): Uses manual Y range from corner coordinates
+- **No argument**: Toggles the current setting
+
+**Example:**
+- Set two corners at ground level (Y=64) with auto-extend enabled
+- Regeneration will restore blocks from Y=-64 (bedrock) to Y=319 (build height)
+- Perfect for full-height dungeons or challenges that span multiple levels
+
+**Note**: When you change this setting, the initial state is automatically re-captured with the new Y range.
+
+### Clearing Regeneration Area
+While in edit mode:
+```
+/conradchallenges challenge clearregenerationarea
 ```
 
 ---

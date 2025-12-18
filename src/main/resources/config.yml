@@ -10,6 +10,23 @@ pending-challenge-timeout-seconds: 15  # Seconds before a pending challenge is a
 solo-countdown-seconds: 10  # Countdown time in seconds before solo players are teleported to challenge (default: 10)
 party-countdown-seconds: 45  # Countdown time in seconds before party members are teleported to challenge (default: 10)
 
+# Difficulty tier level modifiers (adds to spawner's base mob_level)
+difficulty-tiers:
+  easy: 0      # No level increase
+  medium: 10   # Adds 10 levels
+  hard: 35     # Adds 35 levels
+  extreme: 100  # Adds 100 levels
+
+# Difficulty tier reward multipliers (multiplies rewards from previous tier)
+# Each tier multiplies the rewards from the previous tier
+# Example: Easy=1.0, Medium=1.5 means Medium gives 1.5x Easy rewards
+#          Hard=2.0 means Hard gives 2.0x Medium rewards (3.0x Easy total)
+difficulty-reward-multipliers:
+  easy: 1.0      # Base multiplier (no change)
+  medium: 1.5    # Medium = Easy * 1.5
+  hard: 2.0      # Hard = Medium * 2.0 (3.0x Easy total)
+  extreme: 3.0   # Extreme = Hard * 3.0 (9.0x Easy total)
+
 # GateKeeper NPC UUID list (set via /conradchallenges setnpc)
 npcs: []
 
@@ -26,6 +43,12 @@ anger:
   duration-seconds: 300    # 5 minutes
   # Insults have been moved to messages.yml under anger.insults
   # Edit messages.yml to customize GateKeeper's angry responses
+
+# Edit mode settings
+edit-mode:
+  # What to do when a player disconnects while in edit mode
+  # Options: "cancel" (restore from backup) or "save" (keep changes)
+  disconnect-action: cancel  # Default: cancel
 
 # Challenges are created via /conradchallenges challenge create <id>
 # Use /conradchallenges challenge setbook, setdestination, etc. to configure them
