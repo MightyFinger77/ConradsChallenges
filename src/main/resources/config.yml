@@ -50,6 +50,12 @@ edit-mode:
   # Options: "cancel" (restore from backup) or "save" (keep changes)
   disconnect-action: cancel  # Default: cancel
 
+# Teleport restrictions for players in challenges
+teleport-restriction:
+  # How to restrict teleports for players in challenges
+  # Options: "world" (allow teleports anywhere in challenge world) or "regen-area" (only allow within regeneration area)
+  mode: world  # Default: world
+
 # Challenges are created via /conradchallenges challenge create <id>
 # Use /conradchallenges challenge setbook, setdestination, etc. to configure them
 challenges: []

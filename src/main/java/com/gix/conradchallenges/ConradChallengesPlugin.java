@@ -2364,6 +2364,55 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             
             return Collections.emptyList();
         });
+        
+        // /challenge - Alias for /conradchallenges challenge
+        PluginCommand cmdChallenge = Objects.requireNonNull(getCommand("challenge"));
+        cmdChallenge.setExecutor((sender, command, label, args) -> {
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(getMessage("general.command-players-only"));
+                return true;
+            }
+            
+            if (!player.hasPermission("conradchallenges.admin")) {
+                player.sendMessage(getMessage("general.no-permission"));
+                return true;
+            }
+            
+            // Directly call handleAdminChallengeCommands with all args
+            // This makes /challenge <subcommand> work like /conradchallenges challenge <subcommand>
+            return handleAdminChallengeCommands(player, args);
+        });
+        cmdChallenge.setTabCompleter((sender, command, alias, args) -> {
+            if (!(sender instanceof Player player)) {
+                return Collections.emptyList();
+            }
+            
+            if (!player.hasPermission("conradchallenges.admin")) {
+                return Collections.emptyList();
+            }
+            
+            // Tab completion for challenge subcommands (same as /conradchallenges challenge)
+            List<String> completions = new ArrayList<>();
+            
+            if (args.length == 1) {
+                String partial = args[0].toLowerCase(Locale.ROOT);
+                for (String subcommand : CHALLENGE_SUBCOMMANDS) {
+                    if (subcommand.toLowerCase(Locale.ROOT).startsWith(partial)) {
+                        completions.add(subcommand);
+                    }
+                }
+                return completions;
+            }
+            
+            // For args.length >= 2, use the same tab completion logic as challenge command
+            // We need to prepend "challenge" to args to match the existing logic
+            String[] modifiedArgs = new String[args.length + 1];
+            modifiedArgs[0] = "challenge";
+            System.arraycopy(args, 0, modifiedArgs, 1, args.length);
+            
+            // Reuse the existing tab completer logic by calling it with modified args
+            return cmdConrad.getTabCompleter().onTabComplete(sender, cmdConrad, alias, modifiedArgs);
+        });
 
         // /accept
         Objects.requireNonNull(getCommand("accept")).setExecutor((sender, cmd, label, args) -> {
@@ -3792,11 +3841,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 
                 // Automatically capture initial state (async)
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state... This may take a moment for large areas."));
+                final Player finalPlayer = player; // Capture player reference for callback
                 captureInitialState(cfg, success -> {
-                    if (success) {
-                        player.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
-                    } else {
-                        player.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
+                    // Callback runs on main thread, so we can safely access player
+                    if (finalPlayer != null && finalPlayer.isOnline()) {
+                        if (success) {
+                            finalPlayer.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
+                        } else {
+                            finalPlayer.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
+                        }
                     }
                 });
             } else {
@@ -3818,11 +3871,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         "z", String.valueOf(currentLoc.getBlockZ())));
                     // Automatically capture initial state when both corners are set (async)
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state... This may take a moment for large areas."));
+                    final Player finalPlayer2 = player; // Capture player reference for callback
                     captureInitialState(cfg, success -> {
-                        if (success) {
-                            player.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
-                        } else {
-                            player.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
+                        // Callback runs on main thread, so we can safely access player
+                        if (finalPlayer2 != null && finalPlayer2.isOnline()) {
+                            if (success) {
+                                finalPlayer2.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
+                            } else {
+                                finalPlayer2.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
+                            }
                         }
                     });
                 } else {
@@ -3834,11 +3891,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         "z", String.valueOf(currentLoc.getBlockZ())));
                     // Re-capture initial state (async)
                     player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state... This may take a moment for large areas."));
+                    final Player finalPlayer3 = player; // Capture player reference for callback
                     captureInitialState(cfg, success -> {
-                        if (success) {
-                            player.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
-                        } else {
-                            player.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
+                        // Callback runs on main thread, so we can safely access player
+                        if (finalPlayer3 != null && finalPlayer3.isOnline()) {
+                            if (success) {
+                                finalPlayer3.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
+                            } else {
+                                finalPlayer3.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
+                            }
                         }
                     });
                 }
@@ -4066,11 +4127,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Recapture initial state if regeneration area exists (async)
             if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
                 player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Recapturing initial state... This may take a moment for large areas."));
+                final Player finalPlayer = player; // Capture player reference for callback
                 captureInitialState(cfg, success -> {
-                    if (success) {
-                        player.sendMessage(getMessage("admin.challenge-save-regeneration-captured"));
+                    // Callback runs on main thread, so we can safely access player
+                    getLogger().info("Save command: Capture callback received, success=" + success + ", player=" + (finalPlayer != null ? finalPlayer.getName() : "null"));
+                    if (finalPlayer != null && finalPlayer.isOnline()) {
+                        if (success) {
+                            finalPlayer.sendMessage(getMessage("admin.challenge-save-regeneration-captured"));
+                            getLogger().info("Save command: Sent success message to " + finalPlayer.getName());
+                        } else {
+                            finalPlayer.sendMessage(getMessage("admin.challenge-save-regeneration-failed"));
+                            getLogger().warning("Save command: Sent failure message to " + finalPlayer.getName());
+                        }
                     } else {
-                        player.sendMessage(getMessage("admin.challenge-save-regeneration-failed"));
+                        getLogger().warning("Save command: Player is null or offline, cannot send message");
                     }
                 });
             }
@@ -4167,13 +4237,18 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("challenge.unknown-id", "id", id));
                 return true;
             }
+            // Toggle lockdown state
             if (cfg.lockedDown) {
-                player.sendMessage(getMessage("admin.challenge-lockdown-already", "id", id));
-                return true;
+                // Already locked, unlock it
+                cfg.lockedDown = false;
+                saveChallengeToConfig(cfg);
+                player.sendMessage(getMessage("admin.challenge-unlockdown-success", "id", id));
+            } else {
+                // Not locked, lock it
+                cfg.lockedDown = true;
+                saveChallengeToConfig(cfg);
+                player.sendMessage(getMessage("admin.challenge-lockdown-success", "id", id));
             }
-            cfg.lockedDown = true;
-            saveChallengeToConfig(cfg);
-            player.sendMessage(getMessage("admin.challenge-lockdown-success", "id", id));
             return true;
         }
 
@@ -4747,7 +4822,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         // Regenerate challenge area at the start of countdown (if regeneration is configured)
         // Don't regenerate if challenge is being edited
         if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null && !isChallengeBeingEdited(cfg.id)) {
-            challengeRegenerationStatus.put(cfg.id, false); // Mark as in progress
+            // regenerateChallengeArea will set the status itself
             regenerateChallengeArea(cfg);
         } else {
             // No regeneration needed - mark as complete immediately
@@ -5128,7 +5203,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Player is in edit mode - block all teleports except:
             // 1. Save/cancel teleport back to original location
             // 2. Initial teleport to challenge destination (when entering edit mode)
+            // 3. Teleports within the challenge world (for in-challenge movement)
             Location to = event.getTo();
+            Location from = event.getFrom();
             Location originalLoc = editorOriginalLocations.get(uuid);
             if (to != null && originalLoc != null && 
                 to.getWorld() != null && originalLoc.getWorld() != null &&
@@ -5148,7 +5225,29 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return;
             }
             
-            // Block all other teleports during edit mode
+            // Allow teleports based on config setting (world or regeneration area)
+            if (cfg != null && cfg.destination != null && to != null && from != null &&
+                cfg.destination.getWorld() != null && to.getWorld() != null && from.getWorld() != null &&
+                to.getWorld().equals(cfg.destination.getWorld()) && 
+                from.getWorld().equals(cfg.destination.getWorld())) {
+                
+                // Check config for teleport restriction mode
+                String restrictionMode = getConfig().getString("teleport-restriction.mode", "world");
+                
+                if ("regen-area".equalsIgnoreCase(restrictionMode)) {
+                    // Only allow teleports within the regeneration area
+                    if (isLocationInRegenerationArea(cfg, to)) {
+                        // Teleport is within regeneration area, allow it
+                        return;
+                    }
+                } else {
+                    // Default: allow teleports anywhere in the challenge world
+                    // Teleport is within the challenge world, allow it
+                    return;
+                }
+            }
+            
+            // Block all other teleports during edit mode (cross-world or to different worlds)
             event.setCancelled(true);
             player.sendMessage(getMessage("admin.challenge-edit-teleport-blocked"));
             return;
@@ -5163,6 +5262,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         // Player is in a challenge - block all teleports except our own (via /exit or /cc or entry)
         Location to = event.getTo();
+        Location from = event.getFrom();
         
         // Allow teleports to spawnLocation (our exit/complete teleports)
         if (to != null && spawnLocation != null && 
@@ -5183,9 +5283,77 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return;
         }
         
-        // Block all other teleports
+        // Allow teleports based on config setting (world or regeneration area)
+        if (cfg != null && cfg.destination != null && to != null && from != null &&
+            cfg.destination.getWorld() != null && to.getWorld() != null && from.getWorld() != null &&
+            to.getWorld().equals(cfg.destination.getWorld()) && 
+            from.getWorld().equals(cfg.destination.getWorld())) {
+            
+            // Check config for teleport restriction mode
+            String restrictionMode = getConfig().getString("teleport-restriction.mode", "world");
+            
+            if ("regen-area".equalsIgnoreCase(restrictionMode)) {
+                // Only allow teleports within the regeneration area
+                if (isLocationInRegenerationArea(cfg, to)) {
+                    // Teleport is within regeneration area, allow it
+                    return;
+                }
+            } else {
+                // Default: allow teleports anywhere in the challenge world
+                // Teleport is within the challenge world, allow it
+                return;
+            }
+        }
+        
+        // Block all other teleports (cross-world or to different worlds)
         event.setCancelled(true);
         player.sendMessage(getMessage("challenge.teleport-blocked"));
+    }
+    
+    /**
+     * Checks if a location is within a challenge's regeneration area bounds.
+     * 
+     * @param cfg The challenge configuration
+     * @param loc The location to check
+     * @return true if the location is within the regeneration area, false otherwise
+     */
+    private boolean isLocationInRegenerationArea(ChallengeConfig cfg, Location loc) {
+        if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) {
+            // No regeneration area set, fall back to world check
+            return cfg.destination != null && cfg.destination.getWorld() != null &&
+                   loc.getWorld() != null && loc.getWorld().equals(cfg.destination.getWorld());
+        }
+        
+        if (cfg.regenerationCorner1.getWorld() == null || 
+            !cfg.regenerationCorner1.getWorld().equals(cfg.regenerationCorner2.getWorld()) ||
+            !cfg.regenerationCorner1.getWorld().equals(loc.getWorld())) {
+            return false;
+        }
+        
+        // Calculate bounding box
+        int minX = Math.min(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
+        int maxX = Math.max(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
+        int minY, maxY;
+        if (cfg.regenerationAutoExtendY) {
+            // Auto-extend from bedrock to build height
+            minY = loc.getWorld().getMinHeight();
+            maxY = loc.getWorld().getMaxHeight() - 1;
+        } else {
+            // Use Y coordinates from corners
+            minY = Math.min(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
+            maxY = Math.max(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
+        }
+        int minZ = Math.min(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
+        int maxZ = Math.max(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
+        
+        // Check if location is within bounds
+        int x = loc.getBlockX();
+        int y = loc.getBlockY();
+        int z = loc.getBlockZ();
+        
+        return x >= minX && x <= maxX &&
+               y >= minY && y <= maxY &&
+               z >= minZ && z <= maxZ;
     }
     
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -6414,9 +6582,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     if (callback != null) {
                         // Ensure callback runs on main thread
                         final java.util.function.Consumer<Boolean> finalCallback = callback;
+                        getLogger().fine("Calling capture callback for challenge '" + challengeId + "'");
                         new BukkitRunnable() {
                             @Override
                             public void run() {
+                                getLogger().fine("Executing capture callback for challenge '" + challengeId + "'");
                                 finalCallback.accept(true);
                             }
                         }.runTask(ConradChallengesPlugin.this);
@@ -6496,7 +6666,25 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         // Process in batches to avoid lag
         // Time budget: ~3ms per tick (similar to regeneration)
-        final long timeBudget = 3_000_000L; // 3ms in nanoseconds
+        // Calculate dynamic time budget based on area size
+        // Estimate total blocks from bounding box
+        int estimatedBlocks = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+        long timeBudget;
+        if (estimatedBlocks > 10_000_000) {
+            // Very large areas (>10M blocks): 10ms per tick
+            timeBudget = 10_000_000L;
+        } else if (estimatedBlocks > 1_000_000) {
+            // Large areas (>1M blocks): 7ms per tick
+            timeBudget = 7_000_000L;
+        } else if (estimatedBlocks > 100_000) {
+            // Medium areas (>100K blocks): 5ms per tick
+            timeBudget = 5_000_000L;
+        } else {
+            // Small areas: 3ms per tick (default)
+            timeBudget = 3_000_000L;
+        }
+        
+        getLogger().info("Capturing initial state for challenge '" + challengeId + "' (estimated " + estimatedBlocks + " blocks, time budget: " + (timeBudget / 1_000_000) + "ms per tick)");
         
         new BukkitRunnable() {
             @Override
@@ -6583,9 +6771,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                 if (callback != null) {
                                     // Ensure callback runs on main thread
                                     final java.util.function.Consumer<Boolean> finalCallback = callback;
+                                    getLogger().fine("Calling capture callback for challenge '" + challengeId + "' (from initial batch)");
                                     new BukkitRunnable() {
                                         @Override
                                         public void run() {
+                                            getLogger().fine("Executing capture callback for challenge '" + challengeId + "' (from initial batch)");
                                             finalCallback.accept(true);
                                         }
                                     }.runTask(ConradChallengesPlugin.this);
@@ -6628,9 +6818,355 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
     
     /**
+     * Helper method to schedule the next batch of chunk loading
+     */
+    private void scheduleNextChunkLoadBatch(String challengeId, World world, List<BlockState> finalStates,
+                                            java.util.List<String> chunksList, int[] chunkIndex, 
+                                            long chunkLoadBudget) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                long startTime = System.nanoTime();
+                
+                while (chunkIndex[0] < chunksList.size() && (System.nanoTime() - startTime) < chunkLoadBudget) {
+                    String chunkKey = chunksList.get(chunkIndex[0]);
+                    String[] parts = chunkKey.split(",");
+                    int chunkX = Integer.parseInt(parts[0]);
+                    int chunkZ = Integer.parseInt(parts[1]);
+                    
+                    if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                        world.loadChunk(chunkX, chunkZ, true);
+                    }
+                    chunkIndex[0]++;
+                }
+                
+                if (chunkIndex[0] >= chunksList.size()) {
+                    // All chunks loaded, start comparison phase
+                    getLogger().info("All chunks pre-loaded, starting block comparison...");
+                    final int[] currentIndex = {0};
+                    final java.util.List<BlockState> blocksToRestore = new java.util.ArrayList<>();
+                    final int[] skipped = {0};
+                    final long compareTimeBudget = 12_000_000L; // 12ms per tick for comparison (increased for speed)
+                    scheduleNextComparisonBatch(challengeId, world, finalStates, currentIndex, compareTimeBudget, finalStates.size(), blocksToRestore, skipped);
+                } else {
+                    // More chunks to load, schedule next batch
+                    scheduleNextChunkLoadBatch(challengeId, world, finalStates, chunksList, chunkIndex, chunkLoadBudget);
+                }
+            }
+        }.runTaskLater(this, 1L);
+    }
+    
+    /**
+     * Helper method to schedule the next batch of block comparison (phase 1: find blocks that need restoration)
+     * Optimized to use fast type comparison first, then detailed BlockState comparison only when needed.
+     */
+    private void scheduleNextComparisonBatch(String challengeId, World world, List<BlockState> finalStates,
+                                             int[] currentIndex, long compareTimeBudget, int totalBlocks,
+                                             java.util.List<BlockState> blocksToRestore, int[] skipped) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                long startTime = System.nanoTime();
+                
+                // Process blocks until time budget is exceeded
+                while (currentIndex[0] < finalStates.size()) {
+                    // Check time budget
+                    if (System.nanoTime() - startTime >= compareTimeBudget) {
+                        // Time budget exceeded, schedule next tick
+                        scheduleNextComparisonBatch(challengeId, world, finalStates, currentIndex, compareTimeBudget, totalBlocks, blocksToRestore, skipped);
+                        return;
+                    }
+                    
+                    BlockState originalState = finalStates.get(currentIndex[0]);
+                    try {
+                        Location loc = originalState.getLocation();
+                        
+                        // Fast chunk check - skip if not loaded
+                        int chunkX = loc.getBlockX() >> 4;
+                        int chunkZ = loc.getBlockZ() >> 4;
+                        if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                            currentIndex[0]++;
+                            continue;
+                        }
+                        
+                        Block block = world.getBlockAt(loc);
+                        Material originalType = originalState.getType();
+                        Material currentType = block.getType();
+                        
+                        boolean needsRestore = false;
+                        
+                        // Fast path: Check type first (cheapest operation)
+                        if (currentType != originalType) {
+                            needsRestore = true;
+                        } else {
+                            // Types match - only check BlockData for blocks that can have state changes
+                            // Skip BlockData check for simple blocks to speed up comparison significantly
+                            boolean needsBlockDataCheck = originalState instanceof Container ||
+                                                          originalState instanceof org.bukkit.block.Sign ||
+                                                          originalState instanceof org.bukkit.block.Banner ||
+                                                          originalState instanceof org.bukkit.block.CreatureSpawner ||
+                                                          originalType.name().contains("STAIRS") ||
+                                                          originalType.name().contains("SLAB") ||
+                                                          originalType.name().contains("DOOR") ||
+                                                          originalType.name().contains("FENCE") ||
+                                                          originalType.name().contains("GATE") ||
+                                                          originalType.name().contains("TRAPDOOR") ||
+                                                          originalType.name().contains("BUTTON") ||
+                                                          originalType.name().contains("LEVER") ||
+                                                          originalType.name().contains("BED") ||
+                                                          originalType.name().contains("RAIL");
+                            
+                            if (needsBlockDataCheck) {
+                                // Check block data for blocks that can have state
+                                org.bukkit.block.data.BlockData currentData = block.getBlockData();
+                                org.bukkit.block.data.BlockData originalData = originalState.getBlockData();
+                                
+                                // Use matches() - it's reliable for state comparison
+                                if (!currentData.matches(originalData)) {
+                                    needsRestore = true;
+                                }
+                            }
+                            
+                            // Check special tile entities (only if block data matches or is simple block)
+                            if (!needsRestore) {
+                                if (originalState instanceof Container originalContainer) {
+                                    // For containers, check if contents changed
+                                    BlockState currentState = block.getState();
+                                    if (currentState instanceof Container currentContainer) {
+                                        // Compare inventory contents
+                                        if (originalContainer.getInventory() != null && currentContainer.getInventory() != null) {
+                                            for (int i = 0; i < originalContainer.getInventory().getSize(); i++) {
+                                                ItemStack originalItem = originalContainer.getInventory().getItem(i);
+                                                ItemStack currentItem = currentContainer.getInventory().getItem(i);
+                                                
+                                                if (originalItem == null && currentItem == null) continue;
+                                                if (originalItem == null || currentItem == null) {
+                                                    needsRestore = true;
+                                                    break;
+                                                }
+                                                if (!originalItem.equals(currentItem)) {
+                                                    needsRestore = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if (originalState instanceof org.bukkit.block.Sign originalSign) {
+                                    BlockState currentState = block.getState();
+                                    if (currentState instanceof org.bukkit.block.Sign currentSign) {
+                                        for (int i = 0; i < 4; i++) {
+                                            if (!originalSign.getLine(i).equals(currentSign.getLine(i))) {
+                                                needsRestore = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else if (originalState instanceof org.bukkit.block.Banner originalBanner) {
+                                    BlockState currentState = block.getState();
+                                    if (currentState instanceof org.bukkit.block.Banner currentBanner) {
+                                        if (!originalBanner.getPatterns().equals(currentBanner.getPatterns())) {
+                                            needsRestore = true;
+                                        }
+                                    }
+                                } else if (originalState instanceof org.bukkit.block.CreatureSpawner originalSpawner) {
+                                    BlockState currentState = block.getState();
+                                    if (currentState instanceof org.bukkit.block.CreatureSpawner currentSpawner) {
+                                        if (originalSpawner.getSpawnedType() != currentSpawner.getSpawnedType()) {
+                                            needsRestore = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (needsRestore) {
+                            blocksToRestore.add(originalState);
+                        } else {
+                            skipped[0]++;
+                        }
+                    } catch (Exception e) {
+                        getLogger().warning("Error checking block at " + originalState.getLocation() + " for challenge '" + challengeId + "': " + e.getMessage());
+                        // On error, assume block needs restoration to be safe
+                        blocksToRestore.add(originalState);
+                    }
+                    
+                    currentIndex[0]++;
+                }
+                
+                // All blocks compared
+                if (currentIndex[0] >= finalStates.size()) {
+                    // Comparison phase complete, start restoration phase
+                    getLogger().info("Comparison complete for challenge '" + challengeId + "': " + blocksToRestore.size() + " blocks need restoration (skipped " + skipped[0] + " unchanged blocks)");
+                    
+                    if (blocksToRestore.isEmpty()) {
+                        // No blocks need restoration - we're done!
+                        getLogger().info("No blocks need restoration for challenge '" + challengeId + "'");
+                        challengeRegenerationStatus.put(challengeId, true);
+                        
+                        // Check if countdown already finished and teleport players if so
+                        CountdownTaskWrapper wrapper = activeCountdownTasks.get(challengeId);
+                        if (wrapper != null && wrapper.seconds <= 0) {
+                            new BukkitRunnable() {
+                                @Override
+                                public void run() {
+                                    wrapper.task.run();
+                                }
+                            }.runTask(ConradChallengesPlugin.this);
+                        }
+                    } else {
+                        // Start restoration phase
+                        final int[] restored = {0};
+                        final int[] restoreIndex = {0};
+                        final long restoreTimeBudget = 15_000_000L; // 15ms per tick for restoration (increased to ensure completion)
+                        scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, restoreIndex, restoreTimeBudget, blocksToRestore.size());
+                    }
+                } else {
+                    // More blocks to compare, schedule next tick
+                    scheduleNextComparisonBatch(challengeId, world, finalStates, currentIndex, compareTimeBudget, totalBlocks, blocksToRestore, skipped);
+                }
+            }
+        }.runTaskLater(this, 1L);
+    }
+    
+    /**
+     * Helper method to schedule the next batch of block restoration (phase 2: restore only changed blocks)
+     */
+    private void scheduleNextRestoreBatch(String challengeId, World world, List<BlockState> blocksToRestore,
+                                          int[] restored, int[] currentIndex, long timeBudgetNs, int totalToRestore) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                long startTime = System.nanoTime();
+                
+                // Process blocks until time budget is exceeded
+                while (currentIndex[0] < blocksToRestore.size()) {
+                    // Check time budget
+                    if (System.nanoTime() - startTime >= timeBudgetNs) {
+                        // Time budget exceeded, schedule next tick
+                        scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, currentIndex, timeBudgetNs, totalToRestore);
+                        return;
+                    }
+                    
+                    BlockState originalState = blocksToRestore.get(currentIndex[0]);
+                    try {
+                        Location loc = originalState.getLocation();
+                        
+                        // Ensure chunk is loaded - reload if needed
+                        int chunkX = loc.getBlockX() >> 4;
+                        int chunkZ = loc.getBlockZ() >> 4;
+                        if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                            // Chunk unloaded - reload it
+                            world.loadChunk(chunkX, chunkZ, true);
+                            // If still not loaded, skip this block and try again next tick
+                            if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                                currentIndex[0]++;
+                                continue;
+                            }
+                        }
+                        
+                        Block block = world.getBlockAt(loc);
+                        BlockState newState = block.getState();
+                        newState.setType(originalState.getType());
+                        newState.setBlockData(originalState.getBlockData());
+                        
+                        // Restore container contents if applicable
+                        if (originalState instanceof Container originalContainer && newState instanceof Container newContainer) {
+                            newContainer.getInventory().clear();
+                            if (originalContainer.getInventory() != null) {
+                                for (int j = 0; j < originalContainer.getInventory().getSize(); j++) {
+                                    ItemStack item = originalContainer.getInventory().getItem(j);
+                                    if (item != null && item.getType() != Material.AIR) {
+                                        newContainer.getInventory().setItem(j, item.clone());
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Copy tile entity data for special blocks
+                        if (originalState instanceof org.bukkit.block.Sign originalSign && 
+                            newState instanceof org.bukkit.block.Sign newSign) {
+                            for (int j = 0; j < 4; j++) {
+                                newSign.setLine(j, originalSign.getLine(j));
+                            }
+                            try {
+                                if (originalSign.getColor() != null) {
+                                    newSign.setColor(originalSign.getColor());
+                                }
+                            } catch (Exception e) {
+                                // Color not supported
+                            }
+                            try {
+                                newSign.setGlowingText(originalSign.isGlowingText());
+                            } catch (Exception e) {
+                                // Glowing not supported
+                            }
+                        } else if (originalState instanceof org.bukkit.block.Banner originalBanner && 
+                                   newState instanceof org.bukkit.block.Banner newBanner) {
+                            newBanner.setPatterns(originalBanner.getPatterns());
+                        } else if (originalState instanceof org.bukkit.block.CreatureSpawner originalSpawner && 
+                                   newState instanceof org.bukkit.block.CreatureSpawner newSpawner) {
+                            newSpawner.setSpawnedType(originalSpawner.getSpawnedType());
+                            newSpawner.setDelay(originalSpawner.getDelay());
+                            try {
+                                newSpawner.setMinSpawnDelay(originalSpawner.getMinSpawnDelay());
+                                newSpawner.setMaxSpawnDelay(originalSpawner.getMaxSpawnDelay());
+                                newSpawner.setSpawnCount(originalSpawner.getSpawnCount());
+                                newSpawner.setMaxNearbyEntities(originalSpawner.getMaxNearbyEntities());
+                                newSpawner.setRequiredPlayerRange(originalSpawner.getRequiredPlayerRange());
+                                newSpawner.setSpawnRange(originalSpawner.getSpawnRange());
+                            } catch (Exception e) {
+                                // Some methods might not be available
+                            }
+                        } else if (originalState instanceof org.bukkit.block.CommandBlock originalCmd && 
+                                   newState instanceof org.bukkit.block.CommandBlock newCmd) {
+                            newCmd.setCommand(originalCmd.getCommand());
+                            newCmd.setName(originalCmd.getName());
+                        }
+                        
+                        newState.update(true, false);
+                        restored[0]++;
+                    } catch (Exception e) {
+                        getLogger().warning("Error restoring block at " + originalState.getLocation() + " for challenge '" + challengeId + "': " + e.getMessage());
+                    }
+                    
+                    currentIndex[0]++;
+                }
+                
+                // All blocks restored
+                if (currentIndex[0] >= blocksToRestore.size()) {
+                    // Done!
+                    if (restored[0] < totalToRestore) {
+                        getLogger().warning("Regeneration incomplete for challenge '" + challengeId + "': Only restored " + restored[0] + "/" + totalToRestore + " blocks. Some blocks may have been skipped due to unloaded chunks.");
+                    } else {
+                        getLogger().info("Regenerated challenge area for '" + challengeId + "' (" + restored[0] + "/" + totalToRestore + " blocks restored)");
+                    }
+                    
+                    // Mark regeneration as complete
+                    challengeRegenerationStatus.put(challengeId, true);
+                    
+                    // Check if countdown already finished and teleport players if so
+                    CountdownTaskWrapper wrapper = activeCountdownTasks.get(challengeId);
+                    if (wrapper != null && wrapper.seconds <= 0) {
+                        new BukkitRunnable() {
+                            @Override
+                            public void run() {
+                                wrapper.task.run();
+                            }
+                        }.runTask(ConradChallengesPlugin.this);
+                    }
+                } else {
+                    // More blocks to restore, schedule next tick
+                    scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, currentIndex, timeBudgetNs, totalToRestore);
+                }
+            }
+        }.runTaskLater(this, 1L);
+    }
+    
+    /**
      * Regenerates the challenge area to its initial state.
      * This should be called before players are teleported into the challenge.
-     * Only replaces blocks that have been changed (broken, modified, etc.).
+     * Uses a two-phase approach: first compares blocks to find what changed,
+     * then only restores the blocks that actually need restoration (much more efficient).
      * 
      * @param cfg The challenge configuration
      */
@@ -6641,549 +7177,66 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         List<BlockState> states = challengeInitialStates.get(cfg.id);
         if (states == null || states.isEmpty()) {
-            // Try to capture initial state if not already captured
-            if (!captureInitialState(cfg)) {
-                getLogger().warning("Cannot regenerate challenge '" + cfg.id + "' - no initial state captured and area not set!");
-                return;
-            }
-            states = challengeInitialStates.get(cfg.id);
-        }
-        
-        if (states == null || states.isEmpty()) {
-            getLogger().warning("Cannot regenerate challenge '" + cfg.id + "' - no block states available!");
+            // Cannot regenerate without initial state - don't block the main thread!
+            getLogger().warning("Cannot regenerate challenge '" + cfg.id + "' - no initial state captured! Please set the regeneration area first.");
+            // Mark as complete so players aren't stuck waiting
+            challengeRegenerationStatus.put(cfg.id, true);
             return;
         }
         
-        // Regenerate blocks asynchronously to prevent server lag
         World world = cfg.regenerationCorner1.getWorld();
         if (world == null) {
             getLogger().warning("Cannot regenerate challenge '" + cfg.id + "' - world is not loaded!");
+            challengeRegenerationStatus.put(cfg.id, true);
             return;
         }
         
-        // Make final copy for inner class
-        final List<BlockState> finalStates = new ArrayList<>(states);
         final String challengeId = cfg.id;
         
-        // Compare blocks on main thread (time-budgeted to avoid lag) - ALL world access must be on main thread
-        final Map<String, List<BlockState>> blocksByChunk = new HashMap<>();
-        final int[] skipped = {0};
-        final int[] currentIndex = {0};
-        final long compareTimeBudget = 3_000_000L; // 3ms per tick for comparison
+        // Check if regeneration is already in progress - don't start a new one
+        // false = in progress, true = complete, null = not started
+        Boolean status = challengeRegenerationStatus.get(challengeId);
+        if (status != null && status == false) {
+            // Regeneration already in progress (status is false), skip duplicate call
+            getLogger().fine("Regeneration already in progress for challenge '" + challengeId + "', skipping duplicate call");
+            return;
+        }
         
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                long startTime = System.nanoTime();
-                
-                // Process blocks until time budget is exceeded
-                while (currentIndex[0] < finalStates.size() && (System.nanoTime() - startTime) < compareTimeBudget) {
-                    BlockState originalState = finalStates.get(currentIndex[0]);
-                    try {
-                        Location loc = originalState.getLocation();
-                        Block block = world.getBlockAt(loc);
-                        
-                        boolean needsRestore = false;
-                        
-                        // Check if it's a container - always restore (contents may have changed)
-                        if (originalState instanceof Container) {
-                            needsRestore = true;
-                        }
-                        // For tile entities (signs, banners, spawners), check state
-                        else if (originalState instanceof org.bukkit.block.Sign ||
-                                 originalState instanceof org.bukkit.block.Banner ||
-                                 originalState instanceof org.bukkit.block.CreatureSpawner ||
-                                 originalState instanceof org.bukkit.block.CommandBlock) {
-                            BlockState currentState = block.getState();
-                            
-                            // Check if type changed
-                            if (currentState.getType() != originalState.getType()) {
-                                needsRestore = true;
-                            }
-                            // Check if block data changed
-                            else if (!currentState.getBlockData().matches(originalState.getBlockData())) {
-                                needsRestore = true;
-                            }
-                            // For signs, check if text changed
-                            else if (originalState instanceof org.bukkit.block.Sign originalSign && 
-                                     currentState instanceof org.bukkit.block.Sign currentSign) {
-                                for (int i = 0; i < 4; i++) {
-                                    if (!originalSign.getLine(i).equals(currentSign.getLine(i))) {
-                                        needsRestore = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            // For banners, check if patterns changed
-                            else if (originalState instanceof org.bukkit.block.Banner originalBanner && 
-                                     currentState instanceof org.bukkit.block.Banner currentBanner) {
-                                if (!originalBanner.getPatterns().equals(currentBanner.getPatterns())) {
-                                    needsRestore = true;
-                                }
-                            }
-                            // For spawners, check if type changed
-                            else if (originalState instanceof org.bukkit.block.CreatureSpawner originalSpawner && 
-                                     currentState instanceof org.bukkit.block.CreatureSpawner currentSpawner) {
-                                if (originalSpawner.getSpawnedType() != currentSpawner.getSpawnedType()) {
-                                    needsRestore = true;
-                                }
-                            }
-                        }
-                        // Regular block - check type and block data
-                        else {
-                            Material currentType = block.getType();
-                            BlockData currentData = block.getBlockData();
-                            
-                            // Check if block type changed
-                            if (currentType != originalState.getType()) {
-                                needsRestore = true;
-                            }
-                            // Check if block data changed (for directional blocks, etc.)
-                            else if (!currentData.matches(originalState.getBlockData())) {
-                                needsRestore = true;
-                            }
-                        }
-                        
-                        if (needsRestore) {
-                            // Group by chunk for efficient processing
-                            int chunkX = loc.getBlockX() >> 4;
-                            int chunkZ = loc.getBlockZ() >> 4;
-                            String chunkKey = chunkX + "," + chunkZ;
-                            blocksByChunk.computeIfAbsent(chunkKey, k -> new ArrayList<>()).add(originalState);
-                        } else {
-                            skipped[0]++;
-                        }
-                    } catch (Exception e) {
-                        getLogger().warning("Error checking block at " + originalState.getLocation() + " for challenge '" + challengeId + "': " + e.getMessage());
-                    }
-                    
-                    currentIndex[0]++;
-                }
-                
-                // Check if we're done comparing
-                if (currentIndex[0] >= finalStates.size()) {
-                    // Done comparing all blocks, now apply changes
-                    // Sort chunks for optimal processing order
-                    final Map<String, List<BlockState>> finalBlocksByChunk = blocksByChunk;
-                    List<String> sortedChunks = new ArrayList<>(blocksByChunk.keySet());
-                    sortedChunks.sort((a, b) -> {
-                        String[] partsA = a.split(",");
-                        String[] partsB = b.split(",");
-                        int xA = Integer.parseInt(partsA[0]);
-                        int zA = Integer.parseInt(partsA[1]);
-                        int xB = Integer.parseInt(partsB[0]);
-                        int zB = Integer.parseInt(partsB[1]);
-                        if (zA != zB) return Integer.compare(zA, zB);
-                        return Integer.compare(xA, xB);
-                    });
-                    
-                    // Now apply changes in chunks with time-budgeted batching on main thread
-                    final long timeBudgetNs = 3_000_000L; // 3ms per tick (3,000,000 nanoseconds)
-                    final int[] restored = {0};
-                    final int[] currentChunkIndex = {0};
-                    final int[] currentBlockIndex = {0};
-                    final List<String> finalSortedChunks = sortedChunks;
-                    
-                    new BukkitRunnable() {
-                        @Override
-                        public void run() {
-                                long startTime = System.nanoTime();
-                                boolean processedAny = false;
-                                
-                                // Process chunks until time budget is exceeded
-                                while (currentChunkIndex[0] < finalSortedChunks.size()) {
-                                    String chunkKey = finalSortedChunks.get(currentChunkIndex[0]);
-                                    List<BlockState> chunkBlocks = finalBlocksByChunk.get(chunkKey);
-                                    
-                                    // Check if chunk is loaded before processing
-                                    String[] parts = chunkKey.split(",");
-                                    int chunkX = Integer.parseInt(parts[0]);
-                                    int chunkZ = Integer.parseInt(parts[1]);
-                                    if (!world.isChunkLoaded(chunkX, chunkZ)) {
-                                        // Skip unloaded chunks, move to next
-                                        currentChunkIndex[0]++;
-                                        currentBlockIndex[0] = 0;
-                                        continue;
-                                    }
-                                    
-                                    // Process blocks in this chunk
-                                    while (currentBlockIndex[0] < chunkBlocks.size()) {
-                                        // Check time budget
-                                        if (System.nanoTime() - startTime >= timeBudgetNs) {
-                                            // Time budget exceeded, schedule next tick
-                                            this.runTaskLater(ConradChallengesPlugin.this, 1L);
-                                            return;
-                                        }
-                                        
-                                        BlockState originalState = chunkBlocks.get(currentBlockIndex[0]);
-                                        try {
-                                            Location loc = originalState.getLocation();
-                                            Block block = world.getBlockAt(loc);
-                                            
-                                            // Restore the block
-                                            block.setType(originalState.getType(), false); // false = don't apply physics
-                                            block.setBlockData(originalState.getBlockData(), false);
-                                            
-                                            // Get the new state to restore tile entity data
-                                            BlockState newState = block.getState();
-                                            
-                                            // Restore container contents if applicable
-                                            if (originalState instanceof Container originalContainer && newState instanceof Container newContainer) {
-                                                newContainer.getInventory().clear();
-                                                if (originalContainer.getInventory() != null) {
-                                                    for (int j = 0; j < originalContainer.getInventory().getSize(); j++) {
-                                                        ItemStack item = originalContainer.getInventory().getItem(j);
-                                                        if (item != null && item.getType() != Material.AIR) {
-                                                            newContainer.getInventory().setItem(j, item.clone());
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // Copy tile entity data for special blocks
-                                            if (originalState instanceof org.bukkit.block.Sign originalSign && 
-                                                newState instanceof org.bukkit.block.Sign newSign) {
-                                                for (int j = 0; j < 4; j++) {
-                                                    newSign.setLine(j, originalSign.getLine(j));
-                                                }
-                                                try {
-                                                    if (originalSign.getColor() != null) {
-                                                        newSign.setColor(originalSign.getColor());
-                                                    }
-                                                } catch (Exception e) {
-                                                    // Color not supported
-                                                }
-                                                try {
-                                                    newSign.setGlowingText(originalSign.isGlowingText());
-                                                } catch (Exception e) {
-                                                    // Glowing not supported
-                                                }
-                                            } else if (originalState instanceof org.bukkit.block.Banner originalBanner && 
-                                                       newState instanceof org.bukkit.block.Banner newBanner) {
-                                                newBanner.setPatterns(originalBanner.getPatterns());
-                                            } else if (originalState instanceof org.bukkit.block.CreatureSpawner originalSpawner && 
-                                                       newState instanceof org.bukkit.block.CreatureSpawner newSpawner) {
-                                                newSpawner.setSpawnedType(originalSpawner.getSpawnedType());
-                                                newSpawner.setDelay(originalSpawner.getDelay());
-                                                try {
-                                                    newSpawner.setMinSpawnDelay(originalSpawner.getMinSpawnDelay());
-                                                    newSpawner.setMaxSpawnDelay(originalSpawner.getMaxSpawnDelay());
-                                                    newSpawner.setSpawnCount(originalSpawner.getSpawnCount());
-                                                    newSpawner.setMaxNearbyEntities(originalSpawner.getMaxNearbyEntities());
-                                                    newSpawner.setRequiredPlayerRange(originalSpawner.getRequiredPlayerRange());
-                                                    newSpawner.setSpawnRange(originalSpawner.getSpawnRange());
-                                                } catch (Exception e) {
-                                                    // Some methods might not be available
-                                                }
-                                            } else if (originalState instanceof org.bukkit.block.CommandBlock originalCmd && 
-                                                       newState instanceof org.bukkit.block.CommandBlock newCmd) {
-                                                newCmd.setCommand(originalCmd.getCommand());
-                                                newCmd.setName(originalCmd.getName());
-                                            }
-                                            
-                                            newState.update(true, false);
-                                            restored[0]++;
-                                            processedAny = true;
-                                        } catch (Exception e) {
-                                            getLogger().warning("Error restoring block at " + originalState.getLocation() + " for challenge '" + challengeId + "': " + e.getMessage());
-                                        }
-                                        
-                                        currentBlockIndex[0]++;
-                                    }
-                                    
-                                    // Finished this chunk, move to next
-                                    currentChunkIndex[0]++;
-                                    currentBlockIndex[0] = 0;
-                                }
-                                
-                                // All chunks processed
-                                if (currentChunkIndex[0] >= finalSortedChunks.size()) {
-                                    // Done!
-                                    getLogger().info("Regenerated challenge area for '" + challengeId + "' (" + restored[0] + " blocks restored, " + skipped[0] + " unchanged)");
-                                    
-                                    // Mark regeneration as complete
-                                    challengeRegenerationStatus.put(challengeId, true);
-                                    
-                                    // Check if countdown already finished and teleport players if so
-                                    CountdownTaskWrapper wrapper = activeCountdownTasks.get(challengeId);
-                                    if (wrapper != null && wrapper.seconds <= 0) {
-                                        // Countdown finished but we were waiting for regeneration
-                                        // Trigger teleport by running the countdown task one more time
-                                        new BukkitRunnable() {
-                                            @Override
-                                            public void run() {
-                                                wrapper.task.run();
-                                            }
-                                        }.runTask(ConradChallengesPlugin.this);
-                                    }
-                                } else if (processedAny) {
-                                    // Processed some blocks but not all, schedule next tick
-                                    this.runTaskLater(ConradChallengesPlugin.this, 1L);
-                                }
-                            }
-                        }.runTask(ConradChallengesPlugin.this);
-                } else {
-                    // More blocks to compare, schedule next batch (create new runnable instance)
-                    new BukkitRunnable() {
-                        @Override
-                        public void run() {
-                            long startTime = System.nanoTime();
-                            
-                            // Process blocks until time budget is exceeded
-                            while (currentIndex[0] < finalStates.size() && (System.nanoTime() - startTime) < compareTimeBudget) {
-                                BlockState originalState = finalStates.get(currentIndex[0]);
-                                try {
-                                    Location loc = originalState.getLocation();
-                                    Block block = world.getBlockAt(loc);
-                                    
-                                    boolean needsRestore = false;
-                                    
-                                    // Check if it's a container - always restore (contents may have changed)
-                                    if (originalState instanceof Container) {
-                                        needsRestore = true;
-                                    }
-                                    // For tile entities (signs, banners, spawners), check state
-                                    else if (originalState instanceof org.bukkit.block.Sign ||
-                                             originalState instanceof org.bukkit.block.Banner ||
-                                             originalState instanceof org.bukkit.block.CreatureSpawner ||
-                                             originalState instanceof org.bukkit.block.CommandBlock) {
-                                        BlockState currentState = block.getState();
-                                        
-                                        // Check if type changed
-                                        if (currentState.getType() != originalState.getType()) {
-                                            needsRestore = true;
-                                        }
-                                        // Check if block data changed
-                                        else if (!currentState.getBlockData().matches(originalState.getBlockData())) {
-                                            needsRestore = true;
-                                        }
-                                        // For signs, check if text changed
-                                        else if (originalState instanceof org.bukkit.block.Sign originalSign && 
-                                                 currentState instanceof org.bukkit.block.Sign currentSign) {
-                                            for (int i = 0; i < 4; i++) {
-                                                if (!originalSign.getLine(i).equals(currentSign.getLine(i))) {
-                                                    needsRestore = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        // For banners, check if patterns changed
-                                        else if (originalState instanceof org.bukkit.block.Banner originalBanner && 
-                                                 currentState instanceof org.bukkit.block.Banner currentBanner) {
-                                            if (!originalBanner.getPatterns().equals(currentBanner.getPatterns())) {
-                                                needsRestore = true;
-                                            }
-                                        }
-                                        // For spawners, check if type changed
-                                        else if (originalState instanceof org.bukkit.block.CreatureSpawner originalSpawner && 
-                                                 currentState instanceof org.bukkit.block.CreatureSpawner currentSpawner) {
-                                            if (originalSpawner.getSpawnedType() != currentSpawner.getSpawnedType()) {
-                                                needsRestore = true;
-                                            }
-                                        }
-                                    }
-                                    // Regular block - check type and block data
-                                    else {
-                                        Material currentType = block.getType();
-                                        BlockData currentData = block.getBlockData();
-                                        
-                                        // Check if block type changed
-                                        if (currentType != originalState.getType()) {
-                                            needsRestore = true;
-                                        }
-                                        // Check if block data changed (for directional blocks, etc.)
-                                        else if (!currentData.matches(originalState.getBlockData())) {
-                                            needsRestore = true;
-                                        }
-                                    }
-                                    
-                                    if (needsRestore) {
-                                        // Group by chunk for efficient processing
-                                        int chunkX = loc.getBlockX() >> 4;
-                                        int chunkZ = loc.getBlockZ() >> 4;
-                                        String chunkKey = chunkX + "," + chunkZ;
-                                        blocksByChunk.computeIfAbsent(chunkKey, k -> new ArrayList<>()).add(originalState);
-                                    } else {
-                                        skipped[0]++;
-                                    }
-                                } catch (Exception e) {
-                                    getLogger().warning("Error checking block at " + originalState.getLocation() + " for challenge '" + challengeId + "': " + e.getMessage());
-                                }
-                                
-                                currentIndex[0]++;
-                            }
-                            
-                            // Check if we're done comparing
-                            if (currentIndex[0] >= finalStates.size()) {
-                                // Done comparing all blocks, now apply changes
-                                // Sort chunks for optimal processing order
-                                final Map<String, List<BlockState>> finalBlocksByChunk = blocksByChunk;
-                                List<String> sortedChunks = new ArrayList<>(blocksByChunk.keySet());
-                                sortedChunks.sort((a, b) -> {
-                                    String[] partsA = a.split(",");
-                                    String[] partsB = b.split(",");
-                                    int xA = Integer.parseInt(partsA[0]);
-                                    int zA = Integer.parseInt(partsA[1]);
-                                    int xB = Integer.parseInt(partsB[0]);
-                                    int zB = Integer.parseInt(partsB[1]);
-                                    if (zA != zB) return Integer.compare(zA, zB);
-                                    return Integer.compare(xA, xB);
-                                });
-                                
-                                // Now apply changes in chunks with time-budgeted batching on main thread
-                                final long timeBudgetNs = 3_000_000L; // 3ms per tick (3,000,000 nanoseconds)
-                                final int[] restored = {0};
-                                final int[] currentChunkIndex = {0};
-                                final int[] currentBlockIndex = {0};
-                                final List<String> finalSortedChunks = sortedChunks;
-                                
-                                new BukkitRunnable() {
-                                    @Override
-                                    public void run() {
-                                        long startTime = System.nanoTime();
-                                        boolean processedAny = false;
-                                        
-                                        // Process chunks until time budget is exceeded
-                                        while (currentChunkIndex[0] < finalSortedChunks.size()) {
-                                            String chunkKey = finalSortedChunks.get(currentChunkIndex[0]);
-                                            List<BlockState> chunkBlocks = finalBlocksByChunk.get(chunkKey);
-                                            
-                                            // Check if chunk is loaded before processing
-                                            String[] parts = chunkKey.split(",");
-                                            int chunkX = Integer.parseInt(parts[0]);
-                                            int chunkZ = Integer.parseInt(parts[1]);
-                                            if (!world.isChunkLoaded(chunkX, chunkZ)) {
-                                                // Skip unloaded chunks, move to next
-                                                currentChunkIndex[0]++;
-                                                currentBlockIndex[0] = 0;
-                                                continue;
-                                            }
-                                            
-                                            // Process blocks in this chunk
-                                            while (currentBlockIndex[0] < chunkBlocks.size()) {
-                                                // Check time budget
-                                                if (System.nanoTime() - startTime >= timeBudgetNs) {
-                                                    // Time budget exceeded, schedule next tick
-                                                    this.runTaskLater(ConradChallengesPlugin.this, 1L);
-                                                    return;
-                                                }
-                                                
-                                                BlockState originalState = chunkBlocks.get(currentBlockIndex[0]);
-                                                try {
-                                                    Location loc = originalState.getLocation();
-                                                    Block block = world.getBlockAt(loc);
-                                                    
-                                                    // Restore the block
-                                                    block.setType(originalState.getType(), false); // false = don't apply physics
-                                                    block.setBlockData(originalState.getBlockData(), false);
-                                                    
-                                                    // Get the new state to restore tile entity data
-                                                    BlockState newState = block.getState();
-                                                    
-                                                    // Restore container contents if applicable
-                                                    if (originalState instanceof Container originalContainer && newState instanceof Container newContainer) {
-                                                        newContainer.getInventory().clear();
-                                                        if (originalContainer.getInventory() != null) {
-                                                            for (int j = 0; j < originalContainer.getInventory().getSize(); j++) {
-                                                                ItemStack item = originalContainer.getInventory().getItem(j);
-                                                                if (item != null && item.getType() != Material.AIR) {
-                                                                    newContainer.getInventory().setItem(j, item.clone());
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    
-                                                    // Copy tile entity data for special blocks
-                                                    if (originalState instanceof org.bukkit.block.Sign originalSign && 
-                                                        newState instanceof org.bukkit.block.Sign newSign) {
-                                                        for (int j = 0; j < 4; j++) {
-                                                            newSign.setLine(j, originalSign.getLine(j));
-                                                        }
-                                                        try {
-                                                            if (originalSign.getColor() != null) {
-                                                                newSign.setColor(originalSign.getColor());
-                                                            }
-                                                        } catch (Exception e) {
-                                                            // Color not supported
-                                                        }
-                                                        try {
-                                                            newSign.setGlowingText(originalSign.isGlowingText());
-                                                        } catch (Exception e) {
-                                                            // Glowing not supported
-                                                        }
-                                                    } else if (originalState instanceof org.bukkit.block.Banner originalBanner && 
-                                                               newState instanceof org.bukkit.block.Banner newBanner) {
-                                                        newBanner.setPatterns(originalBanner.getPatterns());
-                                                    } else if (originalState instanceof org.bukkit.block.CreatureSpawner originalSpawner && 
-                                                               newState instanceof org.bukkit.block.CreatureSpawner newSpawner) {
-                                                        newSpawner.setSpawnedType(originalSpawner.getSpawnedType());
-                                                        newSpawner.setDelay(originalSpawner.getDelay());
-                                                        try {
-                                                            newSpawner.setMinSpawnDelay(originalSpawner.getMinSpawnDelay());
-                                                            newSpawner.setMaxSpawnDelay(originalSpawner.getMaxSpawnDelay());
-                                                            newSpawner.setSpawnCount(originalSpawner.getSpawnCount());
-                                                            newSpawner.setMaxNearbyEntities(originalSpawner.getMaxNearbyEntities());
-                                                            newSpawner.setRequiredPlayerRange(originalSpawner.getRequiredPlayerRange());
-                                                            newSpawner.setSpawnRange(originalSpawner.getSpawnRange());
-                                                        } catch (Exception e) {
-                                                            // Some methods might not be available
-                                                        }
-                                                    } else if (originalState instanceof org.bukkit.block.CommandBlock originalCmd && 
-                                                               newState instanceof org.bukkit.block.CommandBlock newCmd) {
-                                                        newCmd.setCommand(originalCmd.getCommand());
-                                                        newCmd.setName(originalCmd.getName());
-                                                    }
-                                                    
-                                                    newState.update(true, false);
-                                                    restored[0]++;
-                                                    processedAny = true;
-                                                } catch (Exception e) {
-                                                    getLogger().warning("Error restoring block at " + originalState.getLocation() + " for challenge '" + challengeId + "': " + e.getMessage());
-                                                }
-                                                
-                                                currentBlockIndex[0]++;
-                                            }
-                                            
-                                            // Finished this chunk, move to next
-                                            currentChunkIndex[0]++;
-                                            currentBlockIndex[0] = 0;
-                                        }
-                                        
-                                        // All chunks processed
-                                        if (currentChunkIndex[0] >= finalSortedChunks.size()) {
-                                            // Done!
-                                            getLogger().info("Regenerated challenge area for '" + challengeId + "' (" + restored[0] + " blocks restored, " + skipped[0] + " unchanged)");
-                                            
-                                            // Mark regeneration as complete
-                                            challengeRegenerationStatus.put(challengeId, true);
-                                            
-                                            // Check if countdown already finished and teleport players if so
-                                            CountdownTaskWrapper wrapper = activeCountdownTasks.get(challengeId);
-                                            if (wrapper != null && wrapper.seconds <= 0) {
-                                                // Countdown finished but we were waiting for regeneration
-                                                // Trigger teleport by running the countdown task one more time
-                                                new BukkitRunnable() {
-                                                    @Override
-                                                    public void run() {
-                                                        wrapper.task.run();
-                                                    }
-                                                }.runTask(ConradChallengesPlugin.this);
-                                            }
-                                        } else if (processedAny) {
-                                            // Processed some blocks but not all, schedule next tick
-                                            this.runTaskLater(ConradChallengesPlugin.this, 1L);
-                                        }
-                                    }
-                                }.runTask(ConradChallengesPlugin.this);
-                            } else {
-                                // More blocks to compare, schedule next batch (recursive call)
-                                this.runTaskLater(ConradChallengesPlugin.this, 1L);
-                            }
-                        }
-                    }.runTaskLater(ConradChallengesPlugin.this, 1L);
-                }
+        final List<BlockState> finalStates = new ArrayList<>(states);
+        
+        // Mark regeneration as in progress
+        challengeRegenerationStatus.put(challengeId, false);
+        
+        int totalBlocks = finalStates.size();
+        getLogger().info("Starting regeneration for challenge '" + challengeId + "' (" + totalBlocks + " blocks to check)");
+        
+        // Pre-load chunks in time-budgeted batches on main thread, then start comparison phase
+        // Collect unique chunks that need to be loaded
+        final java.util.Set<String> chunksToLoad = new java.util.HashSet<>();
+        for (BlockState state : finalStates) {
+            Location loc = state.getLocation();
+            int chunkX = loc.getBlockX() >> 4;
+            int chunkZ = loc.getBlockZ() >> 4;
+            if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                chunksToLoad.add(chunkX + "," + chunkZ);
             }
-        }.runTask(this);
+        }
+        
+        if (chunksToLoad.isEmpty()) {
+            // All chunks already loaded, start comparison phase immediately
+            final int[] currentIndex = {0};
+            final java.util.List<BlockState> blocksToRestore = new java.util.ArrayList<>();
+            final int[] skipped = {0};
+            final long compareTimeBudget = 12_000_000L; // 12ms per tick for comparison (increased for speed)
+            scheduleNextComparisonBatch(challengeId, world, finalStates, currentIndex, compareTimeBudget, totalBlocks, blocksToRestore, skipped);
+        } else {
+            // Pre-load chunks in time-budgeted batches, then start comparison phase
+            getLogger().info("Pre-loading " + chunksToLoad.size() + " chunks for regeneration...");
+            final java.util.List<String> chunksList = new java.util.ArrayList<>(chunksToLoad);
+            final int[] chunkIndex = {0};
+            final long chunkLoadBudget = 8_000_000L; // 8ms per tick for chunk loading (increased for speed)
+            scheduleNextChunkLoadBatch(challengeId, world, finalStates, chunksList, chunkIndex, chunkLoadBudget);
+        }
     }
 
     // ====== EDIT MODE HELPERS ======

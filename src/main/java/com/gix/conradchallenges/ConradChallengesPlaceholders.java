@@ -209,12 +209,13 @@ public class ConradChallengesPlaceholders {
         mv.visitMaxs(3, 3);
         mv.visitEnd();
         
-        // getPlaceholders() - Returns list of available placeholders for tab completion
-        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "getPlaceholders", "()Ljava/util/List;", 
-            "()Ljava/util/List<Ljava/lang/String;>;", null);
+        // getPlaceholders() - Returns collection of available placeholders for tab completion
+        // Try Collection as the most generic type that PlaceholderAPI might accept
+        mv = cw.visitMethod(Opcodes.ACC_PUBLIC, "getPlaceholders", "()Ljava/util/Collection;", 
+            "()Ljava/util/Collection<Ljava/lang/String;>;", null);
         mv.visitCode();
         mv.visitMethodInsn(Opcodes.INVOKESTATIC, "com/gix/conradchallenges/ConradChallengesPlaceholders", 
-            "getPlaceholdersList", "()Ljava/util/List;", false);
+            "getPlaceholdersSet", "()Ljava/util/Set;", false);
         mv.visitInsn(Opcodes.ARETURN);
         mv.visitMaxs(1, 1);
         mv.visitEnd();
@@ -256,7 +257,9 @@ public class ConradChallengesPlaceholders {
     
     /**
      * Static method to get list of placeholders (called from generated class for tab completion).
+     * @deprecated Use getPlaceholdersSet() instead
      */
+    @Deprecated
     public static List<String> getPlaceholdersList() {
         return Arrays.asList(
             "active",
@@ -275,6 +278,30 @@ public class ConradChallengesPlaceholders {
             "total_completions",
             "challenges_completed"
         );
+    }
+    
+    /**
+     * Static method to get set of placeholders (called from generated class for tab completion).
+     * Returns a Set instead of List as PlaceholderAPI may prefer this for tab completion.
+     */
+    public static Set<String> getPlaceholdersSet() {
+        return new HashSet<>(Arrays.asList(
+            "active",
+            "active_name",
+            "besttime_<challengeid>",
+            "besttime_formatted_<challengeid>",
+            "completed_<challengeid>",
+            "cooldown_<challengeid>",
+            "cooldown_formatted_<challengeid>",
+            "completions_<challengeid>",
+            "top_<challengeid>_<position>",
+            "top_time_<challengeid>_<position>",
+            "top_time_formatted_<challengeid>_<position>",
+            "leaderboard_count_<challengeid>",
+            "rank_<challengeid>",
+            "total_completions",
+            "challenges_completed"
+        ));
     }
 
     /**

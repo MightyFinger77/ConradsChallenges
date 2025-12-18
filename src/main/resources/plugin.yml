@@ -16,6 +16,9 @@ commands:
     description: Admin and party commands for ConradChallenges
     usage: /<command> [setnpc|removenpc|removeallnpcs|reload|challenge|party|top|challenge create|challenge setbook|challenge clearbook|challenge setdestination|challenge settype|challenge setboss|challenge settimer|challenge setitem|challenge setspeed|challenge setcooldown|challenge settimelimit|challenge setmaxparty|challenge addreward|challenge clearrewards|challenge list|challenge info|challenge setregenerationarea|challenge clearregenerationarea|challenge captureregeneration|challenge edit|challenge save|challenge cancel|challenge lockdown|challenge unlockdown|party start|party confirm]
     aliases: [cchallenges]
+  challenge:
+    description: Shortcut for /conradchallenges challenge commands
+    usage: /<command> [addreward|cancel|captureregeneration|clearbook|clearregenerationarea|clearrewards|create|delete|edit|info|list|lockdown|save|setautoregenerationy|setbook|setboss|setcooldown|setdestination|setitem|setmaxparty|setregenerationarea|setspeed|settimelimit|settimer|settype|unlockdown]
   accept:
     description: Accept your pending Conrad Challenge
     usage: /<command>
