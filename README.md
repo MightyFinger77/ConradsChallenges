@@ -78,7 +78,7 @@ Choose how players complete the challenge:
 - **BOSS**: Kill a specific boss entity
 - **TIMER**: Survive for a set amount of time
 - **ITEM**: Bring a specific item to the GateKeeper
-- **SPEED**: Complete as fast as possible (with tiered rewards)
+- **SPEED**: Complete as fast as possible (speed affects reward multipliers)
 - **NONE**: Just return to GateKeeper anytime
 
 Example: `/challenge settype dungeon1 BOSS`
@@ -192,7 +192,17 @@ Special rewards only given when a player sets a new top time (SPEED challenges o
 
 ### Fallback Rewards
 
-Fallback rewards are used if no difficulty tier rewards are set. They work with all completion types and support chance values.
+Fallback rewards are used if no difficulty tier rewards are set. They work with all completion types and support chance values. These are the "old" reward system - if you set tier rewards, fallback rewards are ignored.
+
+**When to use:**
+- Simple challenges that don't need tier-based rewards
+- Quick setup without complexity
+- Backward compatibility with existing challenges
+
+**When NOT to use:**
+- If you want different rewards per difficulty tier
+- If you want inheritance (higher tiers get lower tier rewards)
+- For SPEED challenges (use tier rewards with speed multipliers instead)
 
 #### Add Fallback Reward:
 ```
@@ -205,30 +215,57 @@ Fallback rewards are used if no difficulty tier rewards are set. They work with 
 /challenge addreward dungeon1 give %player% diamond 5 0.8
 ```
 
-**Note:** Use `%player%` as a placeholder - it will be replaced with the player's name.
+**Note:** 
+- Use `%player%` as a placeholder - it will be replaced with the player's name
+- Chance defaults to 1.0 (100%) if not specified
+- All fallback rewards get difficulty multipliers applied (Easy=1.0x, Medium=1.5x, Hard=3.0x, Extreme=9.0x)
+- For SPEED challenges, speed multipliers also apply (Gold=1.5x, Silver=1.0x, Bronze=0.5x, New Record=3.0x)
 
 #### Clear All Fallback Rewards:
 ```
 /challenge clearrewards [id]
 ```
 
-### Reward Calculation Example
+### Reward Calculation Examples
 
-**Scenario:** Player completes challenge on **Hard** difficulty, finishes in **60 seconds** (Gold tier), and sets a **new record**.
+**Example 1: Hard Difficulty, Gold Time (60s), New Record**
 
-**Rewards:**
-1. **Difficulty Tier Rewards:**
-   - Easy rewards: ×3.0 (Hard difficulty) × 3.0 (new record) = **9.0x**
-   - Medium rewards: ×2.0 (Hard difficulty) × 3.0 (new record) = **6.0x**
-   - Hard rewards: ×1.0 (Hard difficulty) × 3.0 (new record) = **3.0x**
+Player gets:
+- **Easy tier rewards**: 5000 money, 8 diamonds
+  - Multiplier: ×3.0 (Hard difficulty) × 3.0 (new record) = **9.0x**
+  - Result: 45,000 money, 72 diamonds
+- **Medium tier rewards**: 2 beacons
+  - Multiplier: ×2.0 (Hard difficulty) × 3.0 (new record) = **6.0x**
+  - Result: 12 beacons
+- **Hard tier rewards**: 1 netherite pickaxe
+  - Multiplier: ×1.0 (Hard difficulty) × 3.0 (new record) = **3.0x**
+  - Result: 3 netherite pickaxes
+- **Top time rewards**: 5000 money (50% chance), 1 netherite block (50% chance)
+  - Multiplier: ×1.0 (Hard difficulty) × 3.0 (new record) = **3.0x**
+  - Result: 15,000 money (if rolled), 3 netherite blocks (if rolled)
 
-2. **Top Time Rewards:**
-   - Top time rewards: ×1.0 (Hard difficulty) × 3.0 (new record) = **3.0x**
+**Example 2: Hard Difficulty, Gold Time (60s), NOT New Record**
 
-**Note:** If they finished in 60 seconds but it wasn't a new record, they'd get:
-- Easy: ×3.0 (Hard) × 1.5 (Gold tier) = **4.5x**
-- Medium: ×2.0 (Hard) × 1.5 (Gold tier) = **3.0x**
-- Hard: ×1.0 (Hard) × 1.5 (Gold tier) = **1.5x**
+Player gets:
+- **Easy tier rewards**: 5000 money, 8 diamonds
+  - Multiplier: ×3.0 (Hard difficulty) × 1.5 (Gold tier) = **4.5x**
+  - Result: 22,500 money, 36 diamonds
+- **Medium tier rewards**: 2 beacons
+  - Multiplier: ×2.0 (Hard difficulty) × 1.5 (Gold tier) = **3.0x**
+  - Result: 6 beacons
+- **Hard tier rewards**: 1 netherite pickaxe
+  - Multiplier: ×1.0 (Hard difficulty) × 1.5 (Gold tier) = **1.5x**
+  - Result: 1 netherite pickaxe (rounded down from 1.5)
+- **Top time rewards**: None (not a new record)
+
+**Example 3: Easy Difficulty, Bronze Time (250s)**
+
+Player gets:
+- **Easy tier rewards**: 5000 money, 8 diamonds
+  - Multiplier: ×1.0 (Easy difficulty) × 0.5 (Bronze tier) = **0.5x**
+  - Result: 2,500 money, 4 diamonds
+- **Medium/Hard/Extreme rewards**: None (only Easy tier selected)
+- **Top time rewards**: None (not a new record)
 
 ---
 
@@ -625,6 +662,9 @@ challenges:
           chance: 0.5  # 50% chance
     
     # Fallback rewards (used if no difficulty-tier-rewards are set)
+    # Format: List of maps with "command" and "chance" (0.0-1.0)
+    # Old format (just strings like ['7000']) is automatically converted to chance 1.0
+    # This example shows empty fallback rewards since tier rewards are set above
     reward-commands: []
     
     # Challenge state
@@ -799,15 +839,17 @@ If you disconnect while in a challenge:
    /challenge setboss dungeon1 WITHER "The Dark Lord"
    ```
 
-5. **Add rewards:**
-   ```
-   /challenge addreward dungeon1 eco give %player% 1000
-   /challenge addreward dungeon1 give %player% diamond 5
-   ```
-
-6. **Enter edit mode to set areas:**
+5. **Enter edit mode to set areas and rewards:**
    ```
    /challenge edit dungeon1
+   ```
+
+6. **Add tier rewards** (while in edit mode, no ID needed):
+   ```
+   /challenge addtierreward easy item DIAMOND 8
+   /challenge addtierreward easy command eco give %player% 5000
+   /challenge addtierreward medium item BEACON 2
+   /challenge addtierreward hard item NETHERITE_PICKAXE 1
    ```
 
 7. **Set challenge area** (using WorldEdit):
@@ -834,6 +876,8 @@ If you disconnect while in a challenge:
     /challenge setcooldown dungeon1 3600
     ```
 
+**Note**: If you prefer fallback rewards instead of tier rewards, you can use `/challenge addreward <command> [chance]` instead of tier rewards. Fallback rewards are used if no tier rewards are set.
+
 ### Edit Mode Workflow
 
 1. **Enter edit mode:**
@@ -843,7 +887,14 @@ If you disconnect while in a challenge:
 
 2. **Make changes** (no ID needed):
    ```
+   # Add tier rewards
+   /challenge addtierreward easy item DIAMOND 8
+   /challenge addtierreward medium item BEACON 2
+   
+   # Or use fallback rewards (if no tier rewards set)
    /challenge addreward eco give %player% 500
+   
+   # Configure challenge settings
    /challenge setcooldown 7200
    /challenge setchallengearea  (if using WorldEdit: //1 and //2 first)
    /challenge setregenerationarea  (if using WorldEdit: //1 and //2 first)
