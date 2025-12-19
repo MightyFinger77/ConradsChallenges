@@ -7,8 +7,8 @@ spawn-world: world
 # Party system settings
 party-radius: 10  # Radius in blocks for party members to be detected (default: 10)
 pending-challenge-timeout-seconds: 15  # Seconds before a pending challenge is automatically cancelled (default: 15)
-solo-countdown-seconds: 10  # Countdown time in seconds before solo players are teleported to challenge (default: 10)
-party-countdown-seconds: 45  # Countdown time in seconds before party members are teleported to challenge (default: 10)
+solo-countdown-seconds: 30  # Countdown time in seconds before solo players are teleported to challenge (default: 10)
+party-countdown-seconds: 60  # Countdown time in seconds before party members are teleported to challenge (default: 10)
 
 # Difficulty tier level modifiers (adds to spawner's base mob_level)
 difficulty-tiers:
@@ -48,13 +48,14 @@ anger:
 edit-mode:
   # What to do when a player disconnects while in edit mode
   # Options: "cancel" (restore from backup) or "save" (keep changes)
-  disconnect-action: cancel  # Default: cancel
+  disconnect-action: save # Default: save
 
-# Teleport restrictions for players in challenges
-teleport-restriction:
-  # How to restrict teleports for players in challenges
-  # Options: "world" (allow teleports anywhere in challenge world) or "regen-area" (only allow within regeneration area)
-  mode: world  # Default: world
+# Challenge area settings
+challenge-area:
+  # Whether to automatically box in challenge areas with barrier blocks
+  # Set challenge area using /conradchallenges challenge setchallengearea <id>
+  # Use WorldEdit selection (//1 and //2) to select the area
+  barrier-boxing: false  # Default: false (off)
 
 # Challenges are created via /conradchallenges challenge create <id>
 # Use /conradchallenges challenge setbook, setdestination, etc. to configure them

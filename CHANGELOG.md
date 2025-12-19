@@ -1,5 +1,39 @@
 # Changelog
 
+## Version 3.0.2
+
+### Features
+- **Challenge Area System**: New challenge area feature separate from regeneration area. Challenge areas define the playable area for challenges and can be set using WorldEdit selections (`//1` and `//2`)
+- **Barrier Boxing**: Optional barrier boxing around challenge areas (configurable in config.yml, disabled by default). Only replaces air blocks to create invisible walls
+- **Disconnect/Reconnect System**: Players who disconnect while in challenges get a 30-second grace period to reconnect:
+  - **Solo Challenges**: Player has 30s to reconnect or challenge is cancelled and queue processes next player
+  - **Party Challenges**: Disconnected players have 30s to reconnect. Challenge only cancels if entire party disconnects and doesn't reconnect within 30s
+  - Players reconnecting within grace period are restored to challenge. Players reconnecting after grace period are teleported to spawn
+
+### Improvements
+- **Save Command Optimization**: Save command now only recaptures regeneration area state, not challenge area. Challenge area is only captured when initially set, reducing unnecessary server load
+- **Teleport Logic**: 
+  - Edit mode: Players can teleport anywhere within the challenge world
+  - In-challenge: Players can teleport within challenge area (both from and to must be in area to prevent `/tpask` abuse)
+- **Area Overlap Protection**: Prevents challenge areas and regeneration areas from overlapping with OTHER challenges' areas. Same challenge's areas can overlap (challenge area can overlap with its own regen area)
+- **Explosion Protection**: Blocks within challenge areas are protected from explosions (creepers, TNT, etc.). Only blocks are protected, not entities
+- **Command Blocking Fix**: Fixed `/spawnentity` and other commands starting with `/spawn` being incorrectly blocked. Now only `/spawn` and `/claimspawn` are blocked
+
+### Fixes
+- Fixed players disconnecting in challenges not being cleaned up properly - now properly removes from active challenges and processes queue
+- Fixed challenge area being recaptured on every save - now only captured when set via `setchallengearea` command
+- Fixed regeneration area not being recaptured on save - save command now properly recaptures regeneration area state
+
+### Commands
+- `/conradchallenges challenge setchallengearea <id>` - Set challenge area using WorldEdit selection (`//1` and `//2`)
+- `/conradchallenges challenge clearchallengearea <id>` - Clear challenge area
+- Added shortened alias via `/challenge <command>`
+
+### Technical Changes
+- Challenge area state stored separately and only captured when area is set
+- Disconnect tracking system with 30-second grace period and automatic cleanup
+- Improved party challenge handling for disconnects - only cancels if all members disconnect
+
 ## Version 3.0.0
 
 ### Major Improvements

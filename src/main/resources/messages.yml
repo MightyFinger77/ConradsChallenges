@@ -363,8 +363,6 @@ admin:
   challenge-edit-already-editing-another: "&cYou are already editing challenge '%id%'."
   challenge-edit-cancel-hint: "&7Use &c/challenge cancel &7to exit edit mode first."
   challenge-save-not-editing: "&cYou are not currently editing any challenge."
-  challenge-save-regeneration-captured: "&aRegeneration state recaptured with your changes."
-  challenge-save-regeneration-failed: "&cFailed to recapture regeneration state. Changes saved but regeneration may not work correctly."
   challenge-save-success: "&aChanges saved for challenge '%id%'! You have been returned to your original location."
   challenge-cancel-not-editing: "&cYou are not currently editing any challenge."
   challenge-cancel-restored: "&aChallenge '%id%' restored to state before editing."

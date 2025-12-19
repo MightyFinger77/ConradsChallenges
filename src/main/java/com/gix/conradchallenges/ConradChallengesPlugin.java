@@ -19,7 +19,10 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
@@ -68,6 +71,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         "settimer", "setitem", "setspeed", "setcooldown", "settimelimit", 
         "setmaxparty", "addreward", "clearrewards", "list", "info",
         "setregenerationarea", "clearregenerationarea", "captureregeneration", "setautoregenerationy",
+        "setchallengearea", "clearchallengearea",
         "edit", "save", "cancel", "lockdown", "unlockdown"
     );
     
@@ -147,6 +151,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         Location regenerationCorner2;
         // If true, Y range extends from bedrock to build height (ignores corner Y values)
         boolean regenerationAutoExtendY;
+
+        // Challenge area (two corners defining the playable area - used for teleport, protection, etc.)
+        Location challengeCorner1;
+        Location challengeCorner2;
 
         // Lockdown: if true, challenge is disabled and players cannot start it
         boolean lockedDown;
@@ -286,10 +294,25 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private int soloCountdownSeconds = 10;  // Default 10 seconds
     private int partyCountdownSeconds = 10;  // Default 10 seconds
     private String editModeDisconnectAction = "cancel";  // Default: cancel (restore from backup)
+    private boolean barrierBoxingEnabled = false;  // Default: false (barrier boxing disabled)
     private final Map<UUID, BukkitTask> pendingChallengeTimeouts = new HashMap<>();
     
     // Track players who died in challenges and need to be teleported on respawn
     private final Map<UUID, String> pendingDeathTeleports = new HashMap<>();
+    
+    // Track disconnected players: UUID -> DisconnectInfo
+    private static class DisconnectInfo {
+        final String challengeId;
+        final long disconnectTime;
+        final BukkitTask timeoutTask;
+        
+        DisconnectInfo(String challengeId, long disconnectTime, BukkitTask timeoutTask) {
+            this.challengeId = challengeId;
+            this.disconnectTime = disconnectTime;
+            this.timeoutTask = timeoutTask;
+        }
+    }
+    private final Map<UUID, DisconnectInfo> disconnectedPlayers = new HashMap<>();
     
     // Track player countdown display preferences (title, actionbar, bossbar, chat)
     private final Map<UUID, String> countdownDisplayPreferences = new HashMap<>();
@@ -600,6 +623,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             getLogger().warning("Invalid edit-mode.disconnect-action in config (must be 'cancel' or 'save'), using default: cancel");
         }
         getLogger().info("Edit mode disconnect action set to: " + editModeDisconnectAction);
+        
+        // Load barrier boxing setting
+        barrierBoxingEnabled = config.getBoolean("challenge-area.barrier-boxing", false);
+        getLogger().info("Barrier boxing for challenge areas: " + (barrierBoxingEnabled ? "enabled" : "disabled"));
     }
 
     private void loadMessages() {
@@ -911,6 +938,31 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         }
                     } else {
                         getLogger().warning("Challenge '" + id + "' has invalid regeneration world: " + regenWorldName);
+                    }
+                }
+            }
+
+            // Load challenge area
+            ConfigurationSection challengeAreaSec = cs.getConfigurationSection("challenge-area");
+            if (challengeAreaSec != null) {
+                String challengeWorldName = challengeAreaSec.getString("world");
+                if (challengeWorldName != null) {
+                    World challengeWorld = Bukkit.getWorld(challengeWorldName);
+                    if (challengeWorld != null) {
+                        ConfigurationSection corner1Sec = challengeAreaSec.getConfigurationSection("corner1");
+                        ConfigurationSection corner2Sec = challengeAreaSec.getConfigurationSection("corner2");
+                        if (corner1Sec != null && corner2Sec != null) {
+                            double x1 = corner1Sec.getDouble("x");
+                            double y1 = corner1Sec.getDouble("y");
+                            double z1 = corner1Sec.getDouble("z");
+                            double x2 = corner2Sec.getDouble("x");
+                            double y2 = corner2Sec.getDouble("y");
+                            double z2 = corner2Sec.getDouble("z");
+                            cfg.challengeCorner1 = new Location(challengeWorld, x1, y1, z1);
+                            cfg.challengeCorner2 = new Location(challengeWorld, x2, y2, z2);
+                        }
+                    } else {
+                        getLogger().warning("Challenge '" + id + "' has invalid challenge area world: " + challengeWorldName);
                     }
                 }
             }
@@ -1668,6 +1720,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             config.set(path + ".regeneration.auto-extend-y", cfg.regenerationAutoExtendY);
         } else {
             config.set(path + ".regeneration", null);
+        }
+
+        // Save challenge area
+        if (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null) {
+            config.set(path + ".challenge-area.world", cfg.challengeCorner1.getWorld().getName());
+            config.set(path + ".challenge-area.corner1.x", cfg.challengeCorner1.getX());
+            config.set(path + ".challenge-area.corner1.y", cfg.challengeCorner1.getY());
+            config.set(path + ".challenge-area.corner1.z", cfg.challengeCorner1.getZ());
+            config.set(path + ".challenge-area.corner2.x", cfg.challengeCorner2.getX());
+            config.set(path + ".challenge-area.corner2.y", cfg.challengeCorner2.getY());
+            config.set(path + ".challenge-area.corner2.z", cfg.challengeCorner2.getZ());
+        } else {
+            config.set(path + ".challenge-area", null);
         }
 
         saveConfig();
@@ -3827,6 +3892,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 // WorldEdit selection found - use both corners at once
                 corner1Loc = weSelection[0];
                 corner2Loc = weSelection[1];
+                
+                // Check for overlaps with other challenges
+                String overlappingChallenge = checkAreaOverlap(corner1Loc, corner2Loc, id, true, true);
+                if (overlappingChallenge != null) {
+                    player.sendMessage(ChatColor.RED + "Error: Regeneration area overlaps with challenge/regeneration area of challenge '" + overlappingChallenge + "'!");
+                    return true;
+                }
+                
                 cfg.regenerationCorner1 = corner1Loc;
                 cfg.regenerationCorner2 = corner2Loc;
                 
@@ -3864,6 +3937,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     player.sendMessage(getMessage("admin.challenge-setregenerationarea-hint"));
                     player.sendMessage(getMessage("admin.challenge-setregenerationarea-we-hint"));
                 } else if (cfg.regenerationCorner2 == null) {
+                    // Both corners now set - check for overlaps with other challenges
+                    String overlappingChallenge = checkAreaOverlap(cfg.regenerationCorner1, currentLoc, id, true, true);
+                    if (overlappingChallenge != null) {
+                        player.sendMessage(ChatColor.RED + "Error: Regeneration area overlaps with challenge/regeneration area of challenge '" + overlappingChallenge + "'!");
+                        return true;
+                    }
+                    
                     cfg.regenerationCorner2 = currentLoc;
                     player.sendMessage(getMessage("admin.challenge-setregenerationarea-corner2", "id", id, 
                         "x", String.valueOf(currentLoc.getBlockX()), 
@@ -3883,6 +3963,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         }
                     });
                 } else {
+                    // Both corners already set, replace corner2 - check for overlaps with other challenges
+                    String overlappingChallenge = checkAreaOverlap(cfg.regenerationCorner1, currentLoc, id, true, true);
+                    if (overlappingChallenge != null) {
+                        player.sendMessage(ChatColor.RED + "Error: Regeneration area overlaps with challenge/regeneration area of challenge '" + overlappingChallenge + "'!");
+                        return true;
+                    }
+                    
                     // Both corners already set, replace corner2
                     cfg.regenerationCorner2 = currentLoc;
                     player.sendMessage(getMessage("admin.challenge-setregenerationarea-corner2-updated", "id", id, 
@@ -3933,6 +4020,113 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             challengeRegenerationStatus.remove(id); // Clear regeneration status
             saveChallengeToConfig(cfg);
             player.sendMessage(getMessage("admin.challenge-clearregenerationarea-success", "id", id));
+            return true;
+        }
+
+        if (sub.equals("setchallengearea")) {
+            // Require edit mode
+            if (!isPlayerInEditMode(player)) {
+                player.sendMessage(ChatColor.RED + "Usage: /conradchallenges challenge setchallengearea <id>");
+                player.sendMessage(ChatColor.RED + "You must be in edit mode to set challenge areas.");
+                return true;
+            }
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(ChatColor.RED + "Usage: /conradchallenges challenge setchallengearea <id>");
+                player.sendMessage(ChatColor.RED + "You must be in edit mode to set challenge areas.");
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            
+            // Try to get WorldEdit selection first (//1 and //2)
+            Location[] weSelection = getWorldEditSelection(player);
+            Location corner1Loc = null;
+            Location corner2Loc = null;
+            
+            if (weSelection != null && weSelection.length == 2) {
+                // WorldEdit selection found - use both corners at once
+                corner1Loc = weSelection[0];
+                corner2Loc = weSelection[1];
+                
+                // Check for overlaps with other challenges
+                String overlappingChallenge = checkAreaOverlap(corner1Loc, corner2Loc, id, true, true);
+                if (overlappingChallenge != null) {
+                    player.sendMessage(ChatColor.RED + "Error: Challenge area overlaps with challenge/regeneration area of challenge '" + overlappingChallenge + "'!");
+                    return true;
+                }
+                
+                cfg.challengeCorner1 = corner1Loc;
+                cfg.challengeCorner2 = corner2Loc;
+                
+                player.sendMessage(ChatColor.GREEN + "Challenge area set for '" + id + "' using WorldEdit selection:");
+                player.sendMessage(ChatColor.GRAY + "  Corner 1: " + corner1Loc.getBlockX() + ", " + corner1Loc.getBlockY() + ", " + corner1Loc.getBlockZ());
+                player.sendMessage(ChatColor.GRAY + "  Corner 2: " + corner2Loc.getBlockX() + ", " + corner2Loc.getBlockY() + ", " + corner2Loc.getBlockZ());
+                
+                // Capture challenge area state when it's set (only time it should be captured)
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing challenge area state... This may take a moment for large areas."));
+                final Player finalPlayer = player; // Capture player reference for callback
+                captureChallengeAreaState(cfg, success -> {
+                    // Callback runs on main thread, so we can safely access player
+                    if (finalPlayer != null && finalPlayer.isOnline()) {
+                        if (success) {
+                            finalPlayer.sendMessage(ChatColor.GREEN + "Challenge area state captured successfully!");
+                        } else {
+                            finalPlayer.sendMessage(ChatColor.RED + "Failed to capture challenge area state!");
+                        }
+                    }
+                });
+                
+                // Apply barrier boxing if enabled
+                if (barrierBoxingEnabled) {
+                    player.sendMessage(ChatColor.YELLOW + "Creating barrier box around challenge area...");
+                    createBarrierBox(cfg, player);
+                }
+            } else {
+                player.sendMessage(ChatColor.RED + "No WorldEdit selection found! Use //1 and //2 to select the challenge area first.");
+                player.sendMessage(ChatColor.GRAY + "Tip: Stand at one corner, use //1, then stand at the opposite corner and use //2");
+                return true;
+            }
+            
+            saveChallengeToConfig(cfg);
+            return true;
+        }
+
+        if (sub.equals("clearchallengearea")) {
+            // Require edit mode
+            if (!isPlayerInEditMode(player)) {
+                player.sendMessage(ChatColor.RED + "Usage: /conradchallenges challenge clearchallengearea <id>");
+                player.sendMessage(ChatColor.RED + "You must be in edit mode to clear challenge areas.");
+                return true;
+            }
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(ChatColor.RED + "Usage: /conradchallenges challenge clearchallengearea <id>");
+                player.sendMessage(ChatColor.RED + "You must be in edit mode to clear challenge areas.");
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            
+            // Remove barrier box if it exists
+            if (barrierBoxingEnabled && cfg.challengeCorner1 != null && cfg.challengeCorner2 != null) {
+                removeBarrierBox(cfg, player);
+            }
+            
+            // Clear challenge area state (it will need to be recaptured when area is set again)
+            // Note: We don't clear challengeInitialStates here because it's also used for regeneration area
+            // The challenge area state will be overwritten when setchallengearea is called again
+            
+            cfg.challengeCorner1 = null;
+            cfg.challengeCorner2 = null;
+            saveChallengeToConfig(cfg);
+            player.sendMessage(ChatColor.GREEN + "Challenge area cleared for '" + id + "'");
             return true;
         }
 
@@ -4087,16 +4281,26 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 new BukkitRunnable() {
                     @Override
                     public void run() {
-                        player.teleport(cfg.destination);
-                        player.sendMessage(getMessage("admin.challenge-edit-entered", "id", id));
-                        player.sendMessage(getMessage("admin.challenge-edit-instructions"));
+                        Location teleportLoc = getTeleportLocation(cfg);
+                        if (teleportLoc != null) {
+                            player.teleport(teleportLoc);
+                            player.sendMessage(getMessage("admin.challenge-edit-entered", "id", id));
+                            player.sendMessage(getMessage("admin.challenge-edit-instructions"));
+                        } else {
+                            player.sendMessage(ChatColor.RED + "Error: No teleport location set for challenge!");
+                        }
                     }
                 }.runTaskLater(this, 20L); // 1 second delay
             } else {
                 // No regeneration area, teleport immediately
-                player.teleport(cfg.destination);
-                player.sendMessage(getMessage("admin.challenge-edit-entered", "id", id));
-                player.sendMessage(getMessage("admin.challenge-edit-instructions"));
+                Location teleportLoc = getTeleportLocation(cfg);
+                if (teleportLoc != null) {
+                    player.teleport(teleportLoc);
+                    player.sendMessage(getMessage("admin.challenge-edit-entered", "id", id));
+                    player.sendMessage(getMessage("admin.challenge-edit-instructions"));
+                } else {
+                    player.sendMessage(ChatColor.RED + "Error: No teleport location set for challenge!");
+                }
             }
             
             return true;
@@ -4124,23 +4328,25 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
-            // Recapture initial state if regeneration area exists (async)
+            // Check if challenge area is set - required for saving
+            if (cfg.challengeCorner1 == null || cfg.challengeCorner2 == null) {
+                player.sendMessage(ChatColor.RED + "You must set a challenge area before saving!");
+                player.sendMessage(ChatColor.YELLOW + "Use " + ChatColor.WHITE + "/challenge setchallengearea " + editingChallengeId + ChatColor.YELLOW + " after selecting an area with WorldEdit (//1 and //2)");
+                return true;
+            }
+            
+            // Recapture regeneration area state (not challenge area - that's only captured when set)
             if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Recapturing initial state... This may take a moment for large areas."));
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Recapturing regeneration area state... This may take a moment for large areas."));
                 final Player finalPlayer = player; // Capture player reference for callback
                 captureInitialState(cfg, success -> {
                     // Callback runs on main thread, so we can safely access player
-                    getLogger().info("Save command: Capture callback received, success=" + success + ", player=" + (finalPlayer != null ? finalPlayer.getName() : "null"));
                     if (finalPlayer != null && finalPlayer.isOnline()) {
                         if (success) {
-                            finalPlayer.sendMessage(getMessage("admin.challenge-save-regeneration-captured"));
-                            getLogger().info("Save command: Sent success message to " + finalPlayer.getName());
+                            finalPlayer.sendMessage(ChatColor.GREEN + "Regeneration area state recaptured successfully!");
                         } else {
-                            finalPlayer.sendMessage(getMessage("admin.challenge-save-regeneration-failed"));
-                            getLogger().warning("Save command: Sent failure message to " + finalPlayer.getName());
+                            finalPlayer.sendMessage(ChatColor.RED + "Failed to recapture regeneration area state!");
                         }
-                    } else {
-                        getLogger().warning("Save command: Player is null or offline, cannot send message");
                     }
                 });
             }
@@ -4989,8 +5195,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         activeChallenges.put(p.getUniqueId(), cfg.id);
                         challengeStartTimes.put(p.getUniqueId(), System.currentTimeMillis());
 
-                        p.teleport(cfg.destination);
-                        p.sendMessage(getMessage("entry.entered", "challenge", displayName(cfg)));
+                        Location teleportLoc = getTeleportLocation(cfg);
+                        if (teleportLoc != null) {
+                            p.teleport(teleportLoc);
+                            p.sendMessage(getMessage("entry.entered", "challenge", displayName(cfg)));
+                        } else {
+                            p.sendMessage(ChatColor.RED + "Error: No teleport location set for challenge!");
+                            return;
+                        }
 
                         switch (cfg.completionType) {
                             case BOSS -> p.sendMessage(getMessage("entry.boss-instruction"));
@@ -5200,13 +5412,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         
         if (editingChallengeId != null) {
-            // Player is in edit mode - block all teleports except:
-            // 1. Save/cancel teleport back to original location
-            // 2. Initial teleport to challenge destination (when entering edit mode)
-            // 3. Teleports within the challenge world (for in-challenge movement)
+            // Player is in edit mode - allow teleports anywhere within the challenge world
             Location to = event.getTo();
             Location from = event.getFrom();
             Location originalLoc = editorOriginalLocations.get(uuid);
+            
+            // Allow save/cancel teleport back to original location
             if (to != null && originalLoc != null && 
                 to.getWorld() != null && originalLoc.getWorld() != null &&
                 to.getWorld().equals(originalLoc.getWorld()) &&
@@ -5215,39 +5426,27 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return;
             }
             
-            // Allow teleport to challenge destination (for entering edit mode)
+            // Allow teleport to challenge teleport location (for entering edit mode)
             ChallengeConfig cfg = challenges.get(editingChallengeId);
-            if (cfg != null && cfg.destination != null && to != null &&
-                cfg.destination.getWorld() != null && to.getWorld() != null &&
-                to.getWorld().equals(cfg.destination.getWorld()) &&
-                to.distanceSquared(cfg.destination) < 4.0) { // Allow within 2 blocks
+            Location teleportLoc = cfg != null ? getTeleportLocation(cfg) : null;
+            if (cfg != null && teleportLoc != null && to != null &&
+                teleportLoc.getWorld() != null && to.getWorld() != null &&
+                to.getWorld().equals(teleportLoc.getWorld()) &&
+                to.distanceSquared(teleportLoc) < 4.0) { // Allow within 2 blocks
                 // This is the edit mode entry teleport, allow it
                 return;
             }
             
-            // Allow teleports based on config setting (world or regeneration area)
-            if (cfg != null && cfg.destination != null && to != null && from != null &&
-                cfg.destination.getWorld() != null && to.getWorld() != null && from.getWorld() != null &&
-                to.getWorld().equals(cfg.destination.getWorld()) && 
-                from.getWorld().equals(cfg.destination.getWorld())) {
-                
-                // Check config for teleport restriction mode
-                String restrictionMode = getConfig().getString("teleport-restriction.mode", "world");
-                
-                if ("regen-area".equalsIgnoreCase(restrictionMode)) {
-                    // Only allow teleports within the regeneration area
-                    if (isLocationInRegenerationArea(cfg, to)) {
-                        // Teleport is within regeneration area, allow it
-                        return;
-                    }
-                } else {
-                    // Default: allow teleports anywhere in the challenge world
-                    // Teleport is within the challenge world, allow it
-                    return;
-                }
+            // Allow teleports anywhere within the challenge world
+            // Since one world is used for all challenges, just check if both locations are in the same world
+            if (cfg != null && to != null && from != null &&
+                to.getWorld() != null && from.getWorld() != null &&
+                to.getWorld().equals(from.getWorld())) {
+                // Both locations are in the same world - allow teleport (one world for all challenges)
+                return;
             }
             
-            // Block all other teleports during edit mode (cross-world or to different worlds)
+            // Block all other teleports during edit mode (cross-world)
             event.setCancelled(true);
             player.sendMessage(getMessage("admin.challenge-edit-teleport-blocked"));
             return;
@@ -5260,7 +5459,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return;
         }
         
-        // Player is in a challenge - block all teleports except our own (via /exit or /cc or entry)
+        // Player is in a challenge - only allow teleports within the challenge area
         Location to = event.getTo();
         Location from = event.getFrom();
         
@@ -5273,41 +5472,45 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return;
         }
         
-        // Allow teleports to challenge destination (our entry teleport)
+        // Allow teleports to challenge teleport location (our entry teleport)
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg != null && cfg.destination != null && to != null &&
-            cfg.destination.getWorld() != null && to.getWorld() != null &&
-            to.getWorld().equals(cfg.destination.getWorld()) &&
-            to.distanceSquared(cfg.destination) < 4.0) { // Allow within 2 blocks
+        Location teleportLoc = cfg != null ? getTeleportLocation(cfg) : null;
+        if (cfg != null && teleportLoc != null && to != null &&
+            teleportLoc.getWorld() != null && to.getWorld() != null &&
+            to.getWorld().equals(teleportLoc.getWorld()) &&
+            to.distanceSquared(teleportLoc) < 4.0) { // Allow within 2 blocks
             // This is our entry teleport, allow it
             return;
         }
         
-        // Allow teleports based on config setting (world or regeneration area)
-        if (cfg != null && cfg.destination != null && to != null && from != null &&
-            cfg.destination.getWorld() != null && to.getWorld() != null && from.getWorld() != null &&
-            to.getWorld().equals(cfg.destination.getWorld()) && 
-            from.getWorld().equals(cfg.destination.getWorld())) {
+        // Only allow teleports within the challenge area (both to and from must be in challenge area)
+        // This prevents players from teleporting to friends in challenges from outside
+        if (cfg != null && to != null && from != null) {
+            // Check if challenge area is set
+            boolean hasChallengeArea = (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null) ||
+                                       (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
             
-            // Check config for teleport restriction mode
-            String restrictionMode = getConfig().getString("teleport-restriction.mode", "world");
-            
-            if ("regen-area".equalsIgnoreCase(restrictionMode)) {
-                // Only allow teleports within the regeneration area
-                if (isLocationInRegenerationArea(cfg, to)) {
-                    // Teleport is within regeneration area, allow it
+            if (hasChallengeArea) {
+                // Challenge area is set - both locations must be within it
+                if (isLocationInChallengeArea(cfg, to) && isLocationInChallengeArea(cfg, from)) {
+                    // Both locations are within challenge area, allow teleport
                     return;
                 }
             } else {
-                // Default: allow teleports anywhere in the challenge world
-                // Teleport is within the challenge world, allow it
-                return;
+                // No challenge area set - allow teleports within destination world
+                if (cfg.destination != null && cfg.destination.getWorld() != null &&
+                    to.getWorld() != null && from.getWorld() != null &&
+                    to.getWorld().equals(cfg.destination.getWorld()) &&
+                    from.getWorld().equals(cfg.destination.getWorld())) {
+                    // Teleport is within destination world, allow it
+                    return;
+                }
             }
         }
         
-        // Block all other teleports (cross-world or to different worlds)
+        // Block all other teleports
         event.setCancelled(true);
-        player.sendMessage(getMessage("challenge.teleport-blocked"));
+        player.sendMessage(ChatColor.RED + "You can only teleport within the challenge area!");
     }
     
     /**
@@ -5356,6 +5559,208 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                z >= minZ && z <= maxZ;
     }
     
+    /**
+     * Checks if a location is within a challenge's challenge area bounds.
+     * Falls back to regeneration area if challenge area is not set.
+     * 
+     * @param cfg The challenge configuration
+     * @param loc The location to check
+     * @return true if the location is within the challenge area (or regen area if challenge area not set), false otherwise
+     */
+    private boolean isLocationInChallengeArea(ChallengeConfig cfg, Location loc) {
+        // Prefer challenge area if set, otherwise fall back to regeneration area
+        Location corner1 = cfg.challengeCorner1 != null ? cfg.challengeCorner1 : cfg.regenerationCorner1;
+        Location corner2 = cfg.challengeCorner2 != null ? cfg.challengeCorner2 : cfg.regenerationCorner2;
+        
+        if (corner1 == null || corner2 == null) {
+            // No challenge or regeneration area set - location is NOT in challenge area
+            return false;
+        }
+        
+        if (corner1.getWorld() == null || 
+            !corner1.getWorld().equals(corner2.getWorld()) ||
+            !corner1.getWorld().equals(loc.getWorld())) {
+            return false;
+        }
+        
+        // Calculate bounding box
+        int minX = Math.min(corner1.getBlockX(), corner2.getBlockX());
+        int maxX = Math.max(corner1.getBlockX(), corner2.getBlockX());
+        int minY = Math.min(corner1.getBlockY(), corner2.getBlockY());
+        int maxY = Math.max(corner1.getBlockY(), corner2.getBlockY());
+        int minZ = Math.min(corner1.getBlockZ(), corner2.getBlockZ());
+        int maxZ = Math.max(corner1.getBlockZ(), corner2.getBlockZ());
+        
+        // Check if location is within bounds
+        int x = loc.getBlockX();
+        int y = loc.getBlockY();
+        int z = loc.getBlockZ();
+        
+        return x >= minX && x <= maxX &&
+               y >= minY && y <= maxY &&
+               z >= minZ && z <= maxZ;
+    }
+    
+    /**
+     * Gets the challenge config for a location if it's within any challenge area.
+     * 
+     * @param loc The location to check
+     * @return The challenge config if location is in a challenge area, null otherwise
+     */
+    private ChallengeConfig getChallengeForLocation(Location loc) {
+        for (ChallengeConfig cfg : challenges.values()) {
+            if (isLocationInChallengeArea(cfg, loc)) {
+                return cfg;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Checks if two bounding boxes overlap.
+     * 
+     * @param minX1, maxX1, minY1, maxY1, minZ1, maxZ1 First bounding box
+     * @param minX2, maxX2, minY2, maxY2, minZ2, maxZ2 Second bounding box
+     * @return true if the boxes overlap, false otherwise
+     */
+    private boolean boundingBoxesOverlap(int minX1, int maxX1, int minY1, int maxY1, int minZ1, int maxZ1,
+                                        int minX2, int maxX2, int minY2, int maxY2, int minZ2, int maxZ2) {
+        // Check if boxes overlap in all three dimensions
+        return !(maxX1 < minX2 || maxX2 < minX1 ||
+                 maxY1 < minY2 || maxY2 < minY1 ||
+                 maxZ1 < minZ2 || maxZ2 < minZ1);
+    }
+    
+    /**
+     * Checks if a challenge area or regeneration area overlaps with any other challenge's areas.
+     * 
+     * @param corner1 First corner of the area to check
+     * @param corner2 Second corner of the area to check
+     * @param excludeChallengeId Challenge ID to exclude from checking (usually the current challenge)
+     * @param checkChallengeAreas Whether to check against challenge areas
+     * @param checkRegenerationAreas Whether to check against regeneration areas
+     * @return Challenge ID that overlaps, or null if no overlap
+     */
+    private String checkAreaOverlap(Location corner1, Location corner2, String excludeChallengeId,
+                                   boolean checkChallengeAreas, boolean checkRegenerationAreas) {
+        if (corner1 == null || corner2 == null || 
+            corner1.getWorld() == null || !corner1.getWorld().equals(corner2.getWorld())) {
+            return null; // Invalid area
+        }
+        
+        // Calculate bounding box for the area being checked
+        int minX1 = Math.min(corner1.getBlockX(), corner2.getBlockX());
+        int maxX1 = Math.max(corner1.getBlockX(), corner2.getBlockX());
+        int minY1 = Math.min(corner1.getBlockY(), corner2.getBlockY());
+        int maxY1 = Math.max(corner1.getBlockY(), corner2.getBlockY());
+        int minZ1 = Math.min(corner1.getBlockZ(), corner2.getBlockZ());
+        int maxZ1 = Math.max(corner1.getBlockZ(), corner2.getBlockZ());
+        
+        // Check against all other challenges
+        for (Map.Entry<String, ChallengeConfig> entry : challenges.entrySet()) {
+            String challengeId = entry.getKey();
+            if (challengeId.equals(excludeChallengeId)) {
+                continue; // Skip the challenge we're setting the area for
+            }
+            
+            ChallengeConfig otherCfg = entry.getValue();
+            
+            // Check challenge areas
+            if (checkChallengeAreas && otherCfg.challengeCorner1 != null && otherCfg.challengeCorner2 != null) {
+                if (otherCfg.challengeCorner1.getWorld() != null && 
+                    otherCfg.challengeCorner1.getWorld().equals(corner1.getWorld())) {
+                    int minX2 = Math.min(otherCfg.challengeCorner1.getBlockX(), otherCfg.challengeCorner2.getBlockX());
+                    int maxX2 = Math.max(otherCfg.challengeCorner1.getBlockX(), otherCfg.challengeCorner2.getBlockX());
+                    int minY2 = Math.min(otherCfg.challengeCorner1.getBlockY(), otherCfg.challengeCorner2.getBlockY());
+                    int maxY2 = Math.max(otherCfg.challengeCorner1.getBlockY(), otherCfg.challengeCorner2.getBlockY());
+                    int minZ2 = Math.min(otherCfg.challengeCorner1.getBlockZ(), otherCfg.challengeCorner2.getBlockZ());
+                    int maxZ2 = Math.max(otherCfg.challengeCorner1.getBlockZ(), otherCfg.challengeCorner2.getBlockZ());
+                    
+                    if (boundingBoxesOverlap(minX1, maxX1, minY1, maxY1, minZ1, maxZ1,
+                                            minX2, maxX2, minY2, maxY2, minZ2, maxZ2)) {
+                        return challengeId;
+                    }
+                }
+            }
+            
+            // Check regeneration areas
+            if (checkRegenerationAreas && otherCfg.regenerationCorner1 != null && otherCfg.regenerationCorner2 != null) {
+                if (otherCfg.regenerationCorner1.getWorld() != null && 
+                    otherCfg.regenerationCorner1.getWorld().equals(corner1.getWorld())) {
+                    int minX2 = Math.min(otherCfg.regenerationCorner1.getBlockX(), otherCfg.regenerationCorner2.getBlockX());
+                    int maxX2 = Math.max(otherCfg.regenerationCorner1.getBlockX(), otherCfg.regenerationCorner2.getBlockX());
+                    int minY2 = Math.min(otherCfg.regenerationCorner1.getBlockY(), otherCfg.regenerationCorner2.getBlockY());
+                    int maxY2 = Math.max(otherCfg.regenerationCorner1.getBlockY(), otherCfg.regenerationCorner2.getBlockY());
+                    int minZ2 = Math.min(otherCfg.regenerationCorner1.getBlockZ(), otherCfg.regenerationCorner2.getBlockZ());
+                    int maxZ2 = Math.max(otherCfg.regenerationCorner1.getBlockZ(), otherCfg.regenerationCorner2.getBlockZ());
+                    
+                    if (boundingBoxesOverlap(minX1, maxX1, minY1, maxY1, minZ1, maxZ1,
+                                            minX2, maxX2, minY2, maxY2, minZ2, maxZ2)) {
+                        return challengeId;
+                    }
+                }
+            }
+        }
+        
+        return null; // No overlap found
+    }
+    
+    /**
+     * Gets the teleport location for a challenge.
+     * Always uses the destination - challenge area is only for restrictions/protection, not teleport location.
+     * 
+     * @param cfg The challenge configuration
+     * @return The teleport location (destination)
+     */
+    private Location getTeleportLocation(ChallengeConfig cfg) {
+        // Always use destination for teleporting
+        // Challenge area is only used for restrictions/protection, not for determining teleport location
+        if (cfg.destination != null && cfg.destination.getWorld() != null) {
+            return cfg.destination;
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Event handler to protect blocks from explosions in challenge areas.
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onEntityExplode(EntityExplodeEvent event) {
+        List<Block> blocks = event.blockList();
+        if (blocks == null || blocks.isEmpty()) {
+            return;
+        }
+        
+        // Check each block - remove from explosion if it's in a challenge area
+        blocks.removeIf(block -> {
+            ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
+            return cfg != null;
+        });
+    }
+    
+    /**
+     * Event handler to protect blocks from block explosions in challenge areas.
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBlockExplode(BlockExplodeEvent event) {
+        List<Block> blocks = event.blockList();
+        if (blocks == null || blocks.isEmpty()) {
+            return;
+        }
+        
+        // Check each block - remove from explosion if it's in a challenge area
+        blocks.removeIf(block -> {
+            ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
+            return cfg != null;
+        });
+    }
+    
+    /**
+     * Event handler to protect blocks from being broken in challenge areas.
+     * Only blocks blocks if player is not in the challenge (to allow normal gameplay).
+     */
+    
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
@@ -5375,7 +5780,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             String command = event.getMessage().toLowerCase();
             if (command.startsWith("/tpa") || command.startsWith("/home") || 
                 command.startsWith("/back") || command.startsWith("/warp") ||
-                command.startsWith("/claimspawn") || command.startsWith("/spawn") ||
+                command.startsWith("/claimspawn") || command.equals("/spawn") || command.startsWith("/spawn ") ||
                 command.startsWith("/tp ") || command.startsWith("/teleport ")) {
                 event.setCancelled(true);
                 player.sendMessage(getMessage("admin.challenge-edit-teleport-blocked"));
@@ -5394,7 +5799,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String command = event.getMessage().toLowerCase();
         if (command.startsWith("/tpa") || command.startsWith("/home") || 
             command.startsWith("/back") || command.startsWith("/warp") ||
-            command.startsWith("/claimspawn") || command.startsWith("/spawn")) {
+            command.startsWith("/claimspawn") || command.equals("/spawn") || command.startsWith("/spawn ")) {
             event.setCancelled(true);
             player.sendMessage(getMessage("challenge.command-blocked"));
         }
@@ -5496,8 +5901,132 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 processQueue(editingChallengeId);
             }
         }
+        
+        // Handle active challenge disconnect with 30s grace period
+        String challengeId = activeChallenges.get(uuid);
+        if (challengeId != null) {
+            ChallengeConfig cfg = challenges.get(challengeId);
+            if (cfg != null) {
+                // Check if this is a solo or party challenge BEFORE removing player
+                // Count active players in this challenge (including this one)
+                int activeCount = 0;
+                for (String activeChallengeId : activeChallenges.values()) {
+                    if (activeChallengeId.equals(challengeId)) {
+                        activeCount++;
+                    }
+                }
+                boolean isPartyChallenge = activeCount > 1;
+                
+                // Don't immediately remove - track for 30s grace period
+                long disconnectTime = System.currentTimeMillis();
+                
+                // Schedule task to check after 30 seconds
+                BukkitTask timeoutTask = new BukkitRunnable() {
+                    @Override
+                    public void run() {
+                        handleDisconnectTimeout(uuid, challengeId, isPartyChallenge);
+                    }
+                }.runTaskLater(this, 20L * 30); // 30 seconds
+                
+                // Store disconnect info
+                disconnectedPlayers.put(uuid, new DisconnectInfo(challengeId, disconnectTime, timeoutTask));
+                
+                // Temporarily remove from active challenges (will be restored on reconnect)
+                activeChallenges.remove(uuid);
+                completedChallenges.remove(uuid);
+                challengeStartTimes.remove(uuid);
+                
+                // Clean up difficulty tier if no active players remain (but keep challenge reserved for grace period)
+                cleanupChallengeDifficultyIfEmpty(challengeId);
+                
+                getLogger().info("Player " + player.getName() + " disconnected while in challenge '" + challengeId + "' (" + (isPartyChallenge ? "party" : "solo") + "). 30 second grace period started.");
+            }
+        }
+        
+        // Clean up any pending challenge timeouts
+        cancelPendingChallengeTimeout(uuid);
+        
+        // Remove from queue if they were in it
+        removeFromQueue(uuid);
+        
+        // Clean up countdown if they were in one
+        String countdownChallengeId = playerCountdownChallenges.remove(uuid);
+        if (countdownChallengeId != null) {
+            List<Player> countdownList = countdownPlayers.get(countdownChallengeId);
+            if (countdownList != null && countdownList.remove(player)) {
+                // Clean up bossbar
+                BossBar bossBar = playerCountdownBossBars.remove(uuid);
+                if (bossBar != null) {
+                    bossBar.removePlayer(player);
+                    bossBar.removeAll();
+                }
+                // If countdown list is now empty, cancel the task and clean up
+                if (countdownList.isEmpty()) {
+                    CountdownTaskWrapper wrapper = activeCountdownTasks.remove(countdownChallengeId);
+                    if (wrapper != null && wrapper.task != null) {
+                        wrapper.task.cancel();
+                    }
+                    countdownPlayers.remove(countdownChallengeId);
+                    reservedChallenges.remove(countdownChallengeId);
+                }
+            }
+        }
     }
 
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        Player player = event.getPlayer();
+        UUID uuid = player.getUniqueId();
+        
+        // Check if player was disconnected from a challenge
+        DisconnectInfo disconnectInfo = disconnectedPlayers.remove(uuid);
+        if (disconnectInfo != null) {
+            // Cancel the timeout task
+            if (disconnectInfo.timeoutTask != null && !disconnectInfo.timeoutTask.isCancelled()) {
+                disconnectInfo.timeoutTask.cancel();
+            }
+            
+            String challengeId = disconnectInfo.challengeId;
+            ChallengeConfig cfg = challenges.get(challengeId);
+            
+            if (cfg != null) {
+                long timeSinceDisconnect = System.currentTimeMillis() - disconnectInfo.disconnectTime;
+                long gracePeriodMs = 30L * 1000L; // 30 seconds
+                
+                if (timeSinceDisconnect <= gracePeriodMs) {
+                    // Player reconnected within grace period - restore to challenge
+                    activeChallenges.put(uuid, challengeId);
+                    challengeStartTimes.put(uuid, System.currentTimeMillis());
+                    
+                    // Teleport player back to challenge
+                    Location teleportLoc = getTeleportLocation(cfg);
+                    if (teleportLoc != null) {
+                        // Schedule teleport for next tick to ensure player is fully loaded
+                        new BukkitRunnable() {
+                            @Override
+                            public void run() {
+                                if (player.isOnline()) {
+                                    player.teleport(teleportLoc);
+                                    player.sendMessage(ChatColor.GREEN + "You reconnected! Welcome back to the challenge.");
+                                }
+                            }
+                        }.runTaskLater(this, 1L);
+                    }
+                    
+                    getLogger().info("Player " + player.getName() + " reconnected to challenge '" + challengeId + "' within grace period.");
+                } else {
+                    // Player reconnected after grace period - teleport to exit
+                    handleDisconnectedPlayerReconnect(player, challengeId, cfg);
+                }
+            }
+        } else {
+            // Player not in disconnectedPlayers - check if they reconnected after timeout
+            // This handles the case where timeout already fired and removed them
+            // We can't easily track this, so we'll just let them spawn normally
+            // (They would have been teleported to exit when timeout fired if they were online)
+        }
+    }
+    
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerRespawn(PlayerRespawnEvent event) {
         Player player = event.getPlayer();
@@ -6534,6 +7063,200 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return null;
         }
     }
+    
+    /**
+     * Creates a barrier box around the challenge area.
+     * Places barrier blocks on all faces of the bounding box.
+     * 
+     * @param cfg The challenge configuration
+     * @param player The player (for feedback)
+     */
+    private void createBarrierBox(ChallengeConfig cfg, Player player) {
+        if (cfg.challengeCorner1 == null || cfg.challengeCorner2 == null) {
+            return;
+        }
+        
+        World world = cfg.challengeCorner1.getWorld();
+        if (world == null) {
+            player.sendMessage(ChatColor.RED + "Error: Challenge area world is not loaded!");
+            return;
+        }
+        
+        int minX = Math.min(cfg.challengeCorner1.getBlockX(), cfg.challengeCorner2.getBlockX());
+        int maxX = Math.max(cfg.challengeCorner1.getBlockX(), cfg.challengeCorner2.getBlockX());
+        int minY = Math.min(cfg.challengeCorner1.getBlockY(), cfg.challengeCorner2.getBlockY());
+        int maxY = Math.max(cfg.challengeCorner1.getBlockY(), cfg.challengeCorner2.getBlockY());
+        int minZ = Math.min(cfg.challengeCorner1.getBlockZ(), cfg.challengeCorner2.getBlockZ());
+        int maxZ = Math.max(cfg.challengeCorner1.getBlockZ(), cfg.challengeCorner2.getBlockZ());
+        
+        int barrierCount = 0;
+        
+        // Place barriers on all 6 faces of the box
+        // Only replace AIR blocks to preserve player builds
+        // Bottom face (minY)
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                Block block = world.getBlockAt(x, minY - 1, z);
+                if (block.getType() == Material.AIR) {
+                    block.setType(Material.BARRIER, false);
+                    barrierCount++;
+                }
+            }
+        }
+        
+        // Top face (maxY)
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                Block block = world.getBlockAt(x, maxY + 1, z);
+                if (block.getType() == Material.AIR) {
+                    block.setType(Material.BARRIER, false);
+                    barrierCount++;
+                }
+            }
+        }
+        
+        // Front face (minZ)
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                Block block = world.getBlockAt(x, y, minZ - 1);
+                if (block.getType() == Material.AIR) {
+                    block.setType(Material.BARRIER, false);
+                    barrierCount++;
+                }
+            }
+        }
+        
+        // Back face (maxZ)
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                Block block = world.getBlockAt(x, y, maxZ + 1);
+                if (block.getType() == Material.AIR) {
+                    block.setType(Material.BARRIER, false);
+                    barrierCount++;
+                }
+            }
+        }
+        
+        // Left face (minX)
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int y = minY; y <= maxY; y++) {
+                Block block = world.getBlockAt(minX - 1, y, z);
+                if (block.getType() == Material.AIR) {
+                    block.setType(Material.BARRIER, false);
+                    barrierCount++;
+                }
+            }
+        }
+        
+        // Right face (maxX)
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int y = minY; y <= maxY; y++) {
+                Block block = world.getBlockAt(maxX + 1, y, z);
+                if (block.getType() == Material.AIR) {
+                    block.setType(Material.BARRIER, false);
+                    barrierCount++;
+                }
+            }
+        }
+        
+        player.sendMessage(ChatColor.GREEN + "Barrier box created with " + barrierCount + " barrier blocks.");
+    }
+    
+    /**
+     * Removes barrier blocks around the challenge area.
+     * 
+     * @param cfg The challenge configuration
+     * @param player The player (for feedback)
+     */
+    private void removeBarrierBox(ChallengeConfig cfg, Player player) {
+        if (cfg.challengeCorner1 == null || cfg.challengeCorner2 == null) {
+            return;
+        }
+        
+        World world = cfg.challengeCorner1.getWorld();
+        if (world == null) {
+            player.sendMessage(ChatColor.RED + "Error: Challenge area world is not loaded!");
+            return;
+        }
+        
+        int minX = Math.min(cfg.challengeCorner1.getBlockX(), cfg.challengeCorner2.getBlockX());
+        int maxX = Math.max(cfg.challengeCorner1.getBlockX(), cfg.challengeCorner2.getBlockX());
+        int minY = Math.min(cfg.challengeCorner1.getBlockY(), cfg.challengeCorner2.getBlockY());
+        int maxY = Math.max(cfg.challengeCorner1.getBlockY(), cfg.challengeCorner2.getBlockY());
+        int minZ = Math.min(cfg.challengeCorner1.getBlockZ(), cfg.challengeCorner2.getBlockZ());
+        int maxZ = Math.max(cfg.challengeCorner1.getBlockZ(), cfg.challengeCorner2.getBlockZ());
+        
+        int removedCount = 0;
+        
+        // Remove barriers on all 6 faces of the box
+        // Bottom face (minY)
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                Block block = world.getBlockAt(x, minY - 1, z);
+                if (block.getType() == Material.BARRIER) {
+                    block.setType(Material.AIR, false);
+                    removedCount++;
+                }
+            }
+        }
+        
+        // Top face (maxY)
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                Block block = world.getBlockAt(x, maxY + 1, z);
+                if (block.getType() == Material.BARRIER) {
+                    block.setType(Material.AIR, false);
+                    removedCount++;
+                }
+            }
+        }
+        
+        // Front face (minZ)
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                Block block = world.getBlockAt(x, y, minZ - 1);
+                if (block.getType() == Material.BARRIER) {
+                    block.setType(Material.AIR, false);
+                    removedCount++;
+                }
+            }
+        }
+        
+        // Back face (maxZ)
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                Block block = world.getBlockAt(x, y, maxZ + 1);
+                if (block.getType() == Material.BARRIER) {
+                    block.setType(Material.AIR, false);
+                    removedCount++;
+                }
+            }
+        }
+        
+        // Left face (minX)
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int y = minY; y <= maxY; y++) {
+                Block block = world.getBlockAt(minX - 1, y, z);
+                if (block.getType() == Material.BARRIER) {
+                    block.setType(Material.AIR, false);
+                    removedCount++;
+                }
+            }
+        }
+        
+        // Right face (maxX)
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int y = minY; y <= maxY; y++) {
+                Block block = world.getBlockAt(maxX + 1, y, z);
+                if (block.getType() == Material.BARRIER) {
+                    block.setType(Material.AIR, false);
+                    removedCount++;
+                }
+            }
+        }
+        
+        player.sendMessage(ChatColor.GREEN + "Removed " + removedCount + " barrier blocks.");
+    }
 
     /**
      * Helper method to schedule the next batch of block capture (recursive batching)
@@ -6600,6 +7323,195 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     /**
+     * Captures the initial state of all blocks in the challenge area for a challenge.
+     * This should be called when saving changes to the challenge area.
+     * Runs asynchronously to prevent server lag.
+     * 
+     * @param cfg The challenge configuration
+     * @param callback Optional callback to run on completion (on main thread). Receives true if successful, false otherwise.
+     */
+    private void captureChallengeAreaState(ChallengeConfig cfg, java.util.function.Consumer<Boolean> callback) {
+        if (cfg.challengeCorner1 == null || cfg.challengeCorner2 == null) {
+            if (callback != null) {
+                new BukkitRunnable() {
+                    @Override
+                    public void run() {
+                        callback.accept(false);
+                    }
+                }.runTask(this);
+            }
+            return;
+        }
+        
+        if (cfg.challengeCorner1.getWorld() == null || 
+            !cfg.challengeCorner1.getWorld().equals(cfg.challengeCorner2.getWorld())) {
+            getLogger().warning("Challenge area for challenge '" + cfg.id + "' has mismatched worlds!");
+            if (callback != null) {
+                new BukkitRunnable() {
+                    @Override
+                    public void run() {
+                        callback.accept(false);
+                    }
+                }.runTask(this);
+            }
+            return;
+        }
+        
+        final World world = cfg.challengeCorner1.getWorld();
+        final String challengeId = cfg.id;
+        
+        // Calculate bounding box from challenge area
+        int minX = Math.min(cfg.challengeCorner1.getBlockX(), cfg.challengeCorner2.getBlockX());
+        int maxX = Math.max(cfg.challengeCorner1.getBlockX(), cfg.challengeCorner2.getBlockX());
+        int minY = Math.min(cfg.challengeCorner1.getBlockY(), cfg.challengeCorner2.getBlockY());
+        int maxY = Math.max(cfg.challengeCorner1.getBlockY(), cfg.challengeCorner2.getBlockY());
+        int minZ = Math.min(cfg.challengeCorner1.getBlockZ(), cfg.challengeCorner2.getBlockZ());
+        int maxZ = Math.max(cfg.challengeCorner1.getBlockZ(), cfg.challengeCorner2.getBlockZ());
+        
+        // Calculate total blocks to process
+        final int totalBlocks = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+        
+        // Process in batches on MAIN THREAD ONLY (required for tile entities)
+        // All block access (getBlockAt, getState) must happen on server thread
+        final List<BlockState> states = new ArrayList<>();
+        final int[] currentX = {minX};
+        final int[] currentY = {minY};
+        final int[] currentZ = {minZ};
+        final int[] failedBlocks = {0};
+        
+        // Process in batches to avoid lag
+        // Time budget: ~3ms per tick (similar to regeneration)
+        // Calculate dynamic time budget based on area size
+        // Estimate total blocks from bounding box
+        int estimatedBlocks = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+        long timeBudget;
+        if (estimatedBlocks > 10_000_000) {
+            // Very large areas (>10M blocks): 10ms per tick
+            timeBudget = 10_000_000L;
+        } else if (estimatedBlocks > 1_000_000) {
+            // Large areas (>1M blocks): 7ms per tick
+            timeBudget = 7_000_000L;
+        } else if (estimatedBlocks > 100_000) {
+            // Medium areas (>100K blocks): 5ms per tick
+            timeBudget = 5_000_000L;
+        } else {
+            // Small areas: 3ms per tick (default)
+            timeBudget = 3_000_000L;
+        }
+        
+        getLogger().info("Capturing challenge area state for challenge '" + challengeId + "' (estimated " + estimatedBlocks + " blocks, time budget: " + (timeBudget / 1_000_000) + "ms per tick)");
+        
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                long startTime = System.nanoTime();
+                int processedThisTick = 0;
+                
+                // Process blocks until we hit time budget or finish
+                while (currentX[0] <= maxX && (System.nanoTime() - startTime) < timeBudget) {
+                    try {
+                        Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
+                        BlockState state = block.getState();
+                        states.add(state);
+                    } catch (Exception e) {
+                        failedBlocks[0]++;
+                        getLogger().warning("Error capturing block state at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " for challenge '" + challengeId + "': " + e.getMessage());
+                    }
+                    
+                    processedThisTick++;
+                    
+                    // Move to next block
+                    currentZ[0]++;
+                    if (currentZ[0] > maxZ) {
+                        currentZ[0] = minZ;
+                        currentY[0]++;
+                        if (currentY[0] > maxY) {
+                            currentY[0] = minY;
+                            currentX[0]++;
+                        }
+                    }
+                }
+                
+                // Check if we're done
+                if (currentX[0] > maxX) {
+                    // Done capturing all blocks - store in challengeInitialStates (same map as regeneration)
+                    challengeInitialStates.put(challengeId, states);
+                    if (failedBlocks[0] > 0) {
+                        getLogger().warning("Captured challenge area state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + failedBlocks[0] + " failed)");
+                    } else {
+                        getLogger().info("Captured challenge area state for challenge '" + challengeId + "' (" + states.size() + " blocks)");
+                    }
+                    if (callback != null) {
+                        callback.accept(true);
+                    }
+                } else {
+                    // More blocks to process, schedule next batch (create new runnable instance)
+                    new BukkitRunnable() {
+                        @Override
+                        public void run() {
+                            captureChallengeAreaStateBatch(challengeId, world, states, currentX, currentY, currentZ, minX, maxX, minY, maxY, minZ, maxZ, failedBlocks, timeBudget, callback);
+                        }
+                    }.runTaskLater(ConradChallengesPlugin.this, 1L);
+                }
+            }
+        }.runTaskLater(this, 1L);
+    }
+    
+    /**
+     * Helper method to continue capturing challenge area state in batches.
+     */
+    private void captureChallengeAreaStateBatch(String challengeId, World world, List<BlockState> states, 
+                                                 int[] currentX, int[] currentY, int[] currentZ,
+                                                 int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
+                                                 int[] failedBlocks, long timeBudget, java.util.function.Consumer<Boolean> callback) {
+        long startTime = System.nanoTime();
+        
+        while (currentX[0] <= maxX && (System.nanoTime() - startTime) < timeBudget) {
+            try {
+                Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
+                BlockState state = block.getState();
+                states.add(state);
+            } catch (Exception e) {
+                failedBlocks[0]++;
+                getLogger().warning("Error capturing block state at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " for challenge '" + challengeId + "': " + e.getMessage());
+            }
+            
+            // Move to next block
+            currentZ[0]++;
+            if (currentZ[0] > maxZ) {
+                currentZ[0] = minZ;
+                currentY[0]++;
+                if (currentY[0] > maxY) {
+                    currentY[0] = minY;
+                    currentX[0]++;
+                }
+            }
+        }
+        
+        // Check if we're done
+        if (currentX[0] > maxX) {
+            // Done capturing all blocks
+            challengeInitialStates.put(challengeId, states);
+            if (failedBlocks[0] > 0) {
+                getLogger().warning("Captured challenge area state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + failedBlocks[0] + " failed)");
+            } else {
+                getLogger().info("Captured challenge area state for challenge '" + challengeId + "' (" + states.size() + " blocks)");
+            }
+            if (callback != null) {
+                callback.accept(true);
+            }
+        } else {
+            // More blocks to process, schedule next batch
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    captureChallengeAreaStateBatch(challengeId, world, states, currentX, currentY, currentZ, minX, maxX, minY, maxY, minZ, maxZ, failedBlocks, timeBudget, callback);
+                }
+            }.runTaskLater(ConradChallengesPlugin.this, 1L);
+        }
+    }
+    
+    /**
      * Captures the initial state of all blocks in the regeneration area for a challenge.
      * This should be called once when the regeneration area is first set.
      * Runs asynchronously to prevent server lag.
@@ -6615,7 +7527,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     public void run() {
                         callback.accept(false);
                     }
-                }.runTask(this);
+                }.runTask(ConradChallengesPlugin.this);
             }
             return;
         }
@@ -6629,7 +7541,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     public void run() {
                         callback.accept(false);
                     }
-                }.runTask(this);
+                }.runTask(ConradChallengesPlugin.this);
             }
             return;
         }
@@ -7065,65 +7977,107 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         }
                         
                         Block block = world.getBlockAt(loc);
-                        BlockState newState = block.getState();
-                        newState.setType(originalState.getType());
-                        newState.setBlockData(originalState.getBlockData());
+                        Material originalType = originalState.getType();
+                        org.bukkit.block.data.BlockData originalData = originalState.getBlockData();
                         
-                        // Restore container contents if applicable
-                        if (originalState instanceof Container originalContainer && newState instanceof Container newContainer) {
-                            newContainer.getInventory().clear();
-                            if (originalContainer.getInventory() != null) {
-                                for (int j = 0; j < originalContainer.getInventory().getSize(); j++) {
-                                    ItemStack item = originalContainer.getInventory().getItem(j);
-                                    if (item != null && item.getType() != Material.AIR) {
-                                        newContainer.getInventory().setItem(j, item.clone());
+                        // Check if this is a multi-block structure (doors, beds, etc.)
+                        // These need applyPhysics=true to properly link both halves
+                        boolean isMultiBlock = originalType.name().contains("DOOR") || 
+                                             originalType.name().contains("BED") ||
+                                             originalType.name().contains("BIG_DRIPLEAF") ||
+                                             originalType.name().contains("PISTON_HEAD") ||
+                                             originalType.name().contains("TALL_GRASS") ||
+                                             originalType.name().contains("SUNFLOWER") ||
+                                             originalType.name().contains("LILAC") ||
+                                             originalType.name().contains("ROSE_BUSH") ||
+                                             originalType.name().contains("PEONY") ||
+                                             originalType.name().contains("TALL_SEAGRASS");
+                        
+                        if (isMultiBlock) {
+                            // For multi-block structures (doors, beds, etc.), use BlockState.update() with applyPhysics=true
+                            // This ensures both halves are properly linked together
+                            // Must use BlockState path to properly restore multi-block relationships
+                            BlockState newState = block.getState();
+                            newState.setType(originalType);
+                            newState.setBlockData(originalData);
+                            
+                            // Use update(true, true) - first true = force update, second true = apply physics
+                            // This will automatically create/link the other half of doors/beds
+                            // The physics update ensures the halves connect properly
+                            newState.update(true, true);
+                        } else {
+                            // Fast path: Use direct Block.setType() and setBlockData() with applyPhysics=false
+                            // This bypasses expensive BlockState.update() overhead for simple blocks
+                            block.setType(originalType, false);  // false = no physics updates
+                            block.setBlockData(originalData, false);  // false = no physics updates
+                            
+                            // For special tile entities, we need to use BlockState to restore data
+                            if (originalState instanceof Container || 
+                                originalState instanceof org.bukkit.block.Sign ||
+                                originalState instanceof org.bukkit.block.Banner ||
+                                originalState instanceof org.bukkit.block.CreatureSpawner ||
+                                originalState instanceof org.bukkit.block.CommandBlock) {
+                                
+                                BlockState newState = block.getState();
+                                
+                                // Restore container contents if applicable
+                                if (originalState instanceof Container originalContainer && newState instanceof Container newContainer) {
+                                    newContainer.getInventory().clear();
+                                    if (originalContainer.getInventory() != null) {
+                                        for (int j = 0; j < originalContainer.getInventory().getSize(); j++) {
+                                            ItemStack item = originalContainer.getInventory().getItem(j);
+                                            if (item != null && item.getType() != Material.AIR) {
+                                                newContainer.getInventory().setItem(j, item.clone());
+                                            }
+                                        }
                                     }
                                 }
-                            }
-                        }
-                        
-                        // Copy tile entity data for special blocks
-                        if (originalState instanceof org.bukkit.block.Sign originalSign && 
-                            newState instanceof org.bukkit.block.Sign newSign) {
-                            for (int j = 0; j < 4; j++) {
-                                newSign.setLine(j, originalSign.getLine(j));
-                            }
-                            try {
-                                if (originalSign.getColor() != null) {
-                                    newSign.setColor(originalSign.getColor());
+                                
+                                // Copy tile entity data for special blocks
+                                if (originalState instanceof org.bukkit.block.Sign originalSign && 
+                                    newState instanceof org.bukkit.block.Sign newSign) {
+                                    for (int j = 0; j < 4; j++) {
+                                        newSign.setLine(j, originalSign.getLine(j));
+                                    }
+                                    try {
+                                        if (originalSign.getColor() != null) {
+                                            newSign.setColor(originalSign.getColor());
+                                        }
+                                    } catch (Exception e) {
+                                        // Color not supported
+                                    }
+                                    try {
+                                        newSign.setGlowingText(originalSign.isGlowingText());
+                                    } catch (Exception e) {
+                                        // Glowing not supported
+                                    }
+                                } else if (originalState instanceof org.bukkit.block.Banner originalBanner && 
+                                           newState instanceof org.bukkit.block.Banner newBanner) {
+                                    newBanner.setPatterns(originalBanner.getPatterns());
+                                } else if (originalState instanceof org.bukkit.block.CreatureSpawner originalSpawner && 
+                                           newState instanceof org.bukkit.block.CreatureSpawner newSpawner) {
+                                    newSpawner.setSpawnedType(originalSpawner.getSpawnedType());
+                                    newSpawner.setDelay(originalSpawner.getDelay());
+                                    try {
+                                        newSpawner.setMinSpawnDelay(originalSpawner.getMinSpawnDelay());
+                                        newSpawner.setMaxSpawnDelay(originalSpawner.getMaxSpawnDelay());
+                                        newSpawner.setSpawnCount(originalSpawner.getSpawnCount());
+                                        newSpawner.setMaxNearbyEntities(originalSpawner.getMaxNearbyEntities());
+                                        newSpawner.setRequiredPlayerRange(originalSpawner.getRequiredPlayerRange());
+                                        newSpawner.setSpawnRange(originalSpawner.getSpawnRange());
+                                    } catch (Exception e) {
+                                        // Some methods might not be available
+                                    }
+                                } else if (originalState instanceof org.bukkit.block.CommandBlock originalCmd && 
+                                           newState instanceof org.bukkit.block.CommandBlock newCmd) {
+                                    newCmd.setCommand(originalCmd.getCommand());
+                                    newCmd.setName(originalCmd.getName());
                                 }
-                            } catch (Exception e) {
-                                // Color not supported
+                                
+                                // Only update for tile entities that need it
+                                newState.update(true, false);
                             }
-                            try {
-                                newSign.setGlowingText(originalSign.isGlowingText());
-                            } catch (Exception e) {
-                                // Glowing not supported
-                            }
-                        } else if (originalState instanceof org.bukkit.block.Banner originalBanner && 
-                                   newState instanceof org.bukkit.block.Banner newBanner) {
-                            newBanner.setPatterns(originalBanner.getPatterns());
-                        } else if (originalState instanceof org.bukkit.block.CreatureSpawner originalSpawner && 
-                                   newState instanceof org.bukkit.block.CreatureSpawner newSpawner) {
-                            newSpawner.setSpawnedType(originalSpawner.getSpawnedType());
-                            newSpawner.setDelay(originalSpawner.getDelay());
-                            try {
-                                newSpawner.setMinSpawnDelay(originalSpawner.getMinSpawnDelay());
-                                newSpawner.setMaxSpawnDelay(originalSpawner.getMaxSpawnDelay());
-                                newSpawner.setSpawnCount(originalSpawner.getSpawnCount());
-                                newSpawner.setMaxNearbyEntities(originalSpawner.getMaxNearbyEntities());
-                                newSpawner.setRequiredPlayerRange(originalSpawner.getRequiredPlayerRange());
-                                newSpawner.setSpawnRange(originalSpawner.getSpawnRange());
-                            } catch (Exception e) {
-                                // Some methods might not be available
-                            }
-                        } else if (originalState instanceof org.bukkit.block.CommandBlock originalCmd && 
-                                   newState instanceof org.bukkit.block.CommandBlock newCmd) {
-                            newCmd.setCommand(originalCmd.getCommand());
-                            newCmd.setName(originalCmd.getName());
                         }
-                        
-                        newState.update(true, false);
                         restored[0]++;
                     } catch (Exception e) {
                         getLogger().warning("Error restoring block at " + originalState.getLocation() + " for challenge '" + challengeId + "': " + e.getMessage());
@@ -7312,6 +8266,152 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
      * 
      * @param challengeId The challenge ID to check
      */
+    /**
+     * Gets all party members (UUIDs) for a given challenge.
+     * Includes both active players and disconnected players in grace period.
+     */
+    private List<UUID> getPartyMembersForChallenge(String challengeId) {
+        List<UUID> members = new ArrayList<>();
+        
+        // Add active players
+        for (Map.Entry<UUID, String> entry : activeChallenges.entrySet()) {
+            if (entry.getValue().equals(challengeId)) {
+                members.add(entry.getKey());
+            }
+        }
+        
+        // Add disconnected players still in grace period
+        for (Map.Entry<UUID, DisconnectInfo> entry : disconnectedPlayers.entrySet()) {
+            if (entry.getValue().challengeId.equals(challengeId)) {
+                members.add(entry.getKey());
+            }
+        }
+        
+        return members;
+    }
+    
+    /**
+     * Handles when a disconnected player's 30s grace period expires.
+     */
+    private void handleDisconnectTimeout(UUID uuid, String challengeId, boolean isPartyChallenge) {
+        // Remove from disconnected players
+        DisconnectInfo disconnectInfo = disconnectedPlayers.remove(uuid);
+        if (disconnectInfo == null) {
+            return; // Already handled
+        }
+        
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null) {
+            return;
+        }
+        
+        Player player = Bukkit.getPlayer(uuid);
+        
+        if (isPartyChallenge) {
+            // Party challenge - check if all party members are disconnected
+            // Get all players who were in this challenge (active + disconnected)
+            Set<UUID> allPartyMembers = new HashSet<>();
+            
+            // Add active players
+            for (Map.Entry<UUID, String> entry : activeChallenges.entrySet()) {
+                if (entry.getValue().equals(challengeId)) {
+                    allPartyMembers.add(entry.getKey());
+                }
+            }
+            
+            // Add disconnected players (including the one we're checking)
+            for (Map.Entry<UUID, DisconnectInfo> entry : disconnectedPlayers.entrySet()) {
+                if (entry.getValue().challengeId.equals(challengeId)) {
+                    allPartyMembers.add(entry.getKey());
+                }
+            }
+            
+            boolean allDisconnected = true;
+            
+            for (UUID memberUuid : allPartyMembers) {
+                if (memberUuid.equals(uuid)) {
+                    continue; // Skip the player we're checking (they're definitely disconnected now)
+                }
+                
+                // Check if member is still active
+                if (activeChallenges.containsKey(memberUuid)) {
+                    allDisconnected = false;
+                    break;
+                }
+                
+                // Check if member is still in grace period
+                DisconnectInfo otherDisconnect = disconnectedPlayers.get(memberUuid);
+                if (otherDisconnect != null && otherDisconnect.timeoutTask != null && !otherDisconnect.timeoutTask.isCancelled()) {
+                    // Other member is still in grace period - not fully disconnected yet
+                    allDisconnected = false;
+                    break;
+                }
+            }
+            
+            if (allDisconnected) {
+                // All party members disconnected - cancel challenge and process queue
+                cleanupChallengeForDisconnect(challengeId);
+                
+                // Teleport disconnected player to exit if online
+                if (player != null && player.isOnline()) {
+                    handleDisconnectedPlayerReconnect(player, challengeId, cfg);
+                }
+                
+                getLogger().info("All party members disconnected from challenge '" + challengeId + "'. Challenge cancelled.");
+            } else {
+                // Other party members still active - just teleport this player to exit if online
+                if (player != null && player.isOnline()) {
+                    handleDisconnectedPlayerReconnect(player, challengeId, cfg);
+                }
+                
+                getLogger().info("Player " + (player != null ? player.getName() : uuid.toString()) + " disconnected from party challenge '" + challengeId + "' after grace period. Other members continue.");
+            }
+        } else {
+            // Solo challenge - cancel challenge and process queue
+            cleanupChallengeForDisconnect(challengeId);
+            
+            // Teleport player to exit if online
+            if (player != null && player.isOnline()) {
+                handleDisconnectedPlayerReconnect(player, challengeId, cfg);
+            }
+            
+            getLogger().info("Solo player " + (player != null ? player.getName() : uuid.toString()) + " disconnected from challenge '" + challengeId + "' after grace period. Challenge cancelled.");
+        }
+    }
+    
+    /**
+     * Cleans up challenge state when all players have disconnected.
+     */
+    private void cleanupChallengeForDisconnect(String challengeId) {
+        // Remove all disconnected players for this challenge
+        disconnectedPlayers.entrySet().removeIf(entry -> entry.getValue().challengeId.equals(challengeId));
+        
+        // Clean up difficulty tier
+        cleanupChallengeDifficultyIfEmpty(challengeId);
+        
+        // Process queue if challenge is now available
+        if (!isChallengeLocked(challengeId)) {
+            processQueue(challengeId);
+        }
+    }
+    
+    /**
+     * Handles reconnecting a player who disconnected after grace period or when challenge was cancelled.
+     */
+    private void handleDisconnectedPlayerReconnect(Player player, String challengeId, ChallengeConfig cfg) {
+        // Teleport to challenge exit (spawn location)
+        if (spawnLocation != null) {
+            player.teleport(spawnLocation);
+            player.sendMessage(ChatColor.RED + "You disconnected from the challenge. You have been returned to spawn.");
+        } else {
+            // Fallback to challenge destination if spawn not set
+            if (cfg.destination != null) {
+                player.teleport(cfg.destination);
+                player.sendMessage(ChatColor.RED + "You disconnected from the challenge.");
+            }
+        }
+    }
+    
     private void cleanupChallengeDifficultyIfEmpty(String challengeId) {
         // Check if any players are still active in this challenge
         boolean hasActivePlayers = activeChallenges.values().stream()

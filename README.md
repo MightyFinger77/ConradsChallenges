@@ -8,19 +8,23 @@ A comprehensive guide for setting up and managing challenges in ConradChallenges
 - [Basic Challenge Setup](#basic-challenge-setup)
 - [Completion Types](#completion-types)
 - [Rewards System](#rewards-system)
+- [Challenge Area System](#challenge-area-system)
 - [Regeneration System](#regeneration-system)
 - [Edit Mode](#edit-mode)
 - [Difficulty Tiers](#difficulty-tiers)
 - [Challenge Management](#challenge-management)
+- [Player Guide - How to Do Challenges](#player-guide---how-to-do-challenges)
 - [Quick Reference](#quick-reference)
 
 ---
 
 ## Prerequisites
 
-- **Permission**: You need `conradchallenges.admin` permission
-- **WorldEdit/FastAsyncWorldEdit** (optional): For easier regeneration area setup
+- **Permission**: You need `conradchallenges.admin` permission, OP: Default
+- **WorldEdit/FastAsyncWorldEdit** (optional but recommended): For easier area setup using `//1` and `//2`
 - **MythicMobs** (optional): For difficulty tier mob level modifications
+
+**Note**: All commands can use either `/conradchallenges challenge <command>` or the shorter alias `/challenge <command>`
 
 ---
 
@@ -28,9 +32,13 @@ A comprehensive guide for setting up and managing challenges in ConradChallenges
 
 ### Step 1: Create the Challenge
 ```
+/challenge create <id>
+```
+or
+```
 /conradchallenges challenge create <id>
 ```
-Example: `/conradchallenges challenge create dungeon1`
+Example: `/challenge create dungeon1`
 
 This creates a new challenge with the specified ID. The ID is used in all commands to reference this challenge.
 
@@ -43,9 +51,9 @@ This creates a new challenge with the specified ID. The ID is used in all comman
 2. Hold the book in your main hand
 3. Run:
 ```
-/conradchallenges challenge setbook [id]
+/challenge setbook [id]
 ```
-Example: `/conradchallenges challenge setbook dungeon1`
+Example: `/challenge setbook dungeon1`
 
 **Note**: In edit mode, you can omit the `[id]` - it will use the challenge you're editing.
 
@@ -53,16 +61,16 @@ Example: `/conradchallenges challenge setbook dungeon1`
 1. Stand at the location where players should be teleported when they start the challenge
 2. Run:
 ```
-/conradchallenges challenge setdestination [id]
+/challenge setdestination [id]
 ```
-Example: `/conradchallenges challenge setdestination dungeon1`
+Example: `/challenge setdestination dungeon1`
 
-This sets the spawn point inside the challenge area.
+This sets the spawn point inside the challenge area. This is where players will be teleported when they enter the challenge.
 
 ### Step 4: Set Completion Type
 Choose how players complete the challenge:
 ```
-/conradchallenges challenge settype [id] <BOSS|TIMER|ITEM|SPEED|NONE>
+/challenge settype [id] <BOSS|TIMER|ITEM|SPEED|NONE>
 ```
 
 **Completion Types:**
@@ -72,33 +80,33 @@ Choose how players complete the challenge:
 - **SPEED**: Complete as fast as possible (with tiered rewards)
 - **NONE**: Just return to GateKeeper anytime
 
-Example: `/conradchallenges challenge settype dungeon1 BOSS`
+Example: `/challenge settype dungeon1 BOSS`
 
 ### Step 5: Configure Completion Requirements
 
 #### For BOSS Type:
 ```
-/conradchallenges challenge setboss [id] <EntityType> [Name]
+/challenge setboss [id] <EntityType> [Name]
 ```
-Example: `/conradchallenges challenge setboss dungeon1 WITHER "The Dark Lord"`
+Example: `/challenge setboss dungeon1 WITHER "The Dark Lord"`
 
 #### For TIMER Type:
 ```
-/conradchallenges challenge settimer [id] <seconds>
+/challenge settimer [id] <seconds>
 ```
-Example: `/conradchallenges challenge settimer dungeon1 300` (5 minutes)
+Example: `/challenge settimer dungeon1 300` (5 minutes)
 
 #### For ITEM Type:
 ```
-/conradchallenges challenge setitem [id] <Material> <amount> <consume:true|false>
+/challenge setitem [id] <Material> <amount> <consume:true|false>
 ```
-Example: `/conradchallenges challenge setitem dungeon1 DIAMOND 10 true`
+Example: `/challenge setitem dungeon1 DIAMOND 10 true`
 
 #### For SPEED Type:
 ```
-/conradchallenges challenge setspeed [id] <maxSeconds>
+/challenge setspeed [id] <maxSeconds>
 ```
-Example: `/conradchallenges challenge setspeed dungeon1 300`
+Example: `/challenge setspeed dungeon1 300`
 
 ---
 
@@ -109,18 +117,18 @@ These rewards are given to all players who complete the challenge, regardless of
 
 #### Add a Reward Command:
 ```
-/conradchallenges challenge addreward [id] <command>
+/challenge addreward [id] <command>
 ```
 Examples:
-- `/conradchallenges challenge addreward dungeon1 eco give %player% 1000`
-- `/conradchallenges challenge addreward dungeon1 give %player% diamond 5`
-- `/conradchallenges challenge addreward dungeon1 give %player% iron_sword 1`
+- `/challenge addreward dungeon1 eco give %player% 1000`
+- `/challenge addreward dungeon1 give %player% diamond 5`
+- `/challenge addreward dungeon1 give %player% iron_sword 1`
 
 **Note**: Use `%player%` as a placeholder - it will be replaced with the player's name.
 
 #### Clear All Rewards:
 ```
-/conradchallenges challenge clearrewards [id]
+/challenge clearrewards [id]
 ```
 
 ### Speed Tier Rewards (SPEED Challenges Only)
@@ -156,42 +164,92 @@ challenges:
 
 ---
 
+## Challenge Area System
+
+The challenge area defines the playable boundaries for the challenge. This is separate from the regeneration area and is used for:
+- Teleport restrictions (players can only teleport within the challenge area)
+- Explosion protection (blocks in challenge area are protected from creepers, TNT, etc.)
+- Area validation
+
+### Setting Up Challenge Area
+
+**Important**: Challenge area commands require edit mode. Enter edit mode first:
+```
+/challenge edit <id>
+```
+
+#### Using WorldEdit (Recommended)
+1. While in edit mode, use WorldEdit to set two positions:
+   - `//1` at one corner of the challenge area
+   - `//2` at the opposite corner
+2. Run (no ID needed in edit mode):
+```
+/challenge setchallengearea
+```
+This will automatically use your WorldEdit selection and capture the challenge area state.
+
+**Note**: Challenge area state is only captured when you set the area. It is NOT recaptured on save (only regeneration area is recaptured on save).
+
+#### Clearing Challenge Area
+While in edit mode:
+```
+/challenge clearchallengearea
+```
+
+### Barrier Boxing (Optional)
+
+You can enable barrier boxing in `config.yml` to automatically create invisible barrier walls around the challenge area:
+```yaml
+challenge-area:
+  barrier-boxing: true  # Set to true to enable
+```
+
+When enabled, barrier blocks are placed around the challenge area (only replacing air blocks) when you set the challenge area.
+
+---
+
 ## Regeneration System
 
 The regeneration system automatically resets the challenge area when new players enter, restoring broken blocks, refilled chests, and other changes.
+
+**Important**: Regeneration area and challenge area are separate:
+- **Challenge Area**: Defines playable boundaries (teleport restrictions, explosion protection)
+- **Regeneration Area**: Defines what gets reset when players enter
+
+They can overlap or be different sizes. The regeneration area should typically be larger than or equal to the challenge area.
 
 ### Setting Up Regeneration Area
 
 **Important**: Regeneration area commands require edit mode. Enter edit mode first:
 ```
-/conradchallenges challenge edit <id>
+/challenge edit <id>
 ```
 
 #### Option 1: Using WorldEdit (Recommended)
 1. While in edit mode, use WorldEdit to set two positions:
-   - `//pos1` at one corner of the challenge area
-   - `//pos2` at the opposite corner
+   - `//1` at one corner of the regeneration area
+   - `//2` at the opposite corner
 2. Run (no ID needed in edit mode):
 ```
-/conradchallenges challenge setregenerationarea
+/challenge setregenerationarea
 ```
-This will automatically use your WorldEdit selection.
+This will automatically use your WorldEdit selection and capture the initial state.
 
 #### Option 2: Manual Setup
-1. While in edit mode, stand at one corner of the challenge area
-2. Run: `/conradchallenges challenge setregenerationarea` (no ID needed)
+1. While in edit mode, stand at one corner of the regeneration area
+2. Run: `/challenge setregenerationarea` (no ID needed)
 3. Stand at the opposite corner
 4. Run the command again
 
-The plugin will capture the initial state of all blocks in the area.
+The plugin will automatically capture the initial state of all blocks in the area.
 
 ### Capturing Initial State
-After setting the regeneration area, capture the initial state (while in edit mode):
+After setting the regeneration area, the initial state is captured automatically. You can manually trigger it if needed (while in edit mode):
 ```
-/conradchallenges challenge captureregeneration
+/challenge captureregeneration
 ```
 
-**Note**: This is usually done automatically, but you can manually trigger it if needed.
+**Note**: The save command recaptures the regeneration area state (not challenge area). Challenge area is only captured when you set it.
 
 ### Auto-Extend Y Range
 
@@ -199,7 +257,7 @@ By default, regeneration uses the Y coordinates from your two corners. However, 
 
 **While in edit mode:**
 ```
-/conradchallenges challenge setautoregenerationy [true|false]
+/challenge setautoregenerationy [true|false]
 ```
 
 - **`true`** (or `on`, `enable`, `yes`): Enables auto-extend - regeneration spans from bedrock to build height
@@ -216,7 +274,7 @@ By default, regeneration uses the Y coordinates from your two corners. However, 
 ### Clearing Regeneration Area
 While in edit mode:
 ```
-/conradchallenges challenge clearregenerationarea
+/challenge clearregenerationarea
 ```
 
 ---
@@ -227,37 +285,45 @@ Edit mode allows you to modify challenges while preventing player access. All ch
 
 ### Entering Edit Mode
 ```
-/conradchallenges challenge edit <id>
+/challenge edit <id>
 ```
 
 This will:
 - Teleport you to the challenge start location
-- Regenerate the challenge area
+- Regenerate the challenge area (if regeneration area is set)
 - Lock the challenge from players (shows "maintenance" message)
 - Create backups of the challenge config and block states
 
 ### Making Changes
 While in edit mode, you can use all configuration commands **without** specifying the challenge ID:
 
-- `/conradchallenges challenge setbook` (no ID needed)
-- `/conradchallenges challenge setdestination` (no ID needed)
-- `/conradchallenges challenge addreward <command>` (no ID needed)
+- `/challenge setbook` (no ID needed)
+- `/challenge setdestination` (no ID needed)
+- `/challenge addreward <command>` (no ID needed)
+- `/challenge setchallengearea` (no ID needed)
+- `/challenge setregenerationarea` (no ID needed)
 - etc.
+
+**Note**: In edit mode, you can teleport anywhere within the challenge world to make changes.
 
 ### Saving Changes
 ```
-/conradchallenges challenge save
+/challenge save
 ```
 
+**Important**: You must set a challenge area before saving!
+
 This will:
+- Recapture the regeneration area state (if regeneration area is set)
 - Save all your changes
-- Recapture the regeneration state (if regeneration area is set)
 - Teleport you back to your original location
 - Unlock the challenge for players
 
+**Note**: Challenge area state is NOT recaptured on save - it's only captured when you set it via `setchallengearea`.
+
 ### Cancelling Changes
 ```
-/conradchallenges challenge cancel
+/challenge cancel
 ```
 
 This will:
@@ -266,7 +332,7 @@ This will:
 - Teleport you back to your original location
 - Unlock the challenge for players
 
-**Important**: You cannot teleport out of edit mode. You must use `/conradchallenges challenge save` or `/conradchallenges challenge cancel` to exit.
+**Important**: You cannot teleport out of edit mode using normal teleport commands. You must use `/challenge save` or `/challenge cancel` to exit. However, you CAN teleport within the challenge world while in edit mode.
 
 ---
 
@@ -317,50 +383,113 @@ difficulty-reward-multipliers:
 
 ### View Challenge Info
 ```
-/conradchallenges challenge info [id]
+/challenge info [id]
 ```
 Shows all challenge configuration details.
 
 ### List All Challenges
 ```
-/conradchallenges challenge list
+/challenge list
 ```
 
 ### Set Cooldown
 ```
-/conradchallenges challenge setcooldown [id] <seconds>
+/challenge setcooldown [id] <seconds>
 ```
-Example: `/conradchallenges challenge setcooldown dungeon1 3600` (1 hour cooldown)
+Example: `/challenge setcooldown dungeon1 3600` (1 hour cooldown)
 
 ### Set Time Limit
 ```
-/conradchallenges challenge settimelimit [id] <seconds>
+/challenge settimelimit [id] <seconds>
 ```
-Example: `/conradchallenges challenge settimelimit dungeon1 600` (10 minute time limit)
+Example: `/challenge settimelimit dungeon1 600` (10 minute time limit)
 
 ### Set Max Party Size
 ```
-/conradchallenges challenge setmaxparty [id] <size|-1>
+/challenge setmaxparty [id] <size|-1>
 ```
-Example: `/conradchallenges challenge setmaxparty dungeon1 4` (max 4 players)
+Example: `/challenge setmaxparty dungeon1 4` (max 4 players)
 Use `-1` for unlimited party size.
 
 ### Lockdown (Disable Challenge)
 ```
-/conradchallenges challenge lockdown <id>
+/challenge lockdown <id>
 ```
 Completely disables a challenge. Players cannot start it or be queued.
 
 ### Unlock Challenge
 ```
-/conradchallenges challenge unlockdown <id>
+/challenge unlockdown <id>
 ```
 
 ### Delete Challenge
 ```
-/conradchallenges challenge delete <id>
+/challenge delete <id>
 ```
 **Warning**: Cannot delete challenges that are currently active or reserved.
+
+---
+
+## Player Guide - How to Do Challenges
+
+### Starting a Challenge
+
+1. **Get the Challenge Book**: Obtain the challenge book from an NPC or admin
+2. **Right-click the GateKeeper NPC** with the book in your hand
+3. **Accept the Challenge**: Type `/accept` (or `/accept <difficulty>` for difficulty tiers)
+   - `/accept` - Easy difficulty (default)
+   - `/accept easy` - Easy difficulty
+   - `/accept medium` - Medium difficulty
+   - `/accept hard` - Hard difficulty
+   - `/accept extreme` - Extreme difficulty
+4. **Wait for Countdown**: A countdown will begin (default 10 seconds)
+   - If regeneration is needed, you may wait longer while the area regenerates
+   - You'll see a message if regeneration is in progress
+5. **Enter the Challenge**: After countdown, you'll be teleported into the challenge
+
+### During the Challenge
+
+- **Teleportation**: You can teleport within the challenge area (both from and to must be in the area)
+- **Explosion Protection**: Blocks in the challenge area are protected from explosions (creepers, TNT, etc.)
+- **Block Breaking**: You can break blocks normally (no protection)
+- **Commands**: Some teleport commands are blocked (`/spawn`, `/home`, `/warp`, etc.)
+
+### Completing the Challenge
+
+#### For BOSS, TIMER, or SPEED Challenges:
+1. Complete the challenge requirements (kill boss, survive timer, etc.)
+2. Return to the GateKeeper NPC
+3. Right-click the GateKeeper to receive rewards
+
+#### For ITEM Challenges:
+1. Collect the required item(s)
+2. Return to the GateKeeper NPC
+3. Right-click the GateKeeper while holding the item(s)
+
+#### For NONE Challenges:
+1. Return to the GateKeeper NPC anytime
+2. Right-click to receive rewards
+
+### Exiting a Challenge
+
+- **Complete**: Use `/challengecomplete` or `/cc` after meeting requirements, then right-click GateKeeper
+- **Exit Early**: Use `/exit` to leave without completing (no rewards, no cooldown)
+
+### Disconnect/Reconnect
+
+If you disconnect while in a challenge:
+- **30 Second Grace Period**: You have 30 seconds to reconnect
+- **Solo Challenge**: If you don't reconnect within 30s, the challenge is cancelled
+- **Party Challenge**: If you don't reconnect within 30s, you'll be teleported to spawn when you reconnect. Other party members continue playing.
+- **Reconnecting**: If you reconnect within 30s, you'll be restored to the challenge automatically
+
+### Party Challenges
+
+1. **Start a Party**: One player right-clicks GateKeeper with challenge book
+2. **Invite Members**: Nearby players (within party radius) with the challenge book are eligible
+3. **Accept Invites**: Each player types `/accept` to join
+4. **Start Together**: Party leader types `/accept` again or uses `/party confirm` to start
+5. **Complete Together**: All party members must complete requirements, then one member right-clicks GateKeeper
 
 ---
 
@@ -370,64 +499,85 @@ Completely disables a challenge. Players cannot start it or be queued.
 
 1. **Create challenge:**
    ```
-   /conradchallenges challenge create dungeon1
+   /challenge create dungeon1
    ```
 
 2. **Set book** (hold book in hand):
    ```
-   /conradchallenges challenge setbook dungeon1
+   /challenge setbook dungeon1
    ```
 
 3. **Set destination** (stand at spawn point):
    ```
-   /conradchallenges challenge setdestination dungeon1
+   /challenge setdestination dungeon1
    ```
 
 4. **Set completion type:**
    ```
-   /conradchallenges challenge settype dungeon1 BOSS
-   /conradchallenges challenge setboss dungeon1 WITHER "The Dark Lord"
+   /challenge settype dungeon1 BOSS
+   /challenge setboss dungeon1 WITHER "The Dark Lord"
    ```
 
 5. **Add rewards:**
    ```
-   /conradchallenges challenge addreward dungeon1 eco give %player% 1000
-   /conradchallenges challenge addreward dungeon1 give %player% diamond 5
+   /challenge addreward dungeon1 eco give %player% 1000
+   /challenge addreward dungeon1 give %player% diamond 5
    ```
 
-6. **Set regeneration area** (using WorldEdit):
+6. **Enter edit mode to set areas:**
    ```
-   //pos1
-   //pos2
-   /conradchallenges challenge setregenerationarea dungeon1
+   /challenge edit dungeon1
    ```
 
-7. **Set cooldown:**
+7. **Set challenge area** (using WorldEdit):
    ```
-   /conradchallenges challenge setcooldown dungeon1 3600
+   //1  (at one corner of playable area)
+   //2  (at opposite corner)
+   /challenge setchallengearea
    ```
+
+8. **Set regeneration area** (using WorldEdit):
+   ```
+   //1  (at one corner of area to regenerate)
+   //2  (at opposite corner)
+   /challenge setregenerationarea
+   ```
+
+9. **Save changes:**
+   ```
+   /challenge save
+   ```
+
+10. **Set cooldown** (optional, outside edit mode):
+    ```
+    /challenge setcooldown dungeon1 3600
+    ```
 
 ### Edit Mode Workflow
 
 1. **Enter edit mode:**
    ```
-   /conradchallenges challenge edit dungeon1
+   /challenge edit dungeon1
    ```
 
 2. **Make changes** (no ID needed):
    ```
-   /conradchallenges challenge addreward eco give %player% 500
-   /conradchallenges challenge setcooldown 7200
+   /challenge addreward eco give %player% 500
+   /challenge setcooldown 7200
+   /challenge setchallengearea  (if using WorldEdit: //1 and //2 first)
+   /challenge setregenerationarea  (if using WorldEdit: //1 and //2 first)
    ```
 
 3. **Save or cancel:**
    ```
-   /conradchallenges challenge save
+   /challenge save
    ```
    OR
    ```
-   /conradchallenges challenge cancel
+   /challenge cancel
    ```
+
+**Important**: You must set a challenge area before saving!
 
 ### Common Commands (Edit Mode)
 
@@ -441,9 +591,12 @@ When in edit mode, omit the challenge ID:
 - `setmaxparty` - Set party size limit
 - `addreward` - Add reward command
 - `clearrewards` - Clear all rewards
-- `setregenerationarea` - Set regeneration area
+- `setchallengearea` - Set challenge area (captures state when set)
+- `clearchallengearea` - Clear challenge area
+- `setregenerationarea` - Set regeneration area (captures state automatically)
 - `clearregenerationarea` - Clear regeneration area
-- `captureregeneration` - Capture initial state
+- `captureregeneration` - Manually capture regeneration state
+- `setautoregenerationy` - Toggle auto-extend Y range
 
 ---
 
@@ -451,11 +604,15 @@ When in edit mode, omit the challenge ID:
 
 1. **Always test challenges** before making them available to players
 2. **Use edit mode** for making changes - it prevents player access and backs up your work
-3. **Set regeneration areas** for challenges with destructible environments
-4. **Configure speed tier rewards** in `config.yml` for SPEED challenges
-5. **Use WorldEdit** for easier regeneration area setup
-6. **Set appropriate cooldowns** to prevent challenge farming
-7. **Test difficulty tiers** to ensure rewards are balanced
+3. **Set challenge area first**, then regeneration area - challenge area defines playable boundaries
+4. **Set regeneration areas** for challenges with destructible environments - this is what gets reset
+5. **Challenge area and regeneration area can overlap** - regeneration area should typically be larger or equal
+6. **Challenge area is only captured when set** - save command only recaptures regeneration area
+7. **Configure speed tier rewards** in `config.yml` for SPEED challenges
+8. **Use WorldEdit** (`//1` and `//2`) for easier area setup
+9. **Set appropriate cooldowns** to prevent challenge farming
+10. **Test difficulty tiers** to ensure rewards are balanced
+11. **Barrier boxing** (if enabled) only replaces air blocks, so it won't destroy existing structures
 
 ---
 
@@ -463,14 +620,21 @@ When in edit mode, omit the challenge ID:
 
 ### Challenge not regenerating?
 - Make sure regeneration area is set (both corners)
-- Run `/conradchallenges challenge captureregeneration <id>` manually
+- Run `/challenge captureregeneration <id>` manually (or enter edit mode and use without ID)
 - Check that both corners are in the same world
+- Verify initial state was captured (check challenge info)
 
 ### Players can't start challenge?
-- Check if challenge is locked down: `/conradchallenges challenge info <id>`
+- Check if challenge is locked down: `/challenge info <id>`
 - Check if challenge is in edit mode
 - Verify challenge has a destination set
 - Check if player has the required challenge book
+- Verify challenge area is set (required for saving)
+
+### Players can't teleport in challenge?
+- Check if challenge area is set
+- Both teleport locations (from and to) must be within challenge area
+- If no challenge area is set, players can teleport anywhere in the destination world
 
 ### Rewards not working?
 - Verify reward commands are correct (use `%player%` placeholder)
@@ -478,8 +642,13 @@ When in edit mode, omit the challenge ID:
 - Test commands manually in console first
 
 ### Edit mode stuck?
-- Use `/conradchallenges challenge save` or `/conradchallenges challenge cancel`
-- If you disconnect, edit mode is automatically cancelled and challenge is restored
+- Use `/challenge save` or `/challenge cancel`
+- If you disconnect, edit mode is automatically cancelled and challenge is restored (configurable in config.yml)
+
+### Challenge area not saving?
+- You must set challenge area before using `/challenge save`
+- Challenge area is only captured when you set it, not on every save
+- Use `/challenge setchallengearea` in edit mode (with WorldEdit `//1` and `//2`)
 
 ---
 
