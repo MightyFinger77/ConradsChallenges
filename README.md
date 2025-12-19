@@ -109,6 +109,12 @@ Example: `/challenge setitem dungeon1 DIAMOND 10 true`
 ```
 Example: `/challenge setspeed dungeon1 300`
 
+**Important for SPEED challenges:**
+- Speed tiers (Gold/Silver/Bronze) are set via the `setspeed` command and determine multipliers, NOT rewards
+- Rewards come from difficulty tier rewards (use `addtierreward` commands)
+- Speed tier `reward-commands` in config are **ignored** - they're kept for backward compatibility only
+- See [Speed Multipliers](#speed-multipliers-speed-challenges) section for details
+
 ---
 
 ## Rewards System
@@ -173,7 +179,15 @@ For SPEED challenges, completion time affects reward multipliers:
 - **Bronze tier** (slow time): 0.5x multiplier (half rewards)
 - **New record**: 3x multiplier (replaces tier multiplier)
 
-**Note:** Speed tiers (from `completion.tiers`) are still used to determine which multiplier applies, but `reward-commands` in tiers are **ignored**. Rewards come from difficulty tier rewards.
+**How Speed Tiers Work:**
+- Speed tiers are configured via `/challenge setspeed <id> <maxSeconds>` and stored in `completion.tiers`
+- Each tier has a `name` (GOLD, SILVER, BRONZE) and `max-seconds` (time limit)
+- The `reward-commands` field in speed tiers is **completely ignored** - kept only for backward compatibility
+- Speed tiers are used **only** to determine which multiplier applies based on completion time
+- Actual rewards come from `difficulty-tier-rewards` (see Difficulty Tier Rewards section)
+
+**Setting Speed Tiers:**
+Speed tiers are automatically created when you use `/challenge setspeed`. The plugin creates default tiers (GOLD, SILVER, BRONZE) based on the max time. You can customize them in the config file, but remember: `reward-commands` in tiers are ignored.
 
 ### Top Time Rewards
 
@@ -626,7 +640,8 @@ challenges:
           max-seconds: 300
           reward-commands: []       # IGNORED
     
-    # Difficulty tier rewards (NEW - this is where rewards come from)
+    # Difficulty tier rewards (this is where rewards come from now)
+    # Higher tiers inherit lower tier rewards with multipliers
     difficulty-tier-rewards:
       easy:
         rewards:
@@ -639,15 +654,23 @@ challenges:
             chance: 1.0
       medium:
         rewards:
+          # Medium gets: Easy rewards (×1.5) + Medium rewards (×1.0)
           - type: ITEM
             material: BEACON
             amount: 2
             chance: 1.0
       hard:
         rewards:
+          # Hard gets: Easy (×3.0) + Medium (×2.0) + Hard (×1.0)
           - type: ITEM
             material: NETHERITE_PICKAXE
             amount: 1
+            chance: 1.0
+      extreme:
+        rewards:
+          # Extreme gets: Easy (×9.0) + Medium (×6.0) + Hard (×3.0) + Extreme (×1.0)
+          - type: COMMAND
+            command: "eco give %player% 10000"
             chance: 1.0
     
     # Top time rewards (NEW - only given for new records)
@@ -763,7 +786,7 @@ Completely disables a challenge. Players cannot start it or be queued.
    - `/accept medium` - Medium difficulty
    - `/accept hard` - Hard difficulty
    - `/accept extreme` - Extreme difficulty
-4. **Wait for Countdown**: A countdown will begin (default 10 seconds)
+4. **Wait for Countdown**: A countdown will begin (default 30 seconds for solo, 60 seconds for party)
    - If regeneration is needed, you may wait longer while the area regenerates
    - You'll see a message if regeneration is in progress
 5. **Enter the Challenge**: After countdown, you'll be teleported into the challenge
@@ -778,9 +801,12 @@ Completely disables a challenge. Players cannot start it or be queued.
 ### Completing the Challenge
 
 #### For BOSS, TIMER, or SPEED Challenges:
-1. Complete the challenge requirements (kill boss, survive timer, etc.)
+1. Complete the challenge requirements (kill boss, survive timer, complete speed challenge, etc.)
 2. Return to the GateKeeper NPC
 3. Right-click the GateKeeper to receive rewards
+   - Rewards are based on your selected difficulty tier (easy/medium/hard/extreme)
+   - For SPEED challenges, your completion time affects multipliers (Gold=1.5x, Silver=1.0x, Bronze=0.5x)
+   - If you set a new record, you get 3x multiplier and top time rewards
 
 #### For ITEM Challenges:
 1. Collect the required item(s)
