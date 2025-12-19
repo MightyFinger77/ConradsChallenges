@@ -2671,6 +2671,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             startTeleportCountdown(Collections.singletonList(player), cfg);
             return true;
         });
+        Objects.requireNonNull(getCommand("accept")).setTabCompleter((sender, command, alias, args) -> {
+            if (!(sender instanceof Player)) {
+                return Collections.emptyList();
+            }
+            
+            // If player types /accept with a space, complete difficulty tiers
+            if (args.length == 1) {
+                List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
+                return filterCompletions(tiers, args[0]);
+            }
+            
+            // No completion for additional arguments
+            return Collections.emptyList();
+        });
 
         // /deny
         Objects.requireNonNull(getCommand("deny")).setExecutor((sender, cmd, label, args) -> {
