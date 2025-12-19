@@ -379,6 +379,178 @@ difficulty-reward-multipliers:
 
 ---
 
+## Configuration Options
+
+All configuration options are in `config.yml`. Here's a complete reference:
+
+### Basic Settings
+
+```yaml
+# World players are sent to when using /challengecomplete or when time limit expires
+spawn-world: world
+```
+
+### Party System Settings
+
+```yaml
+# Radius in blocks for party members to be detected
+party-radius: 10
+
+# Seconds before a pending challenge is automatically cancelled
+pending-challenge-timeout-seconds: 15
+
+# Countdown time in seconds before solo players are teleported to challenge
+solo-countdown-seconds: 30
+
+# Countdown time in seconds before party members are teleported to challenge
+party-countdown-seconds: 45
+```
+
+### Anti-Forgery System
+
+Prevents players from using fake challenge books:
+
+```yaml
+anti-forgery:
+  enabled: true                    # Enable/disable anti-forgery checks
+  fine-amount: 50.0                # Amount to charge for a fake book
+  drain-if-less: true              # If player has less than fine-amount, drain entire balance
+  broadcast: true                   # Announce to the server when detected
+  required-author: OfficerConradd  # Books must be signed by this author name (leave empty to disable author check)
+```
+
+**How it works:**
+- When a player tries to use a challenge book, the plugin checks if it matches the registered book for that challenge
+- If the book is fake (wrong title, wrong author, or not signed by the required author), the player is fined
+- If `broadcast: true`, a message is sent to all players announcing the forgery attempt
+- If `drain-if-less: true` and the player has less than `fine-amount`, their entire balance is drained
+
+### Anger System
+
+Controls the GateKeeper's angry responses when players try to use fake books:
+
+```yaml
+anger:
+  enabled: true                    # Enable/disable anger system
+  duration-seconds: 300            # How long the GateKeeper stays angry (5 minutes)
+```
+
+**Note**: Insult messages are configured in `messages.yml` under `anger.insults`. Edit that file to customize the GateKeeper's responses.
+
+### Edit Mode Settings
+
+```yaml
+edit-mode:
+  # What to do when a player disconnects while in edit mode
+  # Options: "cancel" (restore from backup) or "save" (keep changes)
+  disconnect-action: cancel
+```
+
+**Options:**
+- `cancel`: If you disconnect while in edit mode, all changes are discarded and the challenge is restored from backup
+- `save`: If you disconnect while in edit mode, all changes are saved automatically
+
+### Challenge Area Settings
+
+```yaml
+challenge-area:
+  # Whether to automatically box in challenge areas with barrier blocks
+  # Set challenge area using /challenge setchallengearea <id>
+  # Use WorldEdit selection (//1 and //2) to select the area
+  barrier-boxing: false  # Default: false (off)
+```
+
+When enabled, barrier blocks are automatically placed around the challenge area (only replacing air blocks) when you set the challenge area.
+
+### GateKeeper NPCs
+
+```yaml
+# GateKeeper NPC UUID list (set via /conradchallenges setnpc)
+npcs:
+  - 12fb852c-0d06-4d9f-b343-f0d12a4b102c
+```
+
+Add NPC UUIDs here. Players right-click these NPCs with challenge books to start challenges.
+
+### Example Challenge Configuration
+
+Here's a complete example of a challenge configuration:
+
+```yaml
+challenges:
+  fear_hole:
+    book-title: fear_hole
+    
+    # Destination (where players spawn when entering the challenge)
+    world: ConradsChallenges
+    x: 4792.614971999264
+    y: 27.0
+    z: 1390.7076254479057
+    yaw: -89.24994
+    pitch: -18.449978
+    
+    # Challenge settings
+    cooldown-seconds: 3600        # 1 hour cooldown between attempts
+    max-party-size: 1              # Max players per party; -1 = unlimited
+    time-limit-seconds: 600        # 10 minutes max time in challenge
+    time-limit-warnings:           # Warnings at these remaining seconds
+      - 60
+      - 10
+    
+    # Completion type and requirements
+    completion:
+      type: SPEED                  # SPEED, BOSS, TIMER, ITEM, or NONE
+      max-seconds: 300             # Max time for SPEED challenges
+      tiers:                       # Speed tier rewards
+        - name: GOLD
+          max-seconds: 90
+          reward-commands:
+            - eco give %player% 5000
+        - name: SILVER
+          max-seconds: 180
+          reward-commands:
+            - eco give %player% 2500
+        - name: BRONZE
+          max-seconds: 300
+          reward-commands:
+            - eco give %player% 1000
+    
+    # Fallback rewards (always given on completion)
+    reward-commands: []
+    
+    # Challenge state
+    locked-down: false             # true = challenge disabled
+    
+    # Challenge area (playable boundaries)
+    challenge-area:
+      world: ConradsChallenges
+      corner1:
+        x: 4767.0
+        y: -53.0
+        z: 1369.0
+      corner2:
+        x: 4799.0
+        y: 43.0
+        z: 1407.0
+    
+    # Regeneration area (what gets reset)
+    regeneration:
+      world: ConradsChallenges
+      corner1:
+        x: 4765.0
+        y: -50.0
+        z: 1369.0
+      corner2:
+        x: 4800.0
+        y: 43.0
+        z: 1414.0
+      auto-extend-y: false        # true = regenerate from bedrock to build height
+```
+
+**Note**: All fields are always saved, even if empty/unset, to maintain consistent structure. You don't need to manually edit this file - use the in-game commands instead.
+
+---
+
 ## Challenge Management
 
 ### View Challenge Info
