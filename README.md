@@ -12,6 +12,7 @@ A comprehensive guide for setting up and managing challenges in ConradChallenges
 - [Regeneration System](#regeneration-system)
 - [Edit Mode](#edit-mode)
 - [Difficulty Tiers](#difficulty-tiers)
+- [Configuration Options](#configuration-options)
 - [Challenge Management](#challenge-management)
 - [Player Guide - How to Do Challenges](#player-guide---how-to-do-challenges)
 - [Quick Reference](#quick-reference)
