@@ -1,0 +1,142 @@
+# Example SPEED Challenge Configuration (New System)
+# 
+# The old speed tier rewards (reward-commands in tiers) are NO LONGER USED
+# Speed tiers are only used to determine multipliers (Gold=1.5x, Silver=1.0x, Bronze=0.5x)
+# Actual rewards come from difficulty-tier-rewards
+
+challenges:
+  fear_hole:
+    book-title: fear_hole
+    
+    world: ConradsChallenges
+    x: 4792.614971999264
+    y: 27.0
+    z: 1390.7076254479057
+    yaw: -89.24994
+    pitch: -18.449978
+    
+    cooldown-seconds: 3600
+    max-party-size: 1
+    time-limit-seconds: 600
+    time-limit-warnings:
+      - 60
+      - 10
+    
+    # Completion type - SPEED challenge
+    completion:
+      type: SPEED
+      boss-type: ''
+      boss-name: ''
+      seconds: 0
+      item: ''
+      amount: 0
+      consume-on-complete: false
+      max-seconds: 300  # Max time allowed
+      # Speed tiers - used ONLY for determining multipliers, NOT for rewards
+      # reward-commands here are IGNORED
+      tiers:
+        - name: GOLD
+          max-seconds: 90
+          reward-commands: []  # IGNORED - kept for backward compatibility
+        - name: SILVER
+          max-seconds: 180
+          reward-commands: []  # IGNORED - kept for backward compatibility
+        - name: BRONZE
+          max-seconds: 300
+          reward-commands: []  # IGNORED - kept for backward compatibility
+    
+    # NEW: Difficulty tier rewards (this is where rewards come from now)
+    difficulty-tier-rewards:
+      easy:
+        rewards:
+          - type: COMMAND
+            command: "eco give %player% 5000"
+            chance: 1.0
+          - type: ITEM
+            material: DIAMOND
+            amount: 8
+            chance: 1.0
+      medium:
+        rewards:
+          - type: ITEM
+            material: BEACON
+            amount: 2
+            chance: 1.0
+      hard:
+        rewards:
+          - type: ITEM
+            material: NETHERITE_PICKAXE
+            amount: 1
+            chance: 1.0
+      extreme:
+        rewards:
+          - type: COMMAND
+            command: "eco give %player% 10000"
+            chance: 1.0
+    
+    # NEW: Top time rewards (only given when player sets a new record)
+    top-time-rewards:
+      rewards:
+        - type: COMMAND
+          command: "eco give %player% 5000"
+          chance: 1.0
+        - type: ITEM
+          material: NETHERITE_BLOCK
+          amount: 1
+          chance: 0.5  # 50% chance to get this rare reward
+    
+    # Fallback rewards (used if no difficulty-tier-rewards are set)
+    reward-commands: []
+    
+    locked-down: false
+    challenge-area:
+      world: ConradsChallenges
+      corner1:
+        x: 4767.0
+        y: -53.0
+        z: 1369.0
+      corner2:
+        x: 4799.0
+        y: 43.0
+        z: 1407.0
+    regeneration:
+      world: ConradsChallenges
+      corner1:
+        x: 4765.0
+        y: -50.0
+        z: 1369.0
+      corner2:
+        x: 4800.0
+        y: 43.0
+        z: 1414.0
+      auto-extend-y: false
+
+# How it works:
+# 
+# 1. Speed Tiers (completion.tiers):
+#    - Still needed to determine which speed tier player achieved
+#    - Gold (≤90s) = 1.5x multiplier
+#    - Silver (≤180s) = 1.0x multiplier (normal)
+#    - Bronze (≤300s) = 0.5x multiplier (half)
+#    - reward-commands in tiers are IGNORED
+#
+# 2. Difficulty Tier Rewards (difficulty-tier-rewards):
+#    - Easy: Base rewards (1.0x difficulty multiplier)
+#    - Medium: Gets Easy rewards (×1.5) + Medium rewards (×1.0)
+#    - Hard: Gets Easy (×3.0) + Medium (×2.0) + Hard (×1.0)
+#    - Extreme: Gets all previous (×9.0, ×6.0, ×3.0) + Extreme (×1.0)
+#    - Speed multiplier is then applied on top:
+#      * Gold time: ×1.5
+#      * Silver time: ×1.0
+#      * Bronze time: ×0.5
+#      * New record: ×3.0 (replaces speed tier multiplier)
+#
+# 3. Top Time Rewards (top-time-rewards):
+#    - Only given when player sets a new record
+#    - Gets 3x multiplier (difficulty multiplier still applies)
+#
+# Example:
+# - Player completes on Medium difficulty, Gold time (60s), new record:
+#   - Gets: Easy rewards (×1.5 difficulty × 3.0 record = 4.5x) + Medium rewards (×1.0 difficulty × 3.0 record = 3.0x)
+#   - Plus: Top time rewards (×1.5 difficulty × 3.0 record = 4.5x)
+

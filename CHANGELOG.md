@@ -1,5 +1,51 @@
 # Changelog
 
+## Version 3.0.3
+
+### Features
+- **Difficulty Tier Reward System**: Complete reward system overhaul with tier-based rewards and inheritance:
+  - Each difficulty tier (easy, medium, hard, extreme) has its own reward table
+  - Higher tiers inherit rewards from lower tiers with multipliers applied
+  - Easy: Gets only Easy tier rewards (1.0x)
+  - Medium: Gets Easy rewards (×1.5) + Medium rewards (×1.0)
+  - Hard: Gets Easy (×3.0) + Medium (×2.0) + Hard (×1.0)
+  - Extreme: Gets all previous (×9.0, ×6.0, ×3.0) + Extreme (×1.0)
+- **RNG Chance System**: All rewards now support chance values (0.0-1.0). Rewards with chance < 1.0 have a random chance to be given, adding grind elements
+- **Speed Multiplier Integration**: Speed challenges now use the tier reward system with time-based multipliers:
+  - Gold tier (fast): 1.5x multiplier
+  - Silver tier (average): 1.0x multiplier (normal)
+  - Bronze tier (slow): 0.5x multiplier (half rewards)
+  - New record: 3x multiplier (replaces tier multiplier)
+- **Top Time Rewards**: New reward type exclusively for players who set new top times. Gets 3x multiplier on top of difficulty multiplier
+- **Reward Types**: Three reward types supported:
+  - `hand`: Uses item currently in player's hand
+  - `item`: Specifies material and amount
+  - `command`: Custom command (like old addreward)
+
+### Improvements
+- **Speed Tier Rewards Removed**: Old speed tier rewards (from `completion.tiers.reward-commands`) are no longer used. Speed tiers now only determine multipliers, not rewards
+- **Fallback Rewards Enhanced**: Fallback rewards now support chance values and work alongside tier rewards (used if no tier rewards are set)
+- **Tab Completion**: All new reward commands have full tab completion for tiers, types, and materials
+- **Edit Mode Disconnect Restoration**: Players who disconnect while in edit mode are automatically returned to their original location (before entering edit mode) when they reconnect, matching the behavior of `/challenge save` or `/challenge cancel`
+
+### Commands
+- `/challenge addtierreward [id] <tier> <hand|item|command> [args] [chance]` - Add reward to a difficulty tier
+  - `tier`: easy, medium, hard, or extreme
+  - `hand`: Uses item in hand
+  - `item <material> [amount]`: Specifies item type
+  - `command <command>`: Custom command
+  - `chance`: 0.0-1.0 (default: 1.0 = 100%)
+- `/challenge cleartierrewards [id] <tier>` - Clear all rewards for a specific tier
+- `/challenge listtierrewards [id] [tier]` - List tier rewards (all tiers or specific tier)
+- `/challenge addtoptimereward [id] <hand|item|command> [args] [chance]` - Add reward for new top times only
+- `/challenge addreward [id] <command> [chance]` - Updated to support chance parameter (default: 1.0)
+
+### Technical Changes
+- New `TierReward` class with type (HAND/ITEM/COMMAND), chance, and reward data
+- New `RewardWithChance` class for fallback rewards with chance support
+- Config structure updated to support tier rewards and chance values
+- Backward compatible: Old configs still work, automatically migrates reward-commands format
+
 ## Version 3.0.2
 
 ### Features

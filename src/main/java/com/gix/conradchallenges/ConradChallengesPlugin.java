@@ -69,7 +69,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private static final List<String> CHALLENGE_SUBCOMMANDS = Arrays.asList(
         "create", "delete", "setbook", "clearbook", "setdestination", "settype", "setboss", 
         "settimer", "setitem", "setspeed", "setcooldown", "settimelimit", 
-        "setmaxparty", "addreward", "clearrewards", "list", "info",
+        "setmaxparty", "addreward", "clearrewards", "addtierreward", "cleartierrewards", "listtierrewards", "addtoptimereward",
+        "list", "info",
         "setregenerationarea", "clearregenerationarea", "captureregeneration", "setautoregenerationy",
         "setchallengearea", "clearchallengearea",
         "edit", "save", "cancel", "lockdown", "unlockdown"
@@ -99,6 +100,31 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             this.name = name;
             this.maxSeconds = maxSeconds;
             this.rewardCommands = rewardCommands;
+        }
+    }
+
+    private static class TierReward {
+        enum Type { HAND, ITEM, COMMAND }
+        final Type type;
+        final double chance; // 0.0 to 1.0
+        Material material;      // For ITEM type
+        int amount;             // For ITEM type
+        ItemStack itemStack;    // For HAND type
+        String command;         // For COMMAND type
+
+        TierReward(Type type, double chance) {
+            this.type = type;
+            this.chance = Math.max(0.0, Math.min(1.0, chance)); // Clamp to 0.0-1.0
+        }
+    }
+
+    private static class RewardWithChance {
+        final String command;
+        final double chance; // 0.0 to 1.0
+
+        RewardWithChance(String command, double chance) {
+            this.command = command;
+            this.chance = Math.max(0.0, Math.min(1.0, chance)); // Clamp to 0.0-1.0
         }
     }
 
@@ -137,7 +163,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         ItemRequirement itemRequirement;
         List<SpeedTier> speedTiers;
 
-        List<String> fallbackRewardCommands;
+        List<RewardWithChance> fallbackRewardCommands;
+        Map<String, List<TierReward>> difficultyTierRewards; // Key: "easy", "medium", "hard", "extreme"
+        List<TierReward> topTimeRewards; // Rewards only given for new top times (SPEED challenges)
 
         // -1 = unlimited party size
         int maxPartySize;
@@ -166,6 +194,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             this.regenerationAutoExtendY = false; // Default to manual Y range
             this.completionType = CompletionType.NONE;
             this.fallbackRewardCommands = new ArrayList<>();
+            this.difficultyTierRewards = new HashMap<>();
+            this.topTimeRewards = new ArrayList<>();
             this.speedTiers = new ArrayList<>();
             this.maxPartySize = -1;
             this.timeLimitSeconds = 0;
@@ -324,6 +354,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private final Map<String, UUID> challengeEditors = new HashMap<>();
     // Edit mode: Store original locations before edit (editor UUID -> original location)
     private final Map<UUID, Location> editorOriginalLocations = new HashMap<>();
+    // Edit mode: Store original locations for disconnected players (editor UUID -> original location)
+    // Used to restore location on reconnect
+    private final Map<UUID, Location> editorDisconnectLocations = new HashMap<>();
     // Edit mode: Store original challenge configs before edit (challenge ID -> cloned config)
     private final Map<String, ChallengeConfig> challengeEditBackups = new HashMap<>();
     // Edit mode: Store original block states before edit (challenge ID -> list of block states)
@@ -901,7 +934,129 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
 
-            cfg.fallbackRewardCommands = cs.getStringList("reward-commands");
+            // Load fallback rewards (with chance support)
+            cfg.fallbackRewardCommands.clear();
+            if (cs.contains("reward-commands")) {
+                Object rcObj = cs.get("reward-commands");
+                if (rcObj instanceof List<?>) {
+                    List<?> rcList = (List<?>) rcObj;
+                    for (Object item : rcList) {
+                        if (item instanceof Map<?, ?>) {
+                            // New format: {command: "...", chance: 1.0}
+                            Map<?, ?> map = (Map<?, ?>) item;
+                            String cmd = String.valueOf(map.get("command"));
+                            double chance = map.containsKey("chance") ? ((Number) map.get("chance")).doubleValue() : 1.0;
+                            cfg.fallbackRewardCommands.add(new RewardWithChance(cmd, chance));
+                        } else {
+                            // Old format: just a string (backward compatibility)
+                            String cmd = String.valueOf(item);
+                            cfg.fallbackRewardCommands.add(new RewardWithChance(cmd, 1.0));
+                        }
+                    }
+                }
+            }
+            
+            // Load difficulty tier rewards
+            cfg.difficultyTierRewards.clear();
+            ConfigurationSection tierRewardsSec = cs.getConfigurationSection("difficulty-tier-rewards");
+            if (tierRewardsSec != null) {
+                for (String tier : Arrays.asList("easy", "medium", "hard", "extreme")) {
+                    ConfigurationSection tierSec = tierRewardsSec.getConfigurationSection(tier);
+                    if (tierSec != null) {
+                        List<TierReward> tierRewards = new ArrayList<>();
+                        List<Map<?, ?>> rewardMaps = tierSec.getMapList("rewards");
+                        for (Map<?, ?> map : rewardMaps) {
+                            String typeStr = String.valueOf(map.get("type")).toUpperCase();
+                            double chance = map.containsKey("chance") ? ((Number) map.get("chance")).doubleValue() : 1.0;
+                            try {
+                                TierReward.Type type = TierReward.Type.valueOf(typeStr);
+                                TierReward reward = new TierReward(type, chance);
+                                switch (type) {
+                                    case HAND -> {
+                                        String itemData = String.valueOf(map.get("item-data"));
+                                        if (itemData != null && !itemData.isEmpty()) {
+                                            try {
+                                                // Deserialize ItemStack from base64 or use Material
+                                                if (itemData.contains(";")) {
+                                                    String[] parts = itemData.split(";");
+                                                    Material mat = Material.valueOf(parts[0]);
+                                                    int amount = parts.length > 1 ? Integer.parseInt(parts[1]) : 1;
+                                                    reward.itemStack = new ItemStack(mat, amount);
+                                                } else {
+                                                    Material mat = Material.valueOf(itemData);
+                                                    reward.itemStack = new ItemStack(mat, 1);
+                                                }
+                                            } catch (Exception e) {
+                                                getLogger().warning("Failed to load HAND reward item for challenge " + id + ": " + e.getMessage());
+                                            }
+                                        }
+                                    }
+                                    case ITEM -> {
+                                        String matStr = String.valueOf(map.get("material"));
+                                        reward.material = Material.valueOf(matStr);
+                                        reward.amount = map.containsKey("amount") ? ((Number) map.get("amount")).intValue() : 1;
+                                    }
+                                    case COMMAND -> {
+                                        reward.command = String.valueOf(map.get("command"));
+                                    }
+                                }
+                                tierRewards.add(reward);
+                            } catch (IllegalArgumentException e) {
+                                getLogger().warning("Invalid reward type '" + typeStr + "' for challenge " + id);
+                            }
+                        }
+                        if (!tierRewards.isEmpty()) {
+                            cfg.difficultyTierRewards.put(tier, tierRewards);
+                        }
+                    }
+                }
+            }
+            
+            // Load top time rewards
+            cfg.topTimeRewards.clear();
+            ConfigurationSection topTimeSec = cs.getConfigurationSection("top-time-rewards");
+            if (topTimeSec != null) {
+                List<Map<?, ?>> rewardMaps = topTimeSec.getMapList("rewards");
+                for (Map<?, ?> map : rewardMaps) {
+                    String typeStr = String.valueOf(map.get("type")).toUpperCase();
+                    double chance = map.containsKey("chance") ? ((Number) map.get("chance")).doubleValue() : 1.0;
+                    try {
+                        TierReward.Type type = TierReward.Type.valueOf(typeStr);
+                        TierReward reward = new TierReward(type, chance);
+                        switch (type) {
+                            case HAND -> {
+                                String itemData = String.valueOf(map.get("item-data"));
+                                if (itemData != null && !itemData.isEmpty()) {
+                                    try {
+                                        if (itemData.contains(";")) {
+                                            String[] parts = itemData.split(";");
+                                            Material mat = Material.valueOf(parts[0]);
+                                            int amount = parts.length > 1 ? Integer.parseInt(parts[1]) : 1;
+                                            reward.itemStack = new ItemStack(mat, amount);
+                                        } else {
+                                            Material mat = Material.valueOf(itemData);
+                                            reward.itemStack = new ItemStack(mat, 1);
+                                        }
+                                    } catch (Exception e) {
+                                        getLogger().warning("Failed to load HAND reward item for challenge " + id + ": " + e.getMessage());
+                                    }
+                                }
+                            }
+                            case ITEM -> {
+                                String matStr = String.valueOf(map.get("material"));
+                                reward.material = Material.valueOf(matStr);
+                                reward.amount = map.containsKey("amount") ? ((Number) map.get("amount")).intValue() : 1;
+                            }
+                            case COMMAND -> {
+                                reward.command = String.valueOf(map.get("command"));
+                            }
+                        }
+                        cfg.topTimeRewards.add(reward);
+                    } catch (IllegalArgumentException e) {
+                        getLogger().warning("Invalid reward type '" + typeStr + "' for challenge " + id);
+                    }
+                }
+            }
 
             // Load regeneration area
             ConfigurationSection regenSec = cs.getConfigurationSection("regeneration");
@@ -1705,8 +1860,49 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
 
-        // Always save reward-commands (even if empty list)
-        config.set(path + ".reward-commands", cfg.fallbackRewardCommands != null ? cfg.fallbackRewardCommands : new ArrayList<>());
+        // Always save reward-commands (even if empty list) - new format with chance
+        List<Map<String, Object>> rewardCommandsList = new ArrayList<>();
+        if (cfg.fallbackRewardCommands != null) {
+            for (RewardWithChance rwc : cfg.fallbackRewardCommands) {
+                Map<String, Object> rewardMap = new HashMap<>();
+                rewardMap.put("command", rwc.command);
+                rewardMap.put("chance", rwc.chance);
+                rewardCommandsList.add(rewardMap);
+            }
+        }
+        config.set(path + ".reward-commands", rewardCommandsList);
+        
+        // Save difficulty tier rewards
+        if (cfg.difficultyTierRewards != null && !cfg.difficultyTierRewards.isEmpty()) {
+            ConfigurationSection tierRewardsSec = config.createSection(path + ".difficulty-tier-rewards");
+            for (Map.Entry<String, List<TierReward>> entry : cfg.difficultyTierRewards.entrySet()) {
+                String tier = entry.getKey();
+                List<TierReward> rewards = entry.getValue();
+                ConfigurationSection tierSec = tierRewardsSec.createSection(tier);
+                List<Map<String, Object>> rewardMaps = new ArrayList<>();
+                for (TierReward reward : rewards) {
+                    Map<String, Object> rewardMap = new HashMap<>();
+                    rewardMap.put("type", reward.type.name());
+                    rewardMap.put("chance", reward.chance);
+                    switch (reward.type) {
+                        case HAND -> {
+                            if (reward.itemStack != null) {
+                                rewardMap.put("item-data", reward.itemStack.getType().name() + ";" + reward.itemStack.getAmount());
+                            }
+                        }
+                        case ITEM -> {
+                            rewardMap.put("material", reward.material.name());
+                            rewardMap.put("amount", reward.amount);
+                        }
+                        case COMMAND -> {
+                            rewardMap.put("command", reward.command);
+                        }
+                    }
+                    rewardMaps.add(rewardMap);
+                }
+                tierSec.set("rewards", rewardMaps);
+            }
+        }
 
         // Save regeneration area
         if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
@@ -2404,6 +2600,73 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             }
                         }
                         return filterCompletions(completions, args[3]);
+                    }
+                    
+                    // Tab completion for addtierreward, cleartierrewards, listtierrewards
+                    if (second.equals("addtierreward") || second.equals("cleartierrewards") || second.equals("listtierrewards")) {
+                        List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
+                        return filterCompletions(tiers, args[paramIndex]);
+                    }
+                }
+            }
+            
+            if (args.length == 5 || args.length == 6) {
+                String first = args[0].toLowerCase(Locale.ROOT);
+                
+                if (first.equals("challenge") && player.hasPermission("conradchallenges.admin")) {
+                    String second = args[1].toLowerCase(Locale.ROOT);
+                    boolean inEditMode = isPlayerInEditMode(player);
+                    int paramIndex = inEditMode ? 2 : 3;
+                    
+                    // Tab completion for addtierreward <tier> <type>
+                    if (second.equals("addtierreward")) {
+                        int typeIndex = inEditMode ? 3 : 4;
+                        if (args.length == typeIndex + 1) {
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[typeIndex]);
+                        }
+                    }
+                }
+            }
+            
+            if (args.length >= 6) {
+                String first = args[0].toLowerCase(Locale.ROOT);
+                
+                if (first.equals("challenge") && player.hasPermission("conradchallenges.admin")) {
+                    String second = args[1].toLowerCase(Locale.ROOT);
+                    boolean inEditMode = isPlayerInEditMode(player);
+                    
+                    // Tab completion for addtierreward <tier> item <material>
+                    if (second.equals("addtierreward")) {
+                        int tierIndex = inEditMode ? 2 : 3;
+                        int typeIndex = inEditMode ? 3 : 4;
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
+                            int materialIndex = inEditMode ? 4 : 5;
+                            if (args.length == materialIndex + 1) {
+                                for (Material mat : Material.values()) {
+                                    if (mat.isItem()) {
+                                        completions.add(mat.name());
+                                    }
+                                }
+                                return filterCompletions(completions, args[materialIndex]);
+                            }
+                        }
+                    }
+                    
+                    // Tab completion for addtoptimereward item <material>
+                    if (second.equals("addtoptimereward")) {
+                        int typeIndex = inEditMode ? 2 : 3;
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
+                            int materialIndex = inEditMode ? 3 : 4;
+                            if (args.length == materialIndex + 1) {
+                                for (Material mat : Material.values()) {
+                                    if (mat.isItem()) {
+                                        completions.add(mat.name());
+                                    }
+                                }
+                                return filterCompletions(completions, args[materialIndex]);
+                            }
+                        }
                     }
                 }
             }
@@ -3849,10 +4112,27 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("admin.challenge-addreward-usage"));
                 return true;
             }
-            String cmd = String.join(" ", Arrays.copyOfRange(args, cmdStartIndex, args.length));
-            cfg.fallbackRewardCommands.add(cmd);
+            
+            // Parse chance (last argument if it's a number between 0.0 and 1.0)
+            double chance = 1.0;
+            int cmdEndIndex = args.length;
+            if (args.length > cmdStartIndex) {
+                try {
+                    double lastArg = Double.parseDouble(args[args.length - 1]);
+                    if (lastArg >= 0.0 && lastArg <= 1.0) {
+                        chance = lastArg;
+                        cmdEndIndex = args.length - 1;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Not a number, use default chance of 1.0
+                }
+            }
+            
+            String cmd = String.join(" ", Arrays.copyOfRange(args, cmdStartIndex, cmdEndIndex));
+            cfg.fallbackRewardCommands.add(new RewardWithChance(cmd, chance));
             saveChallengeToConfig(cfg);
-            player.sendMessage(getMessage("admin.challenge-addreward-success", "id", id, "command", cmd));
+            String chanceStr = chance == 1.0 ? "100%" : String.format("%.0f%%", chance * 100);
+            player.sendMessage(getMessage("admin.challenge-addreward-success", "id", id, "command", cmd + " (chance: " + chanceStr + ")"));
             return true;
         }
 
@@ -3871,6 +4151,305 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             cfg.fallbackRewardCommands.clear();
             saveChallengeToConfig(cfg);
             player.sendMessage(getMessage("admin.challenge-clearrewards-success", "id", id));
+            return true;
+        }
+
+        if (sub.equals("addtierreward")) {
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            int argStartIndex = isPlayerInEditMode(player) ? 1 : 2;
+            if (args.length <= argStartIndex + 1) {
+                player.sendMessage("Usage: /challenge addtierreward [id] <tier> <hand|item|command> [args] [chance]");
+                player.sendMessage("Tiers: easy, medium, hard, extreme");
+                player.sendMessage("Types: hand (uses item in hand), item <material> [amount], command <command>");
+                player.sendMessage("Chance: 0.0-1.0 (default: 1.0 = 100%)");
+                return true;
+            }
+            
+            String tier = args[argStartIndex].toLowerCase();
+            if (!Arrays.asList("easy", "medium", "hard", "extreme").contains(tier)) {
+                player.sendMessage("Invalid tier. Must be: easy, medium, hard, or extreme");
+                return true;
+            }
+            
+            String typeStr = args[argStartIndex + 1].toLowerCase();
+            TierReward.Type type;
+            try {
+                type = TierReward.Type.valueOf(typeStr.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                player.sendMessage("Invalid type. Must be: hand, item, or command");
+                return true;
+            }
+            
+            // Parse chance (last argument if it's a number between 0.0 and 1.0)
+            double chance = 1.0;
+            int argEndIndex = args.length;
+            if (args.length > argStartIndex + 2) {
+                try {
+                    double lastArg = Double.parseDouble(args[args.length - 1]);
+                    if (lastArg >= 0.0 && lastArg <= 1.0) {
+                        chance = lastArg;
+                        argEndIndex = args.length - 1;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Not a number, use default chance of 1.0
+                }
+            }
+            
+            TierReward reward = new TierReward(type, chance);
+            
+            switch (type) {
+                case HAND -> {
+                    if (args.length < argStartIndex + 2) {
+                        player.sendMessage("Usage: /challenge addtierreward [id] <tier> hand [chance]");
+                        return true;
+                    }
+                    ItemStack handItem = player.getInventory().getItemInMainHand();
+                    if (handItem == null || handItem.getType().isAir()) {
+                        player.sendMessage("You must be holding an item in your hand!");
+                        return true;
+                    }
+                    reward.itemStack = handItem.clone();
+                }
+                case ITEM -> {
+                    if (args.length < argStartIndex + 3) {
+                        player.sendMessage("Usage: /challenge addtierreward [id] <tier> item <material> [amount] [chance]");
+                        return true;
+                    }
+                    try {
+                        reward.material = Material.valueOf(args[argStartIndex + 2].toUpperCase());
+                        if (args.length > argStartIndex + 3) {
+                            try {
+                                double testChance = Double.parseDouble(args[argStartIndex + 3]);
+                                if (testChance >= 0.0 && testChance <= 1.0 && argStartIndex + 3 == argEndIndex) {
+                                    // This is the chance parameter, not amount
+                                    reward.amount = 1;
+                                } else {
+                                    reward.amount = Integer.parseInt(args[argStartIndex + 3]);
+                                }
+                            } catch (NumberFormatException e) {
+                                reward.amount = Integer.parseInt(args[argStartIndex + 3]);
+                            }
+                        } else {
+                            reward.amount = 1;
+                        }
+                    } catch (IllegalArgumentException e) {
+                        player.sendMessage("Invalid material: " + args[argStartIndex + 2]);
+                        return true;
+                    }
+                }
+                case COMMAND -> {
+                    if (args.length < argStartIndex + 3) {
+                        player.sendMessage("Usage: /challenge addtierreward [id] <tier> command <command> [chance]");
+                        return true;
+                    }
+                    reward.command = String.join(" ", Arrays.copyOfRange(args, argStartIndex + 2, argEndIndex));
+                }
+            }
+            
+            cfg.difficultyTierRewards.computeIfAbsent(tier, k -> new ArrayList<>()).add(reward);
+            saveChallengeToConfig(cfg);
+            String chanceStr = chance == 1.0 ? "100%" : String.format("%.0f%%", chance * 100);
+            player.sendMessage("Added " + typeStr + " reward to " + tier + " tier (chance: " + chanceStr + ")");
+            return true;
+        }
+
+        if (sub.equals("cleartierrewards")) {
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            int argIndex = isPlayerInEditMode(player) ? 1 : 2;
+            if (args.length <= argIndex) {
+                player.sendMessage("Usage: /challenge cleartierrewards [id] <tier>");
+                player.sendMessage("Tiers: easy, medium, hard, extreme");
+                return true;
+            }
+            String tier = args[argIndex].toLowerCase();
+            if (!Arrays.asList("easy", "medium", "hard", "extreme").contains(tier)) {
+                player.sendMessage("Invalid tier. Must be: easy, medium, hard, or extreme");
+                return true;
+            }
+            List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
+            if (rewards == null || rewards.isEmpty()) {
+                player.sendMessage("No rewards found for " + tier + " tier");
+                return true;
+            }
+            rewards.clear();
+            if (rewards.isEmpty()) {
+                cfg.difficultyTierRewards.remove(tier);
+            }
+            saveChallengeToConfig(cfg);
+            player.sendMessage("Cleared all rewards for " + tier + " tier");
+            return true;
+        }
+
+        if (sub.equals("listtierrewards")) {
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            int argIndex = isPlayerInEditMode(player) ? 1 : 2;
+            String filterTier = null;
+            if (args.length > argIndex) {
+                filterTier = args[argIndex].toLowerCase();
+                if (!Arrays.asList("easy", "medium", "hard", "extreme").contains(filterTier)) {
+                    player.sendMessage("Invalid tier. Must be: easy, medium, hard, or extreme");
+                    return true;
+                }
+            }
+            
+            List<String> tiersToShow = filterTier != null ? Arrays.asList(filterTier) : Arrays.asList("easy", "medium", "hard", "extreme");
+            boolean foundAny = false;
+            for (String tier : tiersToShow) {
+                List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
+                if (rewards != null && !rewards.isEmpty()) {
+                    foundAny = true;
+                    player.sendMessage("§6" + tier.toUpperCase() + " Tier Rewards (" + rewards.size() + "):");
+                    for (int i = 0; i < rewards.size(); i++) {
+                        TierReward reward = rewards.get(i);
+                        String chanceStr = reward.chance == 1.0 ? "100%" : String.format("%.0f%%", reward.chance * 100);
+                        switch (reward.type) {
+                            case HAND -> {
+                                if (reward.itemStack != null) {
+                                    player.sendMessage("  " + (i + 1) + ". HAND: " + reward.itemStack.getType().name() + " x" + reward.itemStack.getAmount() + " (chance: " + chanceStr + ")");
+                                }
+                            }
+                            case ITEM -> {
+                                player.sendMessage("  " + (i + 1) + ". ITEM: " + reward.material.name() + " x" + reward.amount + " (chance: " + chanceStr + ")");
+                            }
+                            case COMMAND -> {
+                                player.sendMessage("  " + (i + 1) + ". COMMAND: " + reward.command + " (chance: " + chanceStr + ")");
+                            }
+                        }
+                    }
+                }
+            }
+            if (!foundAny) {
+                player.sendMessage("No tier rewards found" + (filterTier != null ? " for " + filterTier + " tier" : ""));
+            }
+            return true;
+        }
+
+        if (sub.equals("addtoptimereward")) {
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            int argStartIndex = isPlayerInEditMode(player) ? 1 : 2;
+            if (args.length <= argStartIndex + 1) {
+                player.sendMessage("Usage: /challenge addtoptimereward [id] <hand|item|command> [args] [chance]");
+                player.sendMessage("Types: hand (uses item in hand), item <material> [amount], command <command>");
+                player.sendMessage("Chance: 0.0-1.0 (default: 1.0 = 100%)");
+                player.sendMessage("Note: These rewards are only given when a player sets a new top time");
+                return true;
+            }
+            
+            String typeStr = args[argStartIndex].toLowerCase();
+            TierReward.Type type;
+            try {
+                type = TierReward.Type.valueOf(typeStr.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                player.sendMessage("Invalid type. Must be: hand, item, or command");
+                return true;
+            }
+            
+            // Parse chance (last argument if it's a number between 0.0 and 1.0)
+            double chance = 1.0;
+            int argEndIndex = args.length;
+            if (args.length > argStartIndex + 1) {
+                try {
+                    double lastArg = Double.parseDouble(args[args.length - 1]);
+                    if (lastArg >= 0.0 && lastArg <= 1.0) {
+                        chance = lastArg;
+                        argEndIndex = args.length - 1;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Not a number, use default chance of 1.0
+                }
+            }
+            
+            TierReward reward = new TierReward(type, chance);
+            
+            switch (type) {
+                case HAND -> {
+                    if (args.length < argStartIndex + 1) {
+                        player.sendMessage("Usage: /challenge addtoptimereward [id] hand [chance]");
+                        return true;
+                    }
+                    ItemStack handItem = player.getInventory().getItemInMainHand();
+                    if (handItem == null || handItem.getType().isAir()) {
+                        player.sendMessage("You must be holding an item in your hand!");
+                        return true;
+                    }
+                    reward.itemStack = handItem.clone();
+                }
+                case ITEM -> {
+                    if (args.length < argStartIndex + 2) {
+                        player.sendMessage("Usage: /challenge addtoptimereward [id] item <material> [amount] [chance]");
+                        return true;
+                    }
+                    try {
+                        reward.material = Material.valueOf(args[argStartIndex + 1].toUpperCase());
+                        if (args.length > argStartIndex + 2) {
+                            try {
+                                double testChance = Double.parseDouble(args[argStartIndex + 2]);
+                                if (testChance >= 0.0 && testChance <= 1.0 && argStartIndex + 2 == argEndIndex) {
+                                    // This is the chance parameter, not amount
+                                    reward.amount = 1;
+                                } else {
+                                    reward.amount = Integer.parseInt(args[argStartIndex + 2]);
+                                }
+                            } catch (NumberFormatException e) {
+                                reward.amount = Integer.parseInt(args[argStartIndex + 2]);
+                            }
+                        } else {
+                            reward.amount = 1;
+                        }
+                    } catch (IllegalArgumentException e) {
+                        player.sendMessage("Invalid material: " + args[argStartIndex + 1]);
+                        return true;
+                    }
+                }
+                case COMMAND -> {
+                    if (args.length < argStartIndex + 2) {
+                        player.sendMessage("Usage: /challenge addtoptimereward [id] command <command> [chance]");
+                        return true;
+                    }
+                    reward.command = String.join(" ", Arrays.copyOfRange(args, argStartIndex + 1, argEndIndex));
+                }
+            }
+            
+            cfg.topTimeRewards.add(reward);
+            saveChallengeToConfig(cfg);
+            String chanceStr = chance == 1.0 ? "100%" : String.format("%.0f%%", chance * 100);
+            player.sendMessage("Added " + typeStr + " reward to top time rewards (chance: " + chanceStr + ")");
             return true;
         }
 
@@ -4599,10 +5178,23 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 case NONE -> {
                 }
             }
-            if (cfg.fallbackRewardCommands.isEmpty()) {
-                player.sendMessage(getMessage("admin.challenge-info-no-rewards"));
-            } else {
+            // Show tier rewards if any exist
+            boolean hasTierRewards = cfg.difficultyTierRewards != null && !cfg.difficultyTierRewards.isEmpty();
+            if (hasTierRewards) {
+                player.sendMessage("§6Difficulty Tier Rewards:");
+                for (String tier : Arrays.asList("easy", "medium", "hard", "extreme")) {
+                    List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
+                    if (rewards != null && !rewards.isEmpty()) {
+                        player.sendMessage("  §e" + tier.toUpperCase() + ": §f" + rewards.size() + " reward(s)");
+                    }
+                }
+            }
+            
+            // Show fallback rewards
+            if (cfg.fallbackRewardCommands != null && !cfg.fallbackRewardCommands.isEmpty()) {
                 player.sendMessage(getMessage("admin.challenge-info-rewards", "count", String.valueOf(cfg.fallbackRewardCommands.size())));
+            } else if (!hasTierRewards) {
+                player.sendMessage(getMessage("admin.challenge-info-no-rewards"));
             }
             return true;
         }
@@ -5866,6 +6458,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (editingChallengeId != null) {
             ChallengeConfig cfg = challenges.get(editingChallengeId);
             
+            // Store original location for reconnection (before cleanup)
+            Location originalLoc = editorOriginalLocations.get(uuid);
+            if (originalLoc != null) {
+                editorDisconnectLocations.put(uuid, originalLoc.clone());
+            }
+            
             if ("save".equalsIgnoreCase(editModeDisconnectAction)) {
                 // Save changes on disconnect
                 if (cfg != null) {
@@ -5991,6 +6589,22 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
+        
+        // Check if player disconnected while in edit mode - restore original location
+        Location editModeLocation = editorDisconnectLocations.remove(uuid);
+        if (editModeLocation != null) {
+            // Teleport player to their original location after a short delay (to ensure world is loaded)
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    if (player.isOnline()) {
+                        player.teleport(editModeLocation);
+                        player.sendMessage(ChatColor.GREEN + "You have been returned to your location before entering edit mode.");
+                    }
+                }
+            }.runTaskLater(this, 5L); // 5 ticks delay to ensure world is loaded
+            return; // Don't process challenge disconnect logic if they were in edit mode
+        }
         
         // Check if player was disconnected from a challenge
         DisconnectInfo disconnectInfo = disconnectedPlayers.remove(uuid);
@@ -6569,97 +7183,215 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         return getTotalCompletions(uuid); // Same as total for now
     }
 
+    /**
+     * Collects all tier rewards with inheritance (lower tiers get multiplied when inherited by higher tiers)
+     * All rewards from lower tiers get the current tier's cumulative multiplier
+     */
+    private List<TierReward> collectTierRewards(ChallengeConfig cfg, String difficultyTier) {
+        List<TierReward> allRewards = new ArrayList<>();
+        List<String> tierOrder = Arrays.asList("easy", "medium", "hard", "extreme");
+        int currentTierIndex = tierOrder.indexOf(difficultyTier);
+        if (currentTierIndex == -1) currentTierIndex = 0; // Default to easy
+        
+        // Get the current tier's cumulative multiplier (this applies to all inherited rewards)
+        double currentTierMultiplier = cumulativeRewardMultipliers.getOrDefault(difficultyTier, 1.0);
+        
+        // Collect rewards from all tiers up to and including current tier
+        // All rewards get the current tier's multiplier (inheritance)
+        for (int i = 0; i <= currentTierIndex; i++) {
+            String tierName = tierOrder.get(i);
+            List<TierReward> tierRewards = cfg.difficultyTierRewards.get(tierName);
+            if (tierRewards != null) {
+                // All rewards from this tier get the current tier's multiplier
+                for (TierReward reward : tierRewards) {
+                    // Create a copy
+                    TierReward rewardCopy = new TierReward(reward.type, reward.chance);
+                    rewardCopy.material = reward.material;
+                    rewardCopy.amount = reward.amount;
+                    rewardCopy.itemStack = reward.itemStack != null ? reward.itemStack.clone() : null;
+                    rewardCopy.command = reward.command;
+                    allRewards.add(rewardCopy);
+                }
+            }
+        }
+        
+        return allRewards;
+    }
+    
+    /**
+     * Calculates speed multiplier based on completion time (for SPEED challenges)
+     * Returns multiplier and whether it's a new record
+     * Gold tier = 1.5x, Silver/Average = 1.0x, Bronze/Worse = 0.5x
+     * New record = 3x (on top of tier multiplier)
+     */
+    private double[] calculateSpeedMultiplier(ChallengeConfig cfg, String challengeId, UUID playerUuid, int elapsedSeconds) {
+        double speedMultiplier = 1.0;
+        boolean isNewRecord = false;
+        
+        if (cfg.completionType == CompletionType.SPEED) {
+            SpeedTier tier = findBestSpeedTier(cfg, elapsedSeconds);
+            if (tier != null) {
+                // Speed tier multipliers: Gold = 1.5x, Silver/Average = 1.0x, Bronze/Worse = 0.5x
+                String tierNameUpper = tier.name.toUpperCase();
+                if (tierNameUpper.contains("GOLD")) {
+                    speedMultiplier = 1.5;
+                } else if (tierNameUpper.contains("SILVER")) {
+                    speedMultiplier = 1.0; // Average time
+                } else {
+                    speedMultiplier = 0.5; // Bronze or worse = bad time
+                }
+            } else {
+                // No tier matched = bad time
+                speedMultiplier = 0.5;
+            }
+            
+            // Check if this is a new record
+            Map<UUID, Long> challengeBestTimes = bestTimes.get(challengeId);
+            if (challengeBestTimes != null) {
+                Long previousBest = challengeBestTimes.get(playerUuid);
+                if (previousBest == null || elapsedSeconds < previousBest) {
+                    isNewRecord = true;
+                    speedMultiplier = 3.0; // New record = 3x (replaces tier multiplier)
+                }
+            } else {
+                isNewRecord = true; // First completion is always a record
+                speedMultiplier = 3.0;
+            }
+        }
+        
+        return new double[]{speedMultiplier, isNewRecord ? 1.0 : 0.0};
+    }
+    
+    /**
+     * Applies a single tier reward to a player
+     */
+    private void applyTierReward(Player player, TierReward reward, double difficultyMultiplier, double speedMultiplier) {
+        // Check RNG chance
+        if (Math.random() > reward.chance) {
+            return; // Failed RNG roll
+        }
+        
+        double totalMultiplier = difficultyMultiplier * speedMultiplier;
+        
+        switch (reward.type) {
+            case HAND -> {
+                if (reward.itemStack != null) {
+                    ItemStack item = reward.itemStack.clone();
+                    int newAmount = (int) Math.max(1, Math.round(item.getAmount() * totalMultiplier));
+                    item.setAmount(newAmount);
+                    player.getInventory().addItem(item);
+                }
+            }
+            case ITEM -> {
+                if (reward.material != null) {
+                    int newAmount = (int) Math.max(1, Math.round(reward.amount * totalMultiplier));
+                    ItemStack item = new ItemStack(reward.material, newAmount);
+                    player.getInventory().addItem(item);
+                }
+            }
+            case COMMAND -> {
+                if (reward.command != null) {
+                    String cmd = reward.command.replace("%player%", player.getName());
+                    String multipliedCmd = applyRewardMultiplier(cmd, totalMultiplier);
+                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), multipliedCmd);
+                }
+            }
+        }
+    }
+    
     private void runRewardCommands(Player player, ChallengeConfig cfg, String challengeId) {
-        List<String> commands = new ArrayList<>();
-
+        UUID uuid = player.getUniqueId();
+        
+        // Get difficulty tier
+        String difficultyTier = activeChallengeDifficulties.getOrDefault(challengeId, "easy");
+        double difficultyMultiplier = cumulativeRewardMultipliers.getOrDefault(difficultyTier, 1.0);
+        
+        // Calculate speed multiplier (for SPEED challenges)
+        double speedMultiplier = 1.0;
+        final boolean[] isNewRecord = {false};
         if (cfg.completionType == CompletionType.SPEED) {
             Map<UUID, Long> times = bestTimes.get(challengeId);
             if (times != null) {
-                Long best = times.get(player.getUniqueId());
+                Long best = times.get(uuid);
                 if (best != null) {
-                    SpeedTier tier = findBestSpeedTier(cfg, best.intValue());
-                    if (tier != null) {
-                        commands.addAll(tier.rewardCommands);
-                    }
+                    double[] speedData = calculateSpeedMultiplier(cfg, challengeId, uuid, best.intValue());
+                    speedMultiplier = speedData[0];
+                    isNewRecord[0] = speedData[1] > 0.5;
                 }
             }
         }
-
-        if (cfg.fallbackRewardCommands != null) {
-            commands.addAll(cfg.fallbackRewardCommands);
+        
+        // Collect tier rewards (with inheritance)
+        List<TierReward> tierRewards = collectTierRewards(cfg, difficultyTier);
+        
+        // Get balance before (if economy is available)
+        final double balanceBefore = economy != null ? economy.getBalance(player) : 0.0;
+        
+        // Track rewards given
+        final double[] totalMoney = {0.0};
+        final List<String> rewardMessages = new ArrayList<>();
+        final double finalDifficultyMultiplier = difficultyMultiplier;
+        final double finalSpeedMultiplier = speedMultiplier;
+        
+        // Apply tier rewards if any exist
+        boolean hasTierRewards = !tierRewards.isEmpty();
+        if (hasTierRewards) {
+            for (TierReward reward : tierRewards) {
+                applyTierReward(player, reward, finalDifficultyMultiplier, finalSpeedMultiplier);
+            }
         }
-
-        if (commands.isEmpty()) {
+        
+        // Apply top time rewards if this is a new record (SPEED challenges only)
+        if (isNewRecord[0] && cfg.completionType == CompletionType.SPEED && cfg.topTimeRewards != null && !cfg.topTimeRewards.isEmpty()) {
+            // Top time rewards get 3x multiplier (difficulty multiplier still applies)
+            for (TierReward reward : cfg.topTimeRewards) {
+                applyTierReward(player, reward, finalDifficultyMultiplier, 3.0); // 3x for top time
+            }
+        }
+        
+        if (!hasTierRewards) {
+            // Fallback to old system (fallbackRewardCommands)
+            if (cfg.fallbackRewardCommands != null && !cfg.fallbackRewardCommands.isEmpty()) {
+                for (RewardWithChance rwc : cfg.fallbackRewardCommands) {
+                    // Check RNG chance
+                    if (Math.random() > rwc.chance) {
+                        continue; // Failed RNG roll
+                    }
+                    
+                    String cmd = rwc.command.replace("%player%", player.getName());
+                    double totalMultiplier = finalDifficultyMultiplier * finalSpeedMultiplier;
+                    String multipliedCmd = applyRewardMultiplier(cmd, totalMultiplier);
+                    
+                    // Parse eco commands to extract money (for display purposes)
+                    String lowerCmd = multipliedCmd.toLowerCase();
+                    if (lowerCmd.startsWith("eco give ") || lowerCmd.startsWith("/eco give ")) {
+                        String[] parts = multipliedCmd.split("\\s+");
+                        if (parts.length >= 3) {
+                            try {
+                                for (int i = parts.length - 1; i >= 0; i--) {
+                                    try {
+                                        double amount = Double.parseDouble(parts[i]);
+                                        totalMoney[0] += amount;
+                                        break;
+                                    } catch (NumberFormatException ignored) {
+                                    }
+                                }
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    }
+                    
+                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), multipliedCmd);
+                }
+            }
+        }
+        
+        if (!hasTierRewards && (cfg.fallbackRewardCommands == null || cfg.fallbackRewardCommands.isEmpty())) {
             player.sendMessage(getMessage("admin.challenge-no-rewards"));
             return;
         }
-
-        // Get difficulty tier multiplier
-        String difficultyTier = activeChallengeDifficulties.get(challengeId);
-        double multiplier = 1.0;
-        if (difficultyTier != null) {
-            Double tierMultiplier = cumulativeRewardMultipliers.get(difficultyTier);
-            if (tierMultiplier != null) {
-                multiplier = tierMultiplier;
-            }
-        }
-
-        // Get balance before (if economy is available)
-        final double balanceBefore = economy != null ? economy.getBalance(player) : 0.0;
-
-        // Track rewards given by parsing commands
-        final double[] totalMoney = {0.0};
-        final List<String> rewardMessages = new ArrayList<>();
-        final double finalMultiplier = multiplier;
-
-        for (String cmd : commands) {
-            String parsed = cmd.replace("%player%", player.getName());
-            
-            // Apply difficulty multiplier to the command
-            String multipliedCmd = applyRewardMultiplier(parsed, finalMultiplier);
-            
-            // Parse eco commands to extract money (for display purposes)
-            String lowerCmd = multipliedCmd.toLowerCase();
-            if (lowerCmd.startsWith("eco give ") || lowerCmd.startsWith("/eco give ")) {
-                // Extract money amount from "eco give <player> <amount>" or "/eco give <player> <amount>"
-                String[] parts = multipliedCmd.split("\\s+");
-                if (parts.length >= 3) {
-                    try {
-                        // Try to parse the last part as a number (could be after player name)
-                        for (int i = parts.length - 1; i >= 0; i--) {
-                            try {
-                                double amount = Double.parseDouble(parts[i]);
-                                totalMoney[0] += amount;
-                                break;
-                            } catch (NumberFormatException ignored) {
-                                // Not a number, continue
-                            }
-                        }
-                    } catch (Exception ignored) {
-                        // Couldn't parse, just execute the command
-                    }
-                }
-            } else if (lowerCmd.contains("give ") && (lowerCmd.contains("money") || lowerCmd.contains("$"))) {
-                // Try to extract money from other money-related commands
-                String[] parts = multipliedCmd.split("\\s+");
-                for (int i = 0; i < parts.length - 1; i++) {
-                    if (parts[i].equalsIgnoreCase("money") || parts[i].equalsIgnoreCase("$") || 
-                        parts[i].equalsIgnoreCase("eco")) {
-                        try {
-                            double amount = Double.parseDouble(parts[i + 1]);
-                            totalMoney[0] += amount;
-                            break;
-                        } catch (NumberFormatException | ArrayIndexOutOfBoundsException ignored) {
-                        }
-                    }
-                }
-            }
-            
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), multipliedCmd);
-        }
         
         // Schedule balance check after 1 tick to ensure economy plugin has processed commands
-        // This is especially important for party completions where multiple players might be getting rewards
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -6669,18 +7401,21 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     double balanceAfter = economy.getBalance(player);
                     double actualChange = balanceAfter - balanceBefore;
                     if (actualChange > 0) {
-                        finalTotalMoney = actualChange; // Use actual change instead of parsed amount
+                        finalTotalMoney = actualChange;
                     }
                 }
                 
                 // Build reward message
                 if (finalTotalMoney > 0) {
-                    // Format money nicely (no decimals if whole number)
                     if (finalTotalMoney == (long) finalTotalMoney) {
                         rewardMessages.add(getMessage("admin.reward-money-format", "amount", String.valueOf((long) finalTotalMoney)));
                     } else {
                         rewardMessages.add(getMessage("admin.reward-money-format-decimal", "amount", String.format("%.2f", finalTotalMoney)));
                     }
+                }
+                
+                if (isNewRecord[0] && cfg.completionType == CompletionType.SPEED) {
+                    player.sendMessage("§6§lNEW RECORD! §rYou received a bonus multiplier!");
                 }
                 
                 if (rewardMessages.isEmpty()) {
@@ -6689,7 +7424,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     player.sendMessage(getMessage("admin.challenge-completed-rewards", "rewards", String.join(getMessage("admin.reward-separator"), rewardMessages)));
                 }
             }
-        }.runTaskLater(this, 1L); // 1 tick delay to ensure economy plugin processes the command
+        }.runTaskLater(this, 1L);
     }
     
     /**
@@ -8233,6 +8968,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
         clone.fallbackRewardCommands = new ArrayList<>(original.fallbackRewardCommands);
+        clone.difficultyTierRewards = new HashMap<>();
+        for (Map.Entry<String, List<TierReward>> entry : original.difficultyTierRewards.entrySet()) {
+            List<TierReward> clonedRewards = new ArrayList<>();
+            for (TierReward reward : entry.getValue()) {
+                TierReward cloned = new TierReward(reward.type, reward.chance);
+                cloned.material = reward.material;
+                cloned.amount = reward.amount;
+                cloned.itemStack = reward.itemStack != null ? reward.itemStack.clone() : null;
+                cloned.command = reward.command;
+                clonedRewards.add(cloned);
+            }
+            clone.difficultyTierRewards.put(entry.getKey(), clonedRewards);
+        }
+        clone.topTimeRewards = new ArrayList<>();
+        for (TierReward reward : original.topTimeRewards) {
+            TierReward cloned = new TierReward(reward.type, reward.chance);
+            cloned.material = reward.material;
+            cloned.amount = reward.amount;
+            cloned.itemStack = reward.itemStack != null ? reward.itemStack.clone() : null;
+            cloned.command = reward.command;
+            clone.topTimeRewards.add(cloned);
+        }
         clone.maxPartySize = original.maxPartySize;
         clone.timeLimitSeconds = original.timeLimitSeconds;
         clone.timeLimitWarnings = new ArrayList<>(original.timeLimitWarnings);
@@ -8266,6 +9023,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         target.fallbackRewardCommands.clear();
         target.fallbackRewardCommands.addAll(backup.fallbackRewardCommands);
+        target.difficultyTierRewards.clear();
+        for (Map.Entry<String, List<TierReward>> entry : backup.difficultyTierRewards.entrySet()) {
+            List<TierReward> restoredRewards = new ArrayList<>();
+            for (TierReward reward : entry.getValue()) {
+                TierReward restored = new TierReward(reward.type, reward.chance);
+                restored.material = reward.material;
+                restored.amount = reward.amount;
+                restored.itemStack = reward.itemStack != null ? reward.itemStack.clone() : null;
+                restored.command = reward.command;
+                restoredRewards.add(restored);
+            }
+            target.difficultyTierRewards.put(entry.getKey(), restoredRewards);
+        }
+        target.topTimeRewards.clear();
+        for (TierReward reward : backup.topTimeRewards) {
+            TierReward restored = new TierReward(reward.type, reward.chance);
+            restored.material = reward.material;
+            restored.amount = reward.amount;
+            restored.itemStack = reward.itemStack != null ? reward.itemStack.clone() : null;
+            restored.command = reward.command;
+            target.topTimeRewards.add(restored);
+        }
         target.maxPartySize = backup.maxPartySize;
         target.timeLimitSeconds = backup.timeLimitSeconds;
         target.timeLimitWarnings.clear();

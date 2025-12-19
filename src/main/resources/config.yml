@@ -1,7 +1,7 @@
 # Config version - do not modify
 config_version: 1
 
-# World players are sent to when using /challengecomplete or when time limit expires.
+# World players are sent to when using /challengecomplete or when time limit expires. (sends to world spawn)
 spawn-world: world
 
 # Party system settings

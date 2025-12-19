@@ -113,55 +113,122 @@ Example: `/challenge setspeed dungeon1 300`
 
 ## Rewards System
 
-### Fallback Rewards (Always Given)
-These rewards are given to all players who complete the challenge, regardless of completion type.
+The reward system uses difficulty tiers with inheritance, speed multipliers, and RNG chance. Higher difficulty tiers inherit rewards from lower tiers with multipliers applied.
 
-#### Add a Reward Command:
+### Difficulty Tier Rewards
+
+Each difficulty tier (easy, medium, hard, extreme) has its own reward table. Higher tiers inherit all lower tier rewards with multipliers.
+
+**Inheritance Example:**
+- **Easy**: Gets only Easy tier rewards (1.0x difficulty multiplier)
+- **Medium**: Gets Easy rewards (×1.5) + Medium rewards (×1.0)
+- **Hard**: Gets Easy (×3.0) + Medium (×2.0) + Hard (×1.0)
+- **Extreme**: Gets all previous (×9.0, ×6.0, ×3.0) + Extreme (×1.0)
+
+#### Add Tier Reward:
 ```
-/challenge addreward [id] <command>
+/challenge addtierreward [id] <tier> <type> [args] [chance]
 ```
-Examples:
-- `/challenge addreward dungeon1 eco give %player% 1000`
-- `/challenge addreward dungeon1 give %player% diamond 5`
-- `/challenge addreward dungeon1 give %player% iron_sword 1`
 
-**Note**: Use `%player%` as a placeholder - it will be replaced with the player's name.
+**Tiers:** `easy`, `medium`, `hard`, `extreme`
 
-#### Clear All Rewards:
+**Types:**
+- `hand` - Uses item in your hand
+  ```
+  /challenge addtierreward dungeon1 easy hand [chance]
+  ```
+- `item <material> [amount]` - Specifies item type
+  ```
+  /challenge addtierreward dungeon1 easy item DIAMOND 8 [chance]
+  ```
+- `command <command>` - Custom command
+  ```
+  /challenge addtierreward dungeon1 easy command eco give %player% 5000 [chance]
+  ```
+
+**Chance:** Optional, 0.0-1.0 (default: 1.0 = 100%). Lower values mean rewards have a random chance to be given.
+
+**Examples:**
+```
+/challenge addtierreward dungeon1 easy item DIAMOND 8 1.0
+/challenge addtierreward dungeon1 medium item BEACON 2 0.8
+/challenge addtierreward dungeon1 hard command eco give %player% 10000
+```
+
+#### Clear Tier Rewards:
+```
+/challenge cleartierrewards [id] <tier>
+```
+
+#### List Tier Rewards:
+```
+/challenge listtierrewards [id] [tier]
+```
+
+### Speed Multipliers (SPEED Challenges)
+
+For SPEED challenges, completion time affects reward multipliers:
+- **Gold tier** (fast time): 1.5x multiplier
+- **Silver tier** (average time): 1.0x multiplier (normal)
+- **Bronze tier** (slow time): 0.5x multiplier (half rewards)
+- **New record**: 3x multiplier (replaces tier multiplier)
+
+**Note:** Speed tiers (from `completion.tiers`) are still used to determine which multiplier applies, but `reward-commands` in tiers are **ignored**. Rewards come from difficulty tier rewards.
+
+### Top Time Rewards
+
+Special rewards only given when a player sets a new top time (SPEED challenges only). These get 3x multiplier on top of difficulty multiplier.
+
+#### Add Top Time Reward:
+```
+/challenge addtoptimereward [id] <hand|item|command> [args] [chance]
+```
+
+**Examples:**
+```
+/challenge addtoptimereward dungeon1 item NETHERITE_BLOCK 1 0.5
+/challenge addtoptimereward dungeon1 command eco give %player% 5000
+```
+
+### Fallback Rewards
+
+Fallback rewards are used if no difficulty tier rewards are set. They work with all completion types and support chance values.
+
+#### Add Fallback Reward:
+```
+/challenge addreward [id] <command> [chance]
+```
+
+**Examples:**
+```
+/challenge addreward dungeon1 eco give %player% 1000 1.0
+/challenge addreward dungeon1 give %player% diamond 5 0.8
+```
+
+**Note:** Use `%player%` as a placeholder - it will be replaced with the player's name.
+
+#### Clear All Fallback Rewards:
 ```
 /challenge clearrewards [id]
 ```
 
-### Speed Tier Rewards (SPEED Challenges Only)
-For SPEED challenges, you can set tiered rewards based on completion time. These are configured in `config.yml`:
+### Reward Calculation Example
 
-```yaml
-challenges:
-  dungeon1:
-    completion:
-      type: SPEED
-      max-seconds: 300
-      tiers:
-        - name: "Gold"
-          max-seconds: 60
-          reward-commands:
-            - "eco give %player% 5000"
-            - "give %player% diamond 10"
-        - name: "Silver"
-          max-seconds: 120
-          reward-commands:
-            - "eco give %player% 2000"
-        - name: "Bronze"
-          max-seconds: 180
-          reward-commands:
-            - "eco give %player% 1000"
-```
+**Scenario:** Player completes challenge on **Hard** difficulty, finishes in **60 seconds** (Gold tier), and sets a **new record**.
 
-**How it works:**
-- Players get rewards from the best tier they qualify for
-- If a player finishes in 45 seconds, they get Gold tier rewards
-- If they finish in 100 seconds, they get Silver tier rewards
-- All players also get fallback rewards
+**Rewards:**
+1. **Difficulty Tier Rewards:**
+   - Easy rewards: ×3.0 (Hard difficulty) × 3.0 (new record) = **9.0x**
+   - Medium rewards: ×2.0 (Hard difficulty) × 3.0 (new record) = **6.0x**
+   - Hard rewards: ×1.0 (Hard difficulty) × 3.0 (new record) = **3.0x**
+
+2. **Top Time Rewards:**
+   - Top time rewards: ×1.0 (Hard difficulty) × 3.0 (new record) = **3.0x**
+
+**Note:** If they finished in 60 seconds but it wasn't a new record, they'd get:
+- Easy: ×3.0 (Hard) × 1.5 (Gold tier) = **4.5x**
+- Medium: ×2.0 (Hard) × 1.5 (Gold tier) = **3.0x**
+- Hard: ×1.0 (Hard) × 1.5 (Gold tier) = **1.5x**
 
 ---
 
@@ -371,12 +438,16 @@ difficulty-reward-multipliers:
   extreme: 3.0   # Extreme = Hard * 3.0 (9.0x Easy total)
 ```
 
-**Example:**
-- Base reward: `eco give %player% 1000`
-- Easy: 1000 money (1.0x)
-- Medium: 1500 money (1.5x)
-- Hard: 3000 money (3.0x)
-- Extreme: 9000 money (9.0x)
+**How it works:**
+- These multipliers apply to **all** tier rewards (difficulty tier rewards, fallback rewards, top time rewards)
+- Speed multipliers (for SPEED challenges) are applied **on top** of difficulty multipliers
+- Example with Easy tier reward of 1000 money:
+  - Easy: 1000 money (1.0x difficulty)
+  - Medium: 1500 money (1.5x difficulty)
+  - Hard: 3000 money (3.0x difficulty)
+  - Extreme: 9000 money (9.0x difficulty)
+  - If Gold time (SPEED): Multiply by 1.5x
+  - If new record (SPEED): Multiply by 3.0x
 
 ---
 
@@ -444,12 +515,17 @@ anger:
 edit-mode:
   # What to do when a player disconnects while in edit mode
   # Options: "cancel" (restore from backup) or "save" (keep changes)
-  disconnect-action: cancel
+  disconnect-action: save
 ```
 
 **Options:**
 - `cancel`: If you disconnect while in edit mode, all changes are discarded and the challenge is restored from backup
 - `save`: If you disconnect while in edit mode, all changes are saved automatically
+
+**Disconnect Behavior:**
+- When you disconnect in edit mode, your original location (before entering edit mode) is saved
+- When you reconnect, you are automatically teleported back to that original location
+- This matches the behavior of `/challenge save` or `/challenge cancel` - you return to where you were before entering edit mode
 
 ### Challenge Area Settings
 
@@ -502,21 +578,53 @@ challenges:
     completion:
       type: SPEED                  # SPEED, BOSS, TIMER, ITEM, or NONE
       max-seconds: 300             # Max time for SPEED challenges
-      tiers:                       # Speed tier rewards
+      tiers:                       # Speed tiers (used for multipliers only, reward-commands are ignored)
         - name: GOLD
           max-seconds: 90
-          reward-commands:
-            - eco give %player% 5000
+          reward-commands: []       # IGNORED - kept for backward compatibility
         - name: SILVER
           max-seconds: 180
-          reward-commands:
-            - eco give %player% 2500
+          reward-commands: []       # IGNORED
         - name: BRONZE
           max-seconds: 300
-          reward-commands:
-            - eco give %player% 1000
+          reward-commands: []       # IGNORED
     
-    # Fallback rewards (always given on completion)
+    # Difficulty tier rewards (NEW - this is where rewards come from)
+    difficulty-tier-rewards:
+      easy:
+        rewards:
+          - type: COMMAND
+            command: "eco give %player% 5000"
+            chance: 1.0
+          - type: ITEM
+            material: DIAMOND
+            amount: 8
+            chance: 1.0
+      medium:
+        rewards:
+          - type: ITEM
+            material: BEACON
+            amount: 2
+            chance: 1.0
+      hard:
+        rewards:
+          - type: ITEM
+            material: NETHERITE_PICKAXE
+            amount: 1
+            chance: 1.0
+    
+    # Top time rewards (NEW - only given for new records)
+    top-time-rewards:
+      rewards:
+        - type: COMMAND
+          command: "eco give %player% 5000"
+          chance: 1.0
+        - type: ITEM
+          material: NETHERITE_BLOCK
+          amount: 1
+          chance: 0.5  # 50% chance
+    
+    # Fallback rewards (used if no difficulty-tier-rewards are set)
     reward-commands: []
     
     # Challenge state
@@ -762,8 +870,12 @@ When in edit mode, omit the challenge ID:
 - `setcooldown` - Set cooldown time
 - `settimelimit` - Set time limit
 - `setmaxparty` - Set party size limit
-- `addreward` - Add reward command
-- `clearrewards` - Clear all rewards
+- `addreward` - Add fallback reward command (with chance)
+- `clearrewards` - Clear all fallback rewards
+- `addtierreward` - Add reward to difficulty tier (easy/medium/hard/extreme)
+- `cleartierrewards` - Clear rewards for a specific tier
+- `listtierrewards` - List tier rewards
+- `addtoptimereward` - Add top time reward (SPEED challenges only)
 - `setchallengearea` - Set challenge area (captures state when set)
 - `clearchallengearea` - Clear challenge area
 - `setregenerationarea` - Set regeneration area (captures state automatically)
@@ -781,11 +893,13 @@ When in edit mode, omit the challenge ID:
 4. **Set regeneration areas** for challenges with destructible environments - this is what gets reset
 5. **Challenge area and regeneration area can overlap** - regeneration area should typically be larger or equal
 6. **Challenge area is only captured when set** - save command only recaptures regeneration area
-7. **Configure speed tier rewards** in `config.yml` for SPEED challenges
-8. **Use WorldEdit** (`//1` and `//2`) for easier area setup
-9. **Set appropriate cooldowns** to prevent challenge farming
-10. **Test difficulty tiers** to ensure rewards are balanced
-11. **Barrier boxing** (if enabled) only replaces air blocks, so it won't destroy existing structures
+7. **Use difficulty tier rewards** for better reward control - higher tiers inherit lower tier rewards
+8. **Set speed tiers** for SPEED challenges (used for multipliers, not rewards)
+9. **Use RNG chance** (0.0-1.0) to add grind elements - lower chance = rarer rewards
+10. **Use WorldEdit** (`//1` and `//2`) for easier area setup
+11. **Set appropriate cooldowns** to prevent challenge farming
+12. **Test difficulty tiers** to ensure rewards are balanced
+13. **Barrier boxing** (if enabled) only replaces air blocks, so it won't destroy existing structures
 
 ---
 
@@ -816,7 +930,10 @@ When in edit mode, omit the challenge ID:
 
 ### Edit mode stuck?
 - Use `/challenge save` or `/challenge cancel`
-- If you disconnect, edit mode is automatically cancelled and challenge is restored (configurable in config.yml)
+- If you disconnect, edit mode is automatically handled based on `edit-mode.disconnect-action` setting:
+  - `cancel`: Changes are discarded and challenge is restored from backup
+  - `save`: Changes are saved automatically
+- When you reconnect after disconnecting in edit mode, you are automatically returned to your original location (before entering edit mode)
 
 ### Challenge area not saving?
 - You must set challenge area before using `/challenge save`
