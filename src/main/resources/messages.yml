@@ -96,9 +96,8 @@ challenge:
   queue-unavailable: "&cThe challenge became unavailable. You have been re-added to the queue."
   queue-no-pending: "&cYou don't have a pending challenge. Removing from queue."
   died: "&cYou have died and been removed from the challenge. You have been returned to town."
-  teleport-blocked: "&cYou cannot teleport while in a challenge! Use &a/exit &cor &a/challengecomplete &cto leave."
+  teleport-blocked: "&cYou cannot teleport outside the challenge area! Use &a/exit &cor &a/challengecomplete &cto leave."
   teleport-blocked-into: "&cYou cannot teleport into challenge areas! Use a Conrad Challenge Book at the GateKeeper to enter."
-  command-blocked: "&cYou cannot use teleportation commands while in a challenge! Use &a/exit &cor &a/challengecomplete &cto leave."
   all-died: "&cAll party members have died. The challenge has failed. You have been returned to town."
 
 # Accept/Deny commands

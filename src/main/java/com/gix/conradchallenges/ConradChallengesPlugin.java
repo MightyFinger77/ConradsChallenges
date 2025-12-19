@@ -21,7 +21,6 @@ import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
-import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
@@ -6060,14 +6059,30 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         // Check if player is in an active challenge
         String challengeId = activeChallenges.get(uuid);
+        Location to = event.getTo();
+        Location from = event.getFrom();
+        
         if (challengeId == null) {
-            // Player not in challenge - allow all teleports
+            // Player NOT in challenge - check if they're trying to teleport INTO a challenge area
+            if (to != null) {
+                ChallengeConfig targetChallenge = getChallengeForLocation(to);
+                if (targetChallenge != null) {
+                    // Player is trying to teleport into a challenge area
+                    // Allow if player is admin, otherwise block
+                    if (!player.hasPermission("conradchallenges.admin")) {
+                        event.setCancelled(true);
+                        player.sendMessage(getMessage("challenge.teleport-blocked-into"));
+                        return;
+                    }
+                    // Admin bypass - allow teleport into challenge area
+                }
+            }
+            // Player not in challenge and not teleporting into challenge area - allow all teleports
             return;
         }
         
-        // Player is in a challenge - only allow teleports within the challenge area
-        Location to = event.getTo();
-        Location from = event.getFrom();
+        // Player IS in a challenge - only allow teleports within the challenge area
+        ChallengeConfig cfg = challenges.get(challengeId);
         
         // Allow teleports to spawnLocation (our exit/complete teleports)
         if (to != null && spawnLocation != null && 
@@ -6079,7 +6094,6 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         
         // Allow teleports to challenge teleport location (our entry teleport)
-        ChallengeConfig cfg = challenges.get(challengeId);
         Location teleportLoc = cfg != null ? getTeleportLocation(cfg) : null;
         if (cfg != null && teleportLoc != null && to != null &&
             teleportLoc.getWorld() != null && to.getWorld() != null &&
@@ -6097,9 +6111,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                        (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
             
             if (hasChallengeArea) {
-                // Challenge area is set - both locations must be within it
-                if (isLocationInChallengeArea(cfg, to) && isLocationInChallengeArea(cfg, from)) {
+                // Challenge area is set - check if both locations are within it
+                boolean toInArea = isLocationInChallengeArea(cfg, to);
+                boolean fromInArea = isLocationInChallengeArea(cfg, from);
+                
+                if (toInArea && fromInArea) {
                     // Both locations are within challenge area, allow teleport
+                    return;
+                } else if (!toInArea) {
+                    // Player is trying to teleport OUT of challenge area - block it
+                    event.setCancelled(true);
+                    player.sendMessage(getMessage("challenge.teleport-blocked"));
                     return;
                 }
             } else {
@@ -6110,13 +6132,18 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     from.getWorld().equals(cfg.destination.getWorld())) {
                     // Teleport is within destination world, allow it
                     return;
+                } else {
+                    // Player is trying to teleport OUT of destination world - block it
+                    event.setCancelled(true);
+                    player.sendMessage(getMessage("challenge.teleport-blocked"));
+                    return;
                 }
             }
         }
         
-        // Block all other teleports
+        // Block all other teleports (fallback)
         event.setCancelled(true);
-        player.sendMessage(ChatColor.RED + "You can only teleport within the challenge area!");
+        player.sendMessage(getMessage("challenge.teleport-blocked"));
     }
     
     /**
@@ -6367,49 +6394,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
      * Only blocks blocks if player is not in the challenge (to allow normal gameplay).
      */
     
-    @EventHandler(priority = EventPriority.HIGHEST)
-    public void onPlayerCommand(PlayerCommandPreprocessEvent event) {
-        Player player = event.getPlayer();
-        UUID uuid = player.getUniqueId();
-        
-        // Check if player is in edit mode
-        String editingChallengeId = null;
-        for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
-            if (entry.getValue().equals(uuid)) {
-                editingChallengeId = entry.getKey();
-                break;
-            }
-        }
-        
-        if (editingChallengeId != null) {
-            // Player is in edit mode - block teleportation commands
-            String command = event.getMessage().toLowerCase();
-            if (command.startsWith("/tpa") || command.startsWith("/home") || 
-                command.startsWith("/back") || command.startsWith("/warp") ||
-                command.startsWith("/claimspawn") || command.equals("/spawn") || command.startsWith("/spawn ") ||
-                command.startsWith("/tp ") || command.startsWith("/teleport ")) {
-                event.setCancelled(true);
-                player.sendMessage(getMessage("admin.challenge-edit-teleport-blocked"));
-            }
-            return;
-        }
-        
-        // Check if player is in an active challenge
-        String challengeId = activeChallenges.get(uuid);
-        if (challengeId == null) {
-            // Player not in challenge - allow all commands
-            return;
-        }
-        
-        // Player is in challenge - block teleportation commands
-        String command = event.getMessage().toLowerCase();
-        if (command.startsWith("/tpa") || command.startsWith("/home") || 
-            command.startsWith("/back") || command.startsWith("/warp") ||
-            command.startsWith("/claimspawn") || command.equals("/spawn") || command.startsWith("/spawn ")) {
-            event.setCancelled(true);
-            player.sendMessage(getMessage("challenge.command-blocked"));
-        }
-    }
+    // Command blocking removed - teleportation is now handled via PlayerTeleportEvent
+    // This allows all commands to execute, but teleports are blocked at the event level
+    // This is more secure and works with any teleport method (commands, plugins, etc.)
     
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerDeath(PlayerDeathEvent event) {
