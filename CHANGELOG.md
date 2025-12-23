@@ -1,5 +1,26 @@
 # Changelog
 
+## Version 3.0.4
+
+### Features
+- **Area Synchronization Command**: New `/challenge areasync [id]` command that automatically sets the regeneration area to match the challenge area's coordinates and size. Useful for quickly syncing regeneration areas when challenge areas are already set.
+
+### Improvements
+- **Set Destination Command**: `/challenge setdestination` can now be run outside of edit mode. This fixes the issue where admins couldn't set the destination before entering edit mode, since edit mode teleports players to the challenge area using the destination.
+- **Movement and Teleportation Restrictions**: Enhanced teleportation and movement blocking for players in challenges:
+  - Players cannot teleport outside the regeneration area while in a challenge
+  - Players cannot walk outside the regeneration area (movement is blocked and they are teleported back)
+  - Non-admin players cannot teleport into challenge areas (must use challenge books at GateKeeper)
+  - Admins can bypass teleportation restrictions to enter challenge areas
+
+### Commands
+- `/challenge areasync [id]` - Synchronize regeneration area with challenge area (copies challenge area coordinates to regeneration area)
+
+### Technical Changes
+- Removed command-based teleport blocking in favor of event-based location checks
+- Added `onPlayerMove` event handler to prevent players from leaving regeneration areas
+- Enhanced `onPlayerTeleport` event handler with more specific blocking logic
+
 ## Version 3.0.3
 
 ### Features

@@ -1,5 +1,5 @@
 # Config version - do not modify
-messages_version: 1
+messages_version: 4
 
 # ConradChallenges Messages Configuration
 # Use & for color codes (e.g., &a for green, &c for red, &e for yellow)
@@ -97,7 +97,10 @@ challenge:
   queue-no-pending: "&cYou don't have a pending challenge. Removing from queue."
   died: "&cYou have died and been removed from the challenge. You have been returned to town."
   teleport-blocked: "&cYou cannot teleport outside the challenge area! Use &a/exit &cor &a/challengecomplete &cto leave."
+  teleport-blocked-regen: "&cYou cannot teleport outside the regeneration area! Use &a/exit &cor &a/challengecomplete &cto leave."
   teleport-blocked-into: "&cYou cannot teleport into challenge areas! Use a Conrad Challenge Book at the GateKeeper to enter."
+  movement-blocked: "&cYou cannot leave the challenge area! Use &a/exit &cor &a/challengecomplete &cto leave."
+  movement-blocked-regen: "&cYou cannot leave the regeneration area! Use &a/exit &cor &a/challengecomplete &cto leave."
   all-died: "&cAll party members have died. The challenge has failed. You have been returned to town."
 
 # Accept/Deny commands
@@ -325,6 +328,7 @@ admin:
   challenge-setregenerationarea-command: "&e/conradchallenges challenge setregenerationarea <id>"
   challenge-clearregenerationarea-command: "&e/conradchallenges challenge clearregenerationarea <id>"
   challenge-captureregeneration-command: "&e/conradchallenges challenge captureregeneration <id>"
+  challenge-areasync-command: "&e/conradchallenges challenge areasync <id>"
   challenge-edit-command: "&e/conradchallenges challenge edit <id>"
   challenge-save-command: "&e/conradchallenges challenge save"
   challenge-cancel-command: "&e/conradchallenges challenge cancel"
@@ -347,6 +351,9 @@ admin:
   challenge-setautoregenerationy-command: "&e/conradchallenges challenge setautoregenerationy [id] [true|false]"
   challenge-setautoregenerationy-usage: "&eUsage: /conradchallenges challenge setautoregenerationy [id] [true|false]"
   challenge-setautoregenerationy-no-area: "&cChallenge '%id%' does not have a regeneration area set. Use setregenerationarea first."
+  challenge-areasync-usage: "&eUsage: /conradchallenges challenge areasync [id]"
+  challenge-areasync-no-challenge-area: "&cChallenge '%id%' does not have a challenge area set. Use setchallengearea first."
+  challenge-areasync-success: "&aSynchronized regeneration area with challenge area for '%id%'. Regeneration area: Corner 1: &7%x1%, %y1%, %z1%&a | Corner 2: &7%x2%, %y2%, %z2%"
   challenge-setautoregenerationy-invalid: "&cInvalid value '%value%'. Use true/false, on/off, enable/disable, or yes/no."
   challenge-setautoregenerationy-success: "&aAuto-extend Y range for challenge '%id%' is now %enabled%. Re-captured initial state."
   challenge-setautoregenerationy-failed: "&cFailed to re-capture initial state for challenge '%id%'."

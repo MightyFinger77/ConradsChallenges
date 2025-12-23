@@ -25,6 +25,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
@@ -71,7 +72,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         "setmaxparty", "addreward", "clearrewards", "addtierreward", "cleartierrewards", "listtierrewards", "addtoptimereward",
         "list", "info",
         "setregenerationarea", "clearregenerationarea", "captureregeneration", "setautoregenerationy",
-        "setchallengearea", "clearchallengearea",
+        "setchallengearea", "clearchallengearea", "areasync",
         "edit", "save", "cancel", "lockdown", "unlockdown"
     );
     
@@ -351,6 +352,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     
     // Edit mode: Track which challenges are being edited (challenge ID -> editor UUID)
     private final Map<String, UUID> challengeEditors = new HashMap<>();
+    
+    // World aliases for display names
+    private final Map<String, String> worldAliases = new HashMap<>();
     // Edit mode: Store original locations before edit (editor UUID -> original location)
     private final Map<UUID, Location> editorOriginalLocations = new HashMap<>();
     // Edit mode: Store original locations for disconnected players (editor UUID -> original location)
@@ -382,6 +386,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         loadMessages();
         loadNpcIds();
         loadSpawnLocation();
+        loadWorldAliases();
         loadDifficultyTiers();
         loadDifficultyRewardMultipliers();
         loadChallengesFromConfig();
@@ -659,6 +664,58 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         // Load barrier boxing setting
         barrierBoxingEnabled = config.getBoolean("challenge-area.barrier-boxing", false);
         getLogger().info("Barrier boxing for challenge areas: " + (barrierBoxingEnabled ? "enabled" : "disabled"));
+    }
+    
+    private void loadWorldAliases() {
+        FileConfiguration config = getConfig();
+        ConfigurationSection aliasesSection = config.getConfigurationSection("world-aliases");
+        worldAliases.clear();
+        
+        if (aliasesSection != null) {
+            for (String worldName : aliasesSection.getKeys(false)) {
+                String alias = aliasesSection.getString(worldName);
+                if (alias != null && !alias.isEmpty()) {
+                    worldAliases.put(worldName, ChatColor.translateAlternateColorCodes('&', alias));
+                }
+            }
+            getLogger().info("Loaded " + worldAliases.size() + " world aliases");
+        } else {
+            getLogger().info("No world aliases configured");
+        }
+    }
+    
+    /**
+     * Gets the world alias for a world name, or returns the world name if no alias is set.
+     * @param worldName The world name to get the alias for
+     * @return The world alias (with color codes) or the world name if no alias exists
+     */
+    public String getWorldAlias(String worldName) {
+        if (worldName == null) return "Unknown";
+        return worldAliases.getOrDefault(worldName, worldName);
+    }
+    
+    /**
+     * Gets the world alias for a player's current world.
+     * @param player The player to get the world alias for
+     * @return The world alias (with color codes) or the world name if no alias exists
+     */
+    public String getWorldAlias(Player player) {
+        if (player == null || player.getWorld() == null) return "Unknown";
+        return getWorldAlias(player.getWorld().getName());
+    }
+    
+    /**
+     * Gets the world alias for an offline player's last known world, or current world if online.
+     * @param player The offline player to get the world alias for
+     * @return The world alias (with color codes) or the world name if no alias exists
+     */
+    public String getWorldAlias(OfflinePlayer player) {
+        if (player == null) return "Unknown";
+        if (player.isOnline() && player.getPlayer() != null) {
+            return getWorldAlias(player.getPlayer());
+        }
+        // For offline players, we can't determine their world, so return "Unknown"
+        return "Unknown";
     }
 
     private void loadMessages() {
@@ -3678,6 +3735,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             player.sendMessage(getMessage("admin.challenge-clearregenerationarea-command"));
             player.sendMessage(getMessage("admin.challenge-captureregeneration-command"));
             player.sendMessage(getMessage("admin.challenge-setautoregenerationy-command"));
+            player.sendMessage(getMessage("admin.challenge-areasync-command"));
             player.sendMessage(getMessage("admin.challenge-edit-command"));
             player.sendMessage(getMessage("admin.challenge-save-command"));
             player.sendMessage(getMessage("admin.challenge-cancel-command"));
@@ -3806,10 +3864,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
 
         if (sub.equals("setdestination")) {
+            // setdestination can be run outside edit mode (needed to set destination before entering edit mode)
             String id = getChallengeIdForCommand(player, args, 1);
             if (id == null) {
                 player.sendMessage(getMessage("admin.challenge-setdestination-usage"));
-                player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
                 return true;
             }
             ChallengeConfig cfg = challenges.get(id);
@@ -4719,6 +4777,65 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             cfg.challengeCorner2 = null;
             saveChallengeToConfig(cfg);
             player.sendMessage(ChatColor.GREEN + "Challenge area cleared for '" + id + "'");
+            return true;
+        }
+
+        if (sub.equals("areasync")) {
+            // Require edit mode
+            if (!isPlayerInEditMode(player)) {
+                player.sendMessage(getMessage("admin.challenge-areasync-usage"));
+                player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
+                return true;
+            }
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-areasync-usage"));
+                player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            
+            // Check if challenge area is set
+            if (cfg.challengeCorner1 == null || cfg.challengeCorner2 == null) {
+                player.sendMessage(getMessage("admin.challenge-areasync-no-challenge-area", "id", id));
+                return true;
+            }
+            
+            // Copy challenge area corners to regeneration area
+            cfg.regenerationCorner1 = cfg.challengeCorner1.clone();
+            cfg.regenerationCorner2 = cfg.challengeCorner2.clone();
+            
+            // Clear any old initial states when setting a new regeneration area
+            challengeInitialStates.remove(id);
+            challengeRegenerationStatus.remove(id);
+            
+            player.sendMessage(getMessage("admin.challenge-areasync-success", "id", id,
+                "x1", String.valueOf(cfg.regenerationCorner1.getBlockX()),
+                "y1", String.valueOf(cfg.regenerationCorner1.getBlockY()),
+                "z1", String.valueOf(cfg.regenerationCorner1.getBlockZ()),
+                "x2", String.valueOf(cfg.regenerationCorner2.getBlockX()),
+                "y2", String.valueOf(cfg.regenerationCorner2.getBlockY()),
+                "z2", String.valueOf(cfg.regenerationCorner2.getBlockZ())));
+            
+            // Re-capture initial state (async)
+            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state... This may take a moment for large areas."));
+            final Player finalPlayer = player; // Capture player reference for callback
+            captureInitialState(cfg, success -> {
+                // Callback runs on main thread, so we can safely access player
+                if (finalPlayer != null && finalPlayer.isOnline()) {
+                    if (success) {
+                        finalPlayer.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
+                    } else {
+                        finalPlayer.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
+                    }
+                }
+            });
+            
+            saveChallengeToConfig(cfg);
             return true;
         }
 
@@ -6103,40 +6220,56 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return;
         }
         
-        // Only allow teleports within the challenge area (both to and from must be in challenge area)
-        // This prevents players from teleporting to friends in challenges from outside
+        // Only allow teleports within the regeneration area (both to and from must be in regeneration area)
+        // This prevents players from teleporting outside the regeneration area where they could mess things up
         if (cfg != null && to != null && from != null) {
-            // Check if challenge area is set
-            boolean hasChallengeArea = (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null) ||
-                                       (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
+            // Check if regeneration area is set
+            boolean hasRegenerationArea = (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
             
-            if (hasChallengeArea) {
-                // Challenge area is set - check if both locations are within it
-                boolean toInArea = isLocationInChallengeArea(cfg, to);
-                boolean fromInArea = isLocationInChallengeArea(cfg, from);
+            if (hasRegenerationArea) {
+                // Regeneration area is set - check if both locations are within it
+                boolean toInRegenArea = isLocationInRegenerationArea(cfg, to);
+                boolean fromInRegenArea = isLocationInRegenerationArea(cfg, from);
                 
-                if (toInArea && fromInArea) {
-                    // Both locations are within challenge area, allow teleport
+                if (toInRegenArea && fromInRegenArea) {
+                    // Both locations are within regeneration area, allow teleport
                     return;
-                } else if (!toInArea) {
-                    // Player is trying to teleport OUT of challenge area - block it
+                } else if (!toInRegenArea) {
+                    // Player is trying to teleport OUT of regeneration area - block it
                     event.setCancelled(true);
-                    player.sendMessage(getMessage("challenge.teleport-blocked"));
+                    player.sendMessage(getMessage("challenge.teleport-blocked-regen"));
                     return;
                 }
             } else {
-                // No challenge area set - allow teleports within destination world
-                if (cfg.destination != null && cfg.destination.getWorld() != null &&
-                    to.getWorld() != null && from.getWorld() != null &&
-                    to.getWorld().equals(cfg.destination.getWorld()) &&
-                    from.getWorld().equals(cfg.destination.getWorld())) {
-                    // Teleport is within destination world, allow it
-                    return;
+                // No regeneration area set - fall back to challenge area or destination world
+                boolean hasChallengeArea = (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null);
+                
+                if (hasChallengeArea) {
+                    // Use challenge area as fallback
+                    boolean toInArea = isLocationInChallengeArea(cfg, to);
+                    boolean fromInArea = isLocationInChallengeArea(cfg, from);
+                    
+                    if (toInArea && fromInArea) {
+                        return;
+                    } else if (!toInArea) {
+                        event.setCancelled(true);
+                        player.sendMessage(getMessage("challenge.teleport-blocked"));
+                        return;
+                    }
                 } else {
-                    // Player is trying to teleport OUT of destination world - block it
-                    event.setCancelled(true);
-                    player.sendMessage(getMessage("challenge.teleport-blocked"));
-                    return;
+                    // No areas set - allow teleports within destination world
+                    if (cfg.destination != null && cfg.destination.getWorld() != null &&
+                        to.getWorld() != null && from.getWorld() != null &&
+                        to.getWorld().equals(cfg.destination.getWorld()) &&
+                        from.getWorld().equals(cfg.destination.getWorld())) {
+                        // Teleport is within destination world, allow it
+                        return;
+                    } else {
+                        // Player is trying to teleport OUT of destination world - block it
+                        event.setCancelled(true);
+                        player.sendMessage(getMessage("challenge.teleport-blocked"));
+                        return;
+                    }
                 }
             }
         }
@@ -6144,6 +6277,95 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         // Block all other teleports (fallback)
         event.setCancelled(true);
         player.sendMessage(getMessage("challenge.teleport-blocked"));
+    }
+    
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onPlayerMove(PlayerMoveEvent event) {
+        Player player = event.getPlayer();
+        UUID uuid = player.getUniqueId();
+        
+        // Check if player is in an active challenge
+        String challengeId = activeChallenges.get(uuid);
+        if (challengeId == null) {
+            // Player not in challenge - allow all movement
+            return;
+        }
+        
+        // Check if player is in edit mode (admins can move freely in edit mode)
+        String editingChallengeId = null;
+        for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
+            if (entry.getValue().equals(uuid)) {
+                editingChallengeId = entry.getKey();
+                break;
+            }
+        }
+        
+        if (editingChallengeId != null) {
+            // Player is in edit mode - allow all movement
+            return;
+        }
+        
+        // Player IS in a challenge - prevent leaving the regeneration area
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null) {
+            return;
+        }
+        
+        Location to = event.getTo();
+        Location from = event.getFrom();
+        
+        // Allow movement if both locations are the same (just looking around)
+        if (to != null && from != null && to.getBlockX() == from.getBlockX() && 
+            to.getBlockY() == from.getBlockY() && to.getBlockZ() == from.getBlockZ()) {
+            return;
+        }
+        
+        // Check if regeneration area is set
+        boolean hasRegenerationArea = (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
+        
+        if (hasRegenerationArea) {
+            // Regeneration area is set - check if destination is within it
+            if (to != null && !isLocationInRegenerationArea(cfg, to)) {
+                // Player is trying to move OUT of regeneration area - block it
+                event.setCancelled(true);
+                // Teleport them back slightly to prevent them from getting stuck
+                Location safeLocation = from.clone();
+                if (safeLocation.getWorld() != null) {
+                    player.teleport(safeLocation);
+                }
+                player.sendMessage(getMessage("challenge.movement-blocked-regen"));
+                return;
+            }
+        } else {
+            // No regeneration area set - fall back to challenge area or destination world
+            boolean hasChallengeArea = (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null);
+            
+            if (hasChallengeArea) {
+                // Use challenge area as fallback
+                if (to != null && !isLocationInChallengeArea(cfg, to)) {
+                    event.setCancelled(true);
+                    Location safeLocation = from.clone();
+                    if (safeLocation.getWorld() != null) {
+                        player.teleport(safeLocation);
+                    }
+                    player.sendMessage(getMessage("challenge.movement-blocked"));
+                    return;
+                }
+            } else {
+                // No areas set - check destination world
+                if (cfg.destination != null && cfg.destination.getWorld() != null &&
+                    to != null && to.getWorld() != null &&
+                    !to.getWorld().equals(cfg.destination.getWorld())) {
+                    event.setCancelled(true);
+                    Location safeLocation = from.clone();
+                    if (safeLocation.getWorld() != null) {
+                        player.teleport(safeLocation);
+                    }
+                    player.sendMessage(getMessage("challenge.movement-blocked"));
+                    return;
+                }
+            }
+        }
     }
     
     /**

@@ -276,7 +276,8 @@ public class ConradChallengesPlaceholders {
             "leaderboard_count_<challengeid>",
             "rank_<challengeid>",
             "total_completions",
-            "challenges_completed"
+            "challenges_completed",
+            "world_alias"
         );
     }
     
@@ -300,7 +301,8 @@ public class ConradChallengesPlaceholders {
             "leaderboard_count_<challengeid>",
             "rank_<challengeid>",
             "total_completions",
-            "challenges_completed"
+            "challenges_completed",
+            "world_alias"
         ));
     }
 
@@ -428,6 +430,11 @@ public class ConradChallengesPlaceholders {
         // %conradchallenges_challenges_completed% - Number of unique challenges completed
         if (params.equalsIgnoreCase("challenges_completed")) {
             return String.valueOf(plugin.getChallengesCompletedCount(uuid));
+        }
+
+        // %conradchallenges_world_alias% - World alias for player's current world
+        if (params.equalsIgnoreCase("world_alias")) {
+            return plugin.getWorldAlias(player);
         }
 
         return null; // Placeholder is unknown

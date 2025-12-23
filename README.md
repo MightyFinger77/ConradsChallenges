@@ -68,6 +68,8 @@ Example: `/challenge setdestination dungeon1`
 
 This sets the spawn point inside the challenge area. This is where players will be teleported when they enter the challenge.
 
+**Note**: This command can be run outside of edit mode (unlike most other commands). This is necessary because edit mode teleports you to the challenge area using the destination, so you need to set the destination before entering edit mode.
+
 ### Step 4: Set Completion Type
 Choose how players complete the challenge:
 ```
@@ -361,6 +363,16 @@ This will automatically use your WorldEdit selection and capture the initial sta
 4. Run the command again
 
 The plugin will automatically capture the initial state of all blocks in the area.
+
+#### Option 3: Sync with Challenge Area
+If you've already set the challenge area and want the regeneration area to match it exactly:
+1. While in edit mode, run:
+```
+/challenge areasync
+```
+This will copy the challenge area's coordinates to the regeneration area and automatically capture the initial state.
+
+**Note**: This requires the challenge area to be set first using `/challenge setchallengearea`.
 
 ### Capturing Initial State
 After setting the regeneration area, the initial state is captured automatically. You can manually trigger it if needed (while in edit mode):
@@ -793,10 +805,10 @@ Completely disables a challenge. Players cannot start it or be queued.
 
 ### During the Challenge
 
-- **Teleportation**: You can teleport within the challenge area (both from and to must be in the area)
+- **Teleportation**: You can teleport within the regeneration area, but cannot teleport outside of it. Non-admin players cannot teleport into challenge areas (must use challenge books at GateKeeper).
 - **Explosion Protection**: Blocks in the challenge area are protected from explosions (creepers, TNT, etc.)
 - **Block Breaking**: You can break blocks normally (no protection)
-- **Commands**: Some teleport commands are blocked (`/spawn`, `/home`, `/warp`, etc.)
+- **Movement**: You cannot walk outside the regeneration area - movement is blocked and you'll be teleported back if you try to leave
 
 ### Completing the Challenge
 
@@ -924,6 +936,8 @@ If you disconnect while in a challenge:
    /challenge setcooldown 7200
    /challenge setchallengearea  (if using WorldEdit: //1 and //2 first)
    /challenge setregenerationarea  (if using WorldEdit: //1 and //2 first)
+   # Or sync regeneration area with challenge area:
+   /challenge areasync
    ```
 
 3. **Save or cancel:**
@@ -956,6 +970,7 @@ When in edit mode, omit the challenge ID:
 - `setchallengearea` - Set challenge area (captures state when set)
 - `clearchallengearea` - Clear challenge area
 - `setregenerationarea` - Set regeneration area (captures state automatically)
+- `areasync` - Sync regeneration area with challenge area (copies challenge area coordinates)
 - `clearregenerationarea` - Clear regeneration area
 - `captureregeneration` - Manually capture regeneration state
 - `setautoregenerationy` - Toggle auto-extend Y range
@@ -996,9 +1011,11 @@ When in edit mode, omit the challenge ID:
 - Verify challenge area is set (required for saving)
 
 ### Players can't teleport in challenge?
-- Check if challenge area is set
-- Both teleport locations (from and to) must be within challenge area
-- If no challenge area is set, players can teleport anywhere in the destination world
+- Players can only teleport within the regeneration area (cannot teleport outside)
+- Non-admin players cannot teleport into challenge areas (must use challenge books at GateKeeper)
+- If no regeneration area is set, the system falls back to challenge area or destination world restrictions
+- Admins can bypass teleportation restrictions to enter challenge areas
+- Players cannot walk outside the regeneration area - movement is blocked and they'll be teleported back
 
 ### Rewards not working?
 - Verify reward commands are correct (use `%player%` placeholder)

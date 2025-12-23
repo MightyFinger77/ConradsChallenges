@@ -10,19 +10,42 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ## Table of Contents
 
-- [Player Status](#player-status)
-- [Best Times](#best-times)
-- [Completion Status](#completion-status)
-- [Cooldowns](#cooldowns)
-- [Leaderboards](#leaderboards)
-- [Statistics](#statistics)
+- [Placeholder Reference Table](#placeholder-reference-table)
+- [Detailed Descriptions](#detailed-descriptions)
 - [Examples](#examples)
+- [Compatibility](#compatibility)
 
 ---
 
-## Player Status
+## Placeholder Reference Table
 
-### `%conradchallenges_active%`
+| Placeholder | Description | Returns | Parameters |
+|------------|-------------|---------|------------|
+| `%conradchallenges_active%` | Current challenge ID the player is in | Challenge ID or `none` | None |
+| `%conradchallenges_active_name%` | Display name of current challenge | Challenge name or `none` | None |
+| `%conradchallenges_besttime_<id>%` | Player's best completion time (seconds) | Time in seconds or `N/A` | `<id>` = challenge ID |
+| `%conradchallenges_besttime_formatted_<id>%` | Player's best completion time (formatted) | Formatted time (e.g., `1m 30s`) or `N/A` | `<id>` = challenge ID |
+| `%conradchallenges_completed_<id>%` | Whether player has completed challenge | `true` or `false` | `<id>` = challenge ID |
+| `%conradchallenges_completions_<id>%` | Number of times player completed challenge | Number (0 or 1) | `<id>` = challenge ID |
+| `%conradchallenges_cooldown_<id>%` | Remaining cooldown time (seconds) | Seconds remaining or `0` | `<id>` = challenge ID |
+| `%conradchallenges_cooldown_formatted_<id>%` | Remaining cooldown time (formatted) | Formatted time or `Ready` | `<id>` = challenge ID |
+| `%conradchallenges_top_<id>_<pos>%` | Player name at leaderboard position | Player name or `N/A` | `<id>` = challenge ID, `<pos>` = position (1-based) |
+| `%conradchallenges_top_time_<id>_<pos>%` | Completion time at leaderboard position (seconds) | Time in seconds or `N/A` | `<id>` = challenge ID, `<pos>` = position (1-based) |
+| `%conradchallenges_top_time_formatted_<id>_<pos>%` | Completion time at leaderboard position (formatted) | Formatted time or `N/A` | `<id>` = challenge ID, `<pos>` = position (1-based) |
+| `%conradchallenges_rank_<id>%` | Player's rank in challenge leaderboard | Rank number or `N/A` | `<id>` = challenge ID |
+| `%conradchallenges_leaderboard_count_<id>%` | Total entries in challenge leaderboard | Number of entries | `<id>` = challenge ID |
+| `%conradchallenges_rank_<id>%` | Player's rank in challenge leaderboard | Rank number or `N/A` | `<id>` = challenge ID |
+| `%conradchallenges_total_completions%` | Total unique challenges completed | Number of challenges | None |
+| `%conradchallenges_challenges_completed%` | Number of unique challenges completed | Number of challenges | None |
+| `%conradchallenges_world_alias%` | World alias for player's current world | World alias (with color codes) or world name | None |
+
+---
+
+## Detailed Descriptions
+
+### Player Status
+
+#### `%conradchallenges_active%`
 **Description:** Returns the ID of the challenge the player is currently in.
 
 **Returns:**
@@ -38,7 +61,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_active_name%`
+#### `%conradchallenges_active_name%`
 **Description:** Returns the display name (book title) of the challenge the player is currently in.
 
 **Returns:**
@@ -54,9 +77,9 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-## Best Times
+### Best Times
 
-### `%conradchallenges_besttime_<challengeid>%`
+#### `%conradchallenges_besttime_<challengeid>%`
 **Description:** Returns the player's best completion time for a specific challenge in seconds.
 
 **Parameters:**
@@ -75,7 +98,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_besttime_formatted_<challengeid>%`
+#### `%conradchallenges_besttime_formatted_<challengeid>%`
 **Description:** Returns the player's best completion time for a specific challenge in a human-readable format.
 
 **Parameters:**
@@ -100,9 +123,9 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-## Completion Status
+### Completion Status
 
-### `%conradchallenges_completed_<challengeid>%`
+#### `%conradchallenges_completed_<challengeid>%`
 **Description:** Returns whether the player has ever completed a specific challenge.
 
 **Parameters:**
@@ -121,7 +144,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_completions_<challengeid>%`
+#### `%conradchallenges_completions_<challengeid>%`
 **Description:** Returns the number of times the player has completed a specific challenge.
 
 **Parameters:**
@@ -141,9 +164,9 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-## Cooldowns
+### Cooldowns
 
-### `%conradchallenges_cooldown_<challengeid>%`
+#### `%conradchallenges_cooldown_<challengeid>%`
 **Description:** Returns the remaining cooldown time in seconds for a specific challenge.
 
 **Parameters:**
@@ -162,7 +185,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_cooldown_formatted_<challengeid>%`
+#### `%conradchallenges_cooldown_formatted_<challengeid>%`
 **Description:** Returns the remaining cooldown time in a human-readable format.
 
 **Parameters:**
@@ -186,9 +209,9 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-## Leaderboards
+### Leaderboards
 
-### `%conradchallenges_top_<challengeid>_<position>%`
+#### `%conradchallenges_top_<challengeid>_<position>%`
 **Description:** Returns the player name at a specific position in the challenge leaderboard.
 
 **Parameters:**
@@ -208,7 +231,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_top_time_<challengeid>_<position>%`
+#### `%conradchallenges_top_time_<challengeid>_<position>%`
 **Description:** Returns the completion time at a specific position in the challenge leaderboard (in seconds).
 
 **Parameters:**
@@ -228,7 +251,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_top_time_formatted_<challengeid>_<position>%`
+#### `%conradchallenges_top_time_formatted_<challengeid>_<position>%`
 **Description:** Returns the completion time at a specific position in the challenge leaderboard in a human-readable format.
 
 **Parameters:**
@@ -248,7 +271,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_rank_<challengeid>%`
+#### `%conradchallenges_rank_<challengeid>%`
 **Description:** Returns the player's current rank in a challenge leaderboard.
 
 **Parameters:**
@@ -267,7 +290,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_leaderboard_count_<challengeid>%`
+#### `%conradchallenges_leaderboard_count_<challengeid>%`
 **Description:** Returns the total number of entries in a challenge leaderboard.
 
 **Parameters:**
@@ -285,9 +308,9 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-## Statistics
+### Statistics
 
-### `%conradchallenges_total_completions%`
+#### `%conradchallenges_total_completions%`
 **Description:** Returns the total number of challenge completions across all challenges.
 
 **Returns:**
@@ -304,7 +327,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-### `%conradchallenges_challenges_completed%`
+#### `%conradchallenges_challenges_completed%`
 **Description:** Returns the number of unique challenges the player has completed.
 
 **Returns:**
@@ -318,6 +341,38 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 → "5" (player has completed 5 different challenges)
 → "0" (player hasn't completed any)
 ```
+
+---
+
+### World Information
+
+#### `%conradchallenges_world_alias%`
+**Description:** Returns the world alias for the player's current world. World aliases are configured in `config.yml` under the `world-aliases` section and allow you to replace world names with custom display names (with color codes).
+
+**Returns:**
+- World alias (with color codes applied) if configured in `config.yml`
+- World name if no alias is configured
+- `Unknown` if player is offline or world cannot be determined
+
+**Configuration:**
+World aliases are configured in `config.yml`:
+```yaml
+world-aliases:
+  world: "&aSurvival"
+  world_nether: "&aSurvival"
+  world_the_end: "&aSurvival"
+  hub_world: "&cAdmin Hub"
+```
+
+**Example:**
+```
+%conradchallenges_world_alias%
+→ "Survival" (if world alias is configured as "&aSurvival")
+→ "world" (if no alias is configured)
+→ "Unknown" (if player is offline)
+```
+
+**Note:** Color codes use `&` format (e.g., `&a` for green, `&c` for red). The placeholder automatically translates these to Minecraft color codes.
 
 ---
 
@@ -342,6 +397,7 @@ Cooldown: %conradchallenges_cooldown_formatted_dungeon1%
 ```
 Challenges Completed: %conradchallenges_challenges_completed%
 Current Challenge: %conradchallenges_active_name%
+World: %conradchallenges_world_alias%
 ```
 
 ---
@@ -365,6 +421,5 @@ These placeholders work with:
 
 ---
 
-**Plugin:** ConradChallenges v2.0.3  
+**Plugin:** ConradChallenges v3.0.4  
 **PlaceholderAPI Expansion:** Automatically registered when PlaceholderAPI is installed
-
