@@ -69,7 +69,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private static final List<String> CHALLENGE_SUBCOMMANDS = Arrays.asList(
         "create", "delete", "setbook", "clearbook", "setdestination", "settype", "setboss", 
         "settimer", "setitem", "setspeed", "setcooldown", "settimelimit", 
-        "setmaxparty", "addreward", "clearrewards", "addtierreward", "cleartierrewards", "listtierrewards", "addtoptimereward",
+        "setmaxparty", "addreward", "clearrewards", "addtierreward", "cleartierrewards", "listtierrewards", "removereward", "addtoptimereward",
         "list", "info",
         "setregenerationarea", "clearregenerationarea", "captureregeneration", "setautoregenerationy",
         "setchallengearea", "clearchallengearea", "areasync",
@@ -1229,15 +1229,38 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             int defaultVersion = defaultConfig.getInt("config_version", 1);
             int currentVersion = currentConfig.getInt("config_version", 0); // 0 means old config without version
             
-            // If versions match and config has version field, no migration needed
-            if (currentVersion == defaultVersion && currentConfig.contains("config_version")) {
+            getLogger().info("Config migration check: current version=" + currentVersion + ", default version=" + defaultVersion);
+            
+            // Check if there are missing keys in current config that exist in default
+            boolean hasMissingKeys = false;
+            List<String> missingKeys = new ArrayList<>();
+            for (String key : defaultConfig.getKeys(true)) {
+                // Skip version key and challenges section (challenges is preserved separately)
+                if (key.equals("config_version") || key.equals("challenges") || key.startsWith("challenges.")) {
+                    continue;
+                }
+                if (!currentConfig.contains(key)) {
+                    hasMissingKeys = true;
+                    missingKeys.add(key);
+                }
+            }
+            
+            if (!missingKeys.isEmpty()) {
+                getLogger().info("Found missing config keys: " + String.join(", ", missingKeys));
+            }
+            
+            // If versions match, config has version field, AND no missing keys, no migration needed
+            if (currentVersion == defaultVersion && currentConfig.contains("config_version") && !hasMissingKeys) {
+                getLogger().info("Config is up to date, skipping migration");
                 return; // Config is up to date
             }
+            
+            getLogger().info("Config migration needed - proceeding with migration...");
             
             // Simple merge approach: Use default config structure/comments, replace values with user's where they exist
             // This preserves all comments and formatting from default, while keeping user's custom values
             // Deprecated keys (in user config but not in default) are automatically removed
-            // For complex sections like 'challenges', preserve them entirely from original if they exist
+            // The 'challenges' section is completely ignored during migration - preserved as-is from original
             List<String> mergedLines = mergeConfigs(defaultLines, currentConfig, defaultConfig, currentLines);
             
             // Safety check: if challenges section was lost, abort migration
@@ -1363,6 +1386,42 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
                 
                 if (isSection) {
+                    // Special handling: Skip challenges section entirely - preserve it from original
+                    if (fullPath.equals("challenges")) {
+                        // Extract challenges section from original user config
+                        List<String> userSectionLines = extractSectionFromOriginalLines(originalUserLines, fullPath, currentIndent);
+                        
+                        if (!userSectionLines.isEmpty()) {
+                            // Add section header (with default's comment if any)
+                            merged.add(line);
+                            // Add user's challenges section content (preserving their formatting)
+                            merged.addAll(userSectionLines);
+                            
+                            // Skip the default section content
+                            int sectionStartIndent = currentIndent;
+                            while (i + 1 < defaultLines.size()) {
+                                String nextLine = defaultLines.get(i + 1);
+                                String nextTrimmed = nextLine.trim();
+                                if (nextTrimmed.isEmpty() || nextLine.startsWith("#")) {
+                                    int nextIndent = nextLine.length() - nextTrimmed.length();
+                                    if (nextIndent <= sectionStartIndent) {
+                                        break; // Comment at section level or above - end of section
+                                    }
+                                    i++; // Skip comment/blank within section
+                                } else {
+                                    int nextIndent = nextLine.length() - nextTrimmed.length();
+                                    if (nextIndent <= sectionStartIndent) {
+                                        break; // End of section
+                                    }
+                                    i++; // Skip this line (it's part of default section)
+                                }
+                            }
+                            
+                            pathStack.push(new Pair<>(keyPart, currentIndent));
+                            continue;
+                        }
+                    }
+                    
                     // This is a section - check if user has values for it
                     if (userConfig.contains(fullPath)) {
                         Object userValue = userConfig.get(fullPath);
@@ -2057,6 +2116,52 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 // Command text - no completion
                 return Collections.emptyList();
                 
+            case "addtierreward":
+            case "cleartierrewards":
+            case "listtierrewards":
+            case "removereward":
+                // First parameter: tier (easy, medium, hard, extreme)
+                completions.add("easy");
+                completions.add("medium");
+                completions.add("hard");
+                completions.add("extreme");
+                return filterCompletions(completions, partial);
+                
+            case "addtoptimereward":
+                // First parameter: type (hand, item, command)
+                completions.add("hand");
+                completions.add("item");
+                completions.add("command");
+                return filterCompletions(completions, partial);
+                
+            case "setautoregenerationy":
+                completions.add("true");
+                completions.add("false");
+                completions.add("on");
+                completions.add("off");
+                completions.add("enable");
+                completions.add("disable");
+                completions.add("yes");
+                completions.add("no");
+                return filterCompletions(completions, partial);
+                
+            case "lockdown":
+            case "unlockdown":
+            case "delete":
+            case "setbook":
+            case "clearbook":
+            case "setdestination":
+            case "setregenerationarea":
+            case "clearregenerationarea":
+            case "captureregeneration":
+            case "setchallengearea":
+            case "clearchallengearea":
+            case "areasync":
+            case "info":
+            case "edit":
+                // These commands need challenge ID (handled elsewhere)
+                return Collections.emptyList();
+                
             default:
                 // Commands that don't need parameters
                 return Collections.emptyList();
@@ -2569,6 +2674,30 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     
                     // If player is in edit mode, skip ID completion and go to parameter completion
                     if (isPlayerInEditMode(player)) {
+                        // For addtierreward in edit mode, check if we're at tier or type position
+                        if (second.equals("addtierreward")) {
+                            // args[2] is tier position, args[3] would be type position
+                            // If args.length == 3, we're typing the tier
+                            if (args.length == 3) {
+                                List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
+                                return filterCompletions(tiers, args[2]);
+                            }
+                            // If args.length == 4, we're typing the type
+                            if (args.length == 4) {
+                                List<String> types = Arrays.asList("hand", "item", "command");
+                                return filterCompletions(types, args[3]);
+                            }
+                        }
+                        // For cleartierrewards, listtierrewards in edit mode, complete tiers
+                        if (second.equals("cleartierrewards") || second.equals("listtierrewards")) {
+                            List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
+                            return filterCompletions(tiers, args[2]);
+                        }
+                        // For addtoptimereward in edit mode, complete types
+                        if (second.equals("addtoptimereward")) {
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[2]);
+                        }
                         // In edit mode - complete parameters directly
                         return handleEditModeTabCompletion(second, args[2], completions);
                     }
@@ -2589,6 +2718,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     String second = args[1].toLowerCase(Locale.ROOT);
                     // If in edit mode and this is a modification command, complete parameters
                     if (isPlayerInEditMode(player)) {
+                        // For addtierreward, cleartierrewards, listtierrewards in edit mode, complete tiers
+                        if (second.equals("addtierreward") || second.equals("cleartierrewards") || second.equals("listtierrewards")) {
+                            List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
+                            return filterCompletions(tiers, "");
+                        }
                         return handleEditModeTabCompletion(second, "", completions);
                     }
                 }
@@ -2658,28 +2792,279 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         return filterCompletions(completions, args[3]);
                     }
                     
-                    // Tab completion for addtierreward, cleartierrewards, listtierrewards
-                    if (second.equals("addtierreward") || second.equals("cleartierrewards") || second.equals("listtierrewards")) {
+                    // Tab completion for addtierreward - check if tier is already provided
+                    if (second.equals("addtierreward")) {
+                        int tierIndex = inEditMode ? 2 : 3;
+                        int typeIndex = inEditMode ? 3 : 4;
+                        
+                        // If we're at the tier position (args.length == tierIndex + 1), complete tiers
+                        if (args.length == tierIndex + 1) {
+                            List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
+                            return filterCompletions(tiers, args[tierIndex]);
+                        }
+                        // If we're at the type position (args.length == typeIndex + 1), complete types
+                        if (args.length == typeIndex + 1) {
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[typeIndex]);
+                        }
+                    }
+                    
+                    // Tab completion for addreward
+                    if (second.equals("addreward")) {
+                        int typeIndex = inEditMode ? 2 : 3;
+                        int materialIndex = inEditMode ? 3 : 4;
+                        
+                        // If we're at the type position, complete types
+                        if (args.length == typeIndex + 1) {
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[typeIndex]);
+                        }
+                        
+                        // If item type is selected and we're at the material position, complete materials
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
+                            if (args.length == materialIndex + 1) {
+                                // Complete material names
+                                for (Material mat : Material.values()) {
+                                    if (mat.isItem()) {
+                                        completions.add(mat.name());
+                                    }
+                                }
+                                return filterCompletions(completions, args[materialIndex]);
+                            }
+                        }
+                    }
+                    
+                    // Tab completion for cleartierrewards, listtierrewards, removereward
+                    if (second.equals("cleartierrewards") || second.equals("listtierrewards") || second.equals("removereward")) {
                         List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
                         return filterCompletions(tiers, args[paramIndex]);
+                    }
+                    
+                    // Tab completion for addtoptimereward
+                    if (second.equals("addtoptimereward")) {
+                        int typeIndex = inEditMode ? 2 : 3;
+                        int materialIndex = inEditMode ? 3 : 4;
+                        
+                        // If we're at the type position, complete types
+                        if (args.length == typeIndex + 1) {
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[typeIndex]);
+                        }
+                        
+                        // If item type is selected and we're at the material position, complete materials
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
+                            if (args.length == materialIndex + 1) {
+                                // Complete material names
+                                for (Material mat : Material.values()) {
+                                    if (mat.isItem()) {
+                                        completions.add(mat.name());
+                                    }
+                                }
+                                return filterCompletions(completions, args[materialIndex]);
+                            }
+                        }
                     }
                 }
             }
             
-            if (args.length == 5 || args.length == 6) {
+            if (args.length == 5 || args.length == 6 || args.length == 7 || args.length == 8) {
                 String first = args[0].toLowerCase(Locale.ROOT);
                 
                 if (first.equals("challenge") && player.hasPermission("conradchallenges.admin")) {
                     String second = args[1].toLowerCase(Locale.ROOT);
                     boolean inEditMode = isPlayerInEditMode(player);
-                    int paramIndex = inEditMode ? 2 : 3;
+                    
+                    // Tab completion for removereward <tier> <reward number>
+                    if (second.equals("removereward")) {
+                        int tierIndex = inEditMode ? 2 : 3;
+                        int numberIndex = inEditMode ? 3 : 4;
+                        
+                        // If we're at the tier position, complete tiers
+                        if (args.length == tierIndex + 1) {
+                            List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
+                            return filterCompletions(tiers, args[tierIndex]);
+                        }
+                        
+                        // If we're at the reward number position, complete reward numbers
+                        if (args.length == numberIndex + 1) {
+                            String id = getChallengeIdForCommand(player, args, 1);
+                            if (id != null) {
+                                ChallengeConfig cfg = challenges.get(id);
+                                if (cfg != null && args.length > tierIndex) {
+                                    String tier = args[tierIndex].toLowerCase();
+                                    if (Arrays.asList("easy", "medium", "hard", "extreme").contains(tier)) {
+                                        List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
+                                        if (rewards != null && !rewards.isEmpty()) {
+                                            for (int i = 1; i <= rewards.size(); i++) {
+                                                completions.add(String.valueOf(i));
+                                            }
+                                            return filterCompletions(completions, args[numberIndex]);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     
                     // Tab completion for addtierreward <tier> <type>
                     if (second.equals("addtierreward")) {
+                        int tierIndex = inEditMode ? 2 : 3;
                         int typeIndex = inEditMode ? 3 : 4;
+                        int materialIndex = inEditMode ? 4 : 5;
+                        int chanceIndex = inEditMode ? 4 : 5;
+                        
+                        // If we're at the type position, complete types
                         if (args.length == typeIndex + 1) {
                             List<String> types = Arrays.asList("hand", "item", "command");
                             return filterCompletions(types, args[typeIndex]);
+                        }
+                        
+                        // If item type is selected and we're at the material position, complete materials
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
+                            if (args.length == materialIndex + 1) {
+                                // Complete material names
+                                for (Material mat : Material.values()) {
+                                    if (mat.isItem()) {
+                                        completions.add(mat.name());
+                                    }
+                                }
+                                return filterCompletions(completions, args[materialIndex]);
+                            }
+                        }
+                        
+                        // If hand type is selected and we're at the chance position, complete chance
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("hand")) {
+                            if (args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                        }
+                    }
+                    
+                    // Tab completion for addreward <type> (for args.length == 5)
+                    if (second.equals("addreward")) {
+                        int typeIndex = inEditMode ? 1 : 2;
+                        int materialIndex = inEditMode ? 2 : 3;
+                        int amountIndex = inEditMode ? 3 : 4;
+                        int chanceIndex = inEditMode ? 4 : 5;
+                        
+                        // If we're at the type position, complete types
+                        if (args.length == typeIndex + 1) {
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[typeIndex]);
+                        }
+                        
+                        // If item type is selected
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
+                            if (args.length == materialIndex + 1) {
+                                // Complete material names
+                                for (Material mat : Material.values()) {
+                                    if (mat.isItem()) {
+                                        completions.add(mat.name());
+                                    }
+                                }
+                                return filterCompletions(completions, args[materialIndex]);
+                            } else if (args.length == amountIndex + 1) {
+                                // Complete common amounts
+                                completions.add("1");
+                                completions.add("8");
+                                completions.add("16");
+                                completions.add("32");
+                                completions.add("64");
+                                return filterCompletions(completions, args[amountIndex]);
+                            } else if (args.length == chanceIndex + 1) {
+                                // Complete chance hint
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                        }
+                        
+                        // If hand type is selected and we're at the chance position, complete chance
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("hand")) {
+                            int handChanceIndex = inEditMode ? 2 : 3;
+                            if (args.length == handChanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[handChanceIndex]);
+                            }
+                        }
+                    }
+                    
+                    // Tab completion for addtoptimereward <type> (for args.length == 5)
+                    if (second.equals("addtoptimereward")) {
+                        int typeIndex = inEditMode ? 2 : 3;
+                        int materialIndex = inEditMode ? 3 : 4;
+                        int amountIndex = inEditMode ? 4 : 5;
+                        int chanceIndex = inEditMode ? 3 : 4;
+                        
+                        if (args.length == typeIndex + 1) {
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[typeIndex]);
+                        }
+                        
+                        // If item type is selected
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
+                            if (args.length == materialIndex + 1) {
+                                // Complete material names
+                                for (Material mat : Material.values()) {
+                                    if (mat.isItem()) {
+                                        completions.add(mat.name());
+                                    }
+                                }
+                                return filterCompletions(completions, args[materialIndex]);
+                            } else if (args.length == amountIndex + 1) {
+                                // Complete common amounts
+                                completions.add("1");
+                                completions.add("8");
+                                completions.add("16");
+                                completions.add("32");
+                                completions.add("64");
+                                return filterCompletions(completions, args[amountIndex]);
+                            }
+                        }
+                        
+                        // If hand type is selected and we're at the chance position, complete chance
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("hand")) {
+                            if (args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                        }
+                    }
+                    
+                    // Tab completion for setautoregenerationy <true|false>
+                    if (second.equals("setautoregenerationy")) {
+                        int boolIndex = inEditMode ? 2 : 3;
+                        if (args.length == boolIndex + 1) {
+                            completions.add("true");
+                            completions.add("false");
+                            completions.add("on");
+                            completions.add("off");
+                            completions.add("enable");
+                            completions.add("disable");
+                            completions.add("yes");
+                            completions.add("no");
+                            return filterCompletions(completions, args[boolIndex]);
+                        }
+                    }
+                    
+                    // Tab completion for addreward <type> [args] [chance]
+                    // Similar to addtierreward but without difficulty tier
+                    if (second.equals("addreward")) {
+                        int typeIndex = inEditMode ? 1 : 2;
+                        int chanceIndex = inEditMode ? 2 : 3;
+                        
+                        // If we're at the type position, complete types
+                        if (args.length == typeIndex + 1) {
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[typeIndex]);
+                        }
+                        
+                        // If hand type is selected and we're at the chance position, complete chance
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("hand")) {
+                            if (args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
                         }
                     }
                 }
@@ -2692,36 +3077,165 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     String second = args[1].toLowerCase(Locale.ROOT);
                     boolean inEditMode = isPlayerInEditMode(player);
                     
-                    // Tab completion for addtierreward <tier> item <material>
+                    // Tab completion for addreward <type> [args] [chance] (for longer commands)
+                    // Similar to addtierreward but without difficulty tier
+                    if (second.equals("addreward")) {
+                        int typeIndex = inEditMode ? 1 : 2;
+                        if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
+                            int materialIndex = inEditMode ? 2 : 3;
+                            int amountIndex = inEditMode ? 3 : 4;
+                            int chanceIndex = inEditMode ? 4 : 5;
+                            
+                            if (args.length == materialIndex + 1) {
+                                // Complete material names
+                                for (Material mat : Material.values()) {
+                                    if (mat.isItem()) {
+                                        completions.add(mat.name());
+                                    }
+                                }
+                                return filterCompletions(completions, args[materialIndex]);
+                            } else if (args.length == amountIndex + 1) {
+                                // Complete common amounts
+                                completions.add("1");
+                                completions.add("8");
+                                completions.add("16");
+                                completions.add("32");
+                                completions.add("64");
+                                return filterCompletions(completions, args[amountIndex]);
+                            } else if (args.length == chanceIndex + 1) {
+                                // Complete chance hint
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                        } else if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("command")) {
+                            // Command type - check if we're at the chance position
+                            // Minimum args: command <command>, so chance would be after at least 2 args after type
+                            int minCommandArgs = inEditMode ? 3 : 4; // challenge addreward [id] command <cmd>
+                            int chanceIndex = inEditMode ? 4 : 5; // After command text
+                            
+                            // If we have at least the minimum args and we're at the chance position, suggest chance
+                            if (args.length >= minCommandArgs && args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                            // Otherwise, no completion for command text
+                            return Collections.emptyList();
+                        } else if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("hand")) {
+                            // Hand type - check for chance parameter
+                            int chanceIndex = inEditMode ? 2 : 3;
+                            if (args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                        }
+                    }
+                    
+                    // Tab completion for addtierreward <tier> item <material> [amount] [chance]
                     if (second.equals("addtierreward")) {
                         int tierIndex = inEditMode ? 2 : 3;
                         int typeIndex = inEditMode ? 3 : 4;
                         if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
                             int materialIndex = inEditMode ? 4 : 5;
+                            int amountIndex = inEditMode ? 5 : 6;
+                            int chanceIndex = inEditMode ? 6 : 7;
+                            
                             if (args.length == materialIndex + 1) {
+                                // Complete material names
                                 for (Material mat : Material.values()) {
                                     if (mat.isItem()) {
                                         completions.add(mat.name());
                                     }
                                 }
                                 return filterCompletions(completions, args[materialIndex]);
+                            } else if (args.length == amountIndex + 1) {
+                                // Complete common amounts (optional - user can type their own)
+                                completions.add("1");
+                                completions.add("8");
+                                completions.add("16");
+                                completions.add("32");
+                                completions.add("64");
+                                return filterCompletions(completions, args[amountIndex]);
+                            } else if (args.length == chanceIndex + 1) {
+                                // Complete chance hint (optional)
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                        } else if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("command")) {
+                            // Command type - check if we're at the chance position
+                            // Minimum args: tier command <command>, so chance would be after at least 3 args after type
+                            int minCommandArgs = inEditMode ? 5 : 6; // challenge addtierreward [id] tier command <cmd>
+                            int chanceIndex = inEditMode ? 6 : 7; // After command text
+                            
+                            // If we have at least the minimum args and we're at the chance position, suggest chance
+                            if (args.length >= minCommandArgs && args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                            // Otherwise, no completion for command text
+                            return Collections.emptyList();
+                        } else if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("hand")) {
+                            // Hand type - check for chance parameter
+                            int chanceIndex = inEditMode ? 4 : 5;
+                            if (args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
                             }
                         }
                     }
                     
-                    // Tab completion for addtoptimereward item <material>
+                    // Tab completion for addtoptimereward <type> [args] [chance]
                     if (second.equals("addtoptimereward")) {
                         int typeIndex = inEditMode ? 2 : 3;
                         if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("item")) {
                             int materialIndex = inEditMode ? 3 : 4;
+                            int amountIndex = inEditMode ? 4 : 5;
+                            int chanceIndex = inEditMode ? 5 : 6;
+                            
                             if (args.length == materialIndex + 1) {
+                                // Complete material names
                                 for (Material mat : Material.values()) {
                                     if (mat.isItem()) {
                                         completions.add(mat.name());
                                     }
                                 }
                                 return filterCompletions(completions, args[materialIndex]);
+                            } else if (args.length == amountIndex + 1) {
+                                // Complete common amounts
+                                completions.add("1");
+                                completions.add("8");
+                                completions.add("16");
+                                completions.add("32");
+                                completions.add("64");
+                                return filterCompletions(completions, args[amountIndex]);
+                            } else if (args.length == chanceIndex + 1) {
+                                // Complete chance hint
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
                             }
+                        } else if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("command")) {
+                            // Command type - check if we're at the chance position
+                            // Minimum args: command <command>, so chance would be after at least 2 args after type
+                            int minCommandArgs = inEditMode ? 3 : 4; // challenge addtoptimereward [id] command <cmd>
+                            int chanceIndex = inEditMode ? 4 : 5; // After command text
+                            
+                            // If we have at least the minimum args and we're at the chance position, suggest chance
+                            if (args.length >= minCommandArgs && args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                            // Otherwise, no completion for command text
+                            return Collections.emptyList();
+                        } else if (args.length > typeIndex && args[typeIndex].equalsIgnoreCase("hand")) {
+                            // Hand type - check for chance parameter
+                            int chanceIndex = inEditMode ? 3 : 4;
+                            if (args.length == chanceIndex + 1) {
+                                completions.add("<0.00-1.0>");
+                                return filterCompletions(completions, args[chanceIndex]);
+                            }
+                        } else if (args.length == typeIndex + 1) {
+                            // Complete type
+                            List<String> types = Arrays.asList("hand", "item", "command");
+                            return filterCompletions(types, args[typeIndex]);
                         }
                     }
                 }
@@ -2735,8 +3249,21 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     boolean inEditMode = isPlayerInEditMode(player);
                     
                     if (second.equals("setitem")) {
-                        // consume parameter: true/false
-                        int consumeIndex = inEditMode ? 3 : 4;
+                        int materialIndex = inEditMode ? 2 : 3;
+                        int amountIndex = inEditMode ? 3 : 4;
+                        int consumeIndex = inEditMode ? 4 : 5;
+                        
+                        // Amount parameter
+                        if (args.length == amountIndex + 1) {
+                            completions.add("1");
+                            completions.add("8");
+                            completions.add("16");
+                            completions.add("32");
+                            completions.add("64");
+                            return filterCompletions(completions, args[amountIndex]);
+                        }
+                        
+                        // Consume parameter: true/false
                         if (args.length == consumeIndex + 1) {
                             completions.add("true");
                             completions.add("false");
@@ -4163,32 +4690,143 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("challenge.unknown-id", "id", id));
                 return true;
             }
-            // Get command from args - if in edit mode, it's args[1+], otherwise args[2+]
-            int cmdStartIndex = isPlayerInEditMode(player) ? 1 : 2;
-            if (args.length <= cmdStartIndex) {
-                player.sendMessage(getMessage("admin.challenge-addreward-usage"));
+            int argStartIndex = isPlayerInEditMode(player) ? 1 : 2;
+            if (args.length <= argStartIndex) {
+                player.sendMessage("Usage: /challenge addreward [id] <hand|item|command> [args] [chance]");
+                player.sendMessage("Types: hand (uses item in hand), item <material> [amount], command <command>");
+                player.sendMessage("Chance: 0.0-1.0 (default: 1.0 = 100%)");
                 return true;
             }
             
-            // Parse chance (last argument if it's a number between 0.0 and 1.0)
+            String typeStr = args[argStartIndex].toLowerCase();
+            TierReward.Type type;
+            try {
+                type = TierReward.Type.valueOf(typeStr.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                player.sendMessage("Invalid type. Must be: hand, item, or command");
+                return true;
+            }
+            
+            TierReward reward = null;
             double chance = 1.0;
-            int cmdEndIndex = args.length;
-            if (args.length > cmdStartIndex) {
-                try {
-                    double lastArg = Double.parseDouble(args[args.length - 1]);
-                    if (lastArg >= 0.0 && lastArg <= 1.0) {
-                        chance = lastArg;
-                        cmdEndIndex = args.length - 1;
+            
+            switch (type) {
+                case HAND -> {
+                    if (args.length < argStartIndex + 1) {
+                        player.sendMessage("Usage: /challenge addreward [id] hand [chance]");
+                        return true;
                     }
-                } catch (NumberFormatException ignored) {
-                    // Not a number, use default chance of 1.0
+                    // Parse chance (last argument if it's a number between 0.0 and 1.0)
+                    if (args.length > argStartIndex + 1) {
+                        try {
+                            double lastArg = Double.parseDouble(args[args.length - 1]);
+                            if (lastArg >= 0.0 && lastArg <= 1.0) {
+                                chance = lastArg;
+                            }
+                        } catch (NumberFormatException ignored) {
+                            // Not a number, use default chance of 1.0
+                        }
+                    }
+                    reward = new TierReward(type, chance);
+                    ItemStack handItem = player.getInventory().getItemInMainHand();
+                    if (handItem == null || handItem.getType().isAir()) {
+                        player.sendMessage("You must be holding an item in your hand!");
+                        return true;
+                    }
+                    reward.itemStack = handItem.clone();
+                }
+                case ITEM -> {
+                    if (args.length < argStartIndex + 2) {
+                        player.sendMessage("Usage: /challenge addreward [id] item <material> [amount] [chance]");
+                        return true;
+                    }
+                    try {
+                        reward = new TierReward(type, chance);
+                        reward.material = Material.valueOf(args[argStartIndex + 1].toUpperCase());
+                        if (args.length > argStartIndex + 2) {
+                            try {
+                                double testChance = Double.parseDouble(args[args.length - 1]);
+                                if (testChance >= 0.0 && testChance <= 1.0) {
+                                    // Check if this is the chance parameter or amount
+                                    if (args.length == argStartIndex + 3) {
+                                        // Only 2 args after type, so this must be chance (amount is optional)
+                                        chance = testChance;
+                                        reward.amount = 1;
+                                    } else {
+                                        // More args, so last is chance, second-to-last is amount
+                                        reward.amount = Integer.parseInt(args[argStartIndex + 2]);
+                                        chance = testChance;
+                                    }
+                                } else {
+                                    reward.amount = Integer.parseInt(args[argStartIndex + 2]);
+                                }
+                            } catch (NumberFormatException e) {
+                                reward.amount = Integer.parseInt(args[argStartIndex + 2]);
+                            }
+                        } else {
+                            reward.amount = 1;
+                        }
+                        // chance is already set in constructor
+                    } catch (IllegalArgumentException e) {
+                        player.sendMessage("Invalid material: " + args[argStartIndex + 1]);
+                        return true;
+                    }
+                }
+                case COMMAND -> {
+                    if (args.length < argStartIndex + 2) {
+                        player.sendMessage("Usage: /challenge addreward [id] command <command> [chance]");
+                        return true;
+                    }
+                    // Parse chance (last argument if it's a number between 0.0 and 1.0)
+                    int argEndIndex = args.length;
+                    if (args.length > argStartIndex + 2) {
+                        try {
+                            double lastArg = Double.parseDouble(args[args.length - 1]);
+                            if (lastArg >= 0.0 && lastArg <= 1.0) {
+                                chance = lastArg;
+                                argEndIndex = args.length - 1;
+                            }
+                        } catch (NumberFormatException ignored) {
+                            // Not a number, use default chance of 1.0
+                        }
+                    }
+                    reward = new TierReward(type, chance);
+                    reward.command = String.join(" ", Arrays.copyOfRange(args, argStartIndex + 1, argEndIndex));
                 }
             }
             
-            String cmd = String.join(" ", Arrays.copyOfRange(args, cmdStartIndex, cmdEndIndex));
-            cfg.fallbackRewardCommands.add(new RewardWithChance(cmd, chance));
+            if (reward == null) {
+                player.sendMessage("Error: Failed to create reward. Please check your command syntax.");
+                return true;
+            }
+            
+            // Convert TierReward to RewardWithChance for fallback rewards
+            String cmd = null;
+            switch (reward.type) {
+                case HAND -> {
+                    if (reward.itemStack != null) {
+                        cmd = "give %player% " + reward.itemStack.getType().name() + " " + reward.itemStack.getAmount();
+                    } else {
+                        player.sendMessage("Error: No item in hand");
+                        return true;
+                    }
+                }
+                case ITEM -> {
+                    cmd = "give %player% " + reward.material.name() + " " + reward.amount;
+                }
+                case COMMAND -> {
+                    cmd = reward.command;
+                }
+            }
+            
+            if (cmd == null) {
+                player.sendMessage("Error: Failed to create command from reward");
+                return true;
+            }
+            
+            cfg.fallbackRewardCommands.add(new RewardWithChance(cmd, reward.chance));
             saveChallengeToConfig(cfg);
-            String chanceStr = chance == 1.0 ? "100%" : String.format("%.0f%%", chance * 100);
+            String chanceStr = reward.chance == 1.0 ? "100%" : String.format("%.0f%%", reward.chance * 100);
             player.sendMessage(getMessage("admin.challenge-addreward-success", "id", id, "command", cmd + " (chance: " + chanceStr + ")"));
             return true;
         }
@@ -4246,22 +4884,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
-            // Parse chance (last argument if it's a number between 0.0 and 1.0)
+            TierReward reward = null;
             double chance = 1.0;
-            int argEndIndex = args.length;
-            if (args.length > argStartIndex + 2) {
-                try {
-                    double lastArg = Double.parseDouble(args[args.length - 1]);
-                    if (lastArg >= 0.0 && lastArg <= 1.0) {
-                        chance = lastArg;
-                        argEndIndex = args.length - 1;
-                    }
-                } catch (NumberFormatException ignored) {
-                    // Not a number, use default chance of 1.0
-                }
-            }
-            
-            TierReward reward = new TierReward(type, chance);
             
             switch (type) {
                 case HAND -> {
@@ -4269,6 +4893,18 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         player.sendMessage("Usage: /challenge addtierreward [id] <tier> hand [chance]");
                         return true;
                     }
+                    // Parse chance (last argument if it's a number between 0.0 and 1.0)
+                    if (args.length > argStartIndex + 2) {
+                        try {
+                            double lastArg = Double.parseDouble(args[args.length - 1]);
+                            if (lastArg >= 0.0 && lastArg <= 1.0) {
+                                chance = lastArg;
+                            }
+                        } catch (NumberFormatException ignored) {
+                            // Not a number, use default chance of 1.0
+                        }
+                    }
+                    reward = new TierReward(type, chance);
                     ItemStack handItem = player.getInventory().getItemInMainHand();
                     if (handItem == null || handItem.getType().isAir()) {
                         player.sendMessage("You must be holding an item in your hand!");
@@ -4282,22 +4918,58 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         return true;
                     }
                     try {
-                        reward.material = Material.valueOf(args[argStartIndex + 2].toUpperCase());
+                        Material material = Material.valueOf(args[argStartIndex + 2].toUpperCase());
+                        
+                        // Parse amount and chance
+                        // Format: item <material> [amount] [chance]
+                        // If last arg is 0.0-1.0, it's chance; otherwise it's amount
+                        int amount = 1;
+                        double itemChance = 1.0;
+                        
                         if (args.length > argStartIndex + 3) {
+                            // Check if last argument is a chance value (0.0-1.0)
                             try {
-                                double testChance = Double.parseDouble(args[argStartIndex + 3]);
-                                if (testChance >= 0.0 && testChance <= 1.0 && argStartIndex + 3 == argEndIndex) {
-                                    // This is the chance parameter, not amount
-                                    reward.amount = 1;
+                                double lastArg = Double.parseDouble(args[args.length - 1]);
+                                if (lastArg >= 0.0 && lastArg <= 1.0) {
+                                    // Last arg is chance
+                                    itemChance = lastArg;
+                                    // Check if there's an amount before it
+                                    if (args.length > argStartIndex + 4) {
+                                        // Format: item <material> <amount> <chance>
+                                        try {
+                                            amount = Integer.parseInt(args[argStartIndex + 3]);
+                                        } catch (NumberFormatException e) {
+                                            player.sendMessage("Invalid amount. Must be a number.");
+                                            return true;
+                                        }
+                                    } else {
+                                        // Format: item <material> <chance> (no amount specified)
+                                        amount = 1;
+                                    }
                                 } else {
-                                    reward.amount = Integer.parseInt(args[argStartIndex + 3]);
+                                    // Last arg is not a chance, so it must be amount (and no chance specified)
+                                    amount = Integer.parseInt(args[argStartIndex + 3]);
+                                    itemChance = 1.0;
                                 }
                             } catch (NumberFormatException e) {
-                                reward.amount = Integer.parseInt(args[argStartIndex + 3]);
+                                // Last arg is not a number, so it's not chance - must be amount
+                                try {
+                                    amount = Integer.parseInt(args[argStartIndex + 3]);
+                                    itemChance = 1.0;
+                                } catch (NumberFormatException e2) {
+                                    player.sendMessage("Invalid amount. Must be a number.");
+                                    return true;
+                                }
                             }
                         } else {
-                            reward.amount = 1;
+                            // No amount or chance specified
+                            amount = 1;
+                            itemChance = 1.0;
                         }
+                        
+                        reward = new TierReward(type, itemChance);
+                        reward.material = material;
+                        reward.amount = amount;
                     } catch (IllegalArgumentException e) {
                         player.sendMessage("Invalid material: " + args[argStartIndex + 2]);
                         return true;
@@ -4308,13 +4980,33 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         player.sendMessage("Usage: /challenge addtierreward [id] <tier> command <command> [chance]");
                         return true;
                     }
+                    // Parse chance (last argument if it's a number between 0.0 and 1.0)
+                    int argEndIndex = args.length;
+                    if (args.length > argStartIndex + 3) {
+                        try {
+                            double lastArg = Double.parseDouble(args[args.length - 1]);
+                            if (lastArg >= 0.0 && lastArg <= 1.0) {
+                                chance = lastArg;
+                                argEndIndex = args.length - 1;
+                            }
+                        } catch (NumberFormatException ignored) {
+                            // Not a number, use default chance of 1.0
+                        }
+                    }
+                    reward = new TierReward(type, chance);
                     reward.command = String.join(" ", Arrays.copyOfRange(args, argStartIndex + 2, argEndIndex));
                 }
             }
             
+            if (reward == null) {
+                player.sendMessage("Error: Failed to create reward. Please check your command syntax.");
+                return true;
+            }
+            
             cfg.difficultyTierRewards.computeIfAbsent(tier, k -> new ArrayList<>()).add(reward);
             saveChallengeToConfig(cfg);
-            String chanceStr = chance == 1.0 ? "100%" : String.format("%.0f%%", chance * 100);
+            double finalChance = reward.chance;
+            String chanceStr = finalChance == 1.0 ? "100%" : String.format("%.0f%%", finalChance * 100);
             player.sendMessage("Added " + typeStr + " reward to " + tier + " tier (chance: " + chanceStr + ")");
             return true;
         }
@@ -4404,6 +5096,64 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             if (!foundAny) {
                 player.sendMessage("No tier rewards found" + (filterTier != null ? " for " + filterTier + " tier" : ""));
+            }
+            return true;
+        }
+
+        if (sub.equals("removereward")) {
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            int argStartIndex = isPlayerInEditMode(player) ? 1 : 2;
+            if (args.length <= argStartIndex + 1) {
+                player.sendMessage("Usage: /challenge removereward [id] <tier> <reward number>");
+                player.sendMessage("Tiers: easy, medium, hard, extreme");
+                player.sendMessage("Use /challenge listtierrewards [id] [tier] to see reward numbers");
+                return true;
+            }
+            
+            String tier = args[argStartIndex].toLowerCase();
+            if (!Arrays.asList("easy", "medium", "hard", "extreme").contains(tier)) {
+                player.sendMessage("Invalid tier. Must be: easy, medium, hard, or extreme");
+                return true;
+            }
+            
+            List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
+            if (rewards == null || rewards.isEmpty()) {
+                player.sendMessage("No rewards found for " + tier + " tier");
+                return true;
+            }
+            
+            try {
+                int rewardNumber = Integer.parseInt(args[argStartIndex + 1]);
+                if (rewardNumber < 1 || rewardNumber > rewards.size()) {
+                    player.sendMessage("Invalid reward number. Must be between 1 and " + rewards.size());
+                    return true;
+                }
+                
+                // Remove the reward (list is 1-indexed, array is 0-indexed)
+                TierReward removed = rewards.remove(rewardNumber - 1);
+                
+                // If the list is now empty, remove the tier entry
+                if (rewards.isEmpty()) {
+                    cfg.difficultyTierRewards.remove(tier);
+                }
+                
+                saveChallengeToConfig(cfg);
+                
+                String rewardType = removed.type.name();
+                player.sendMessage("Removed reward #" + rewardNumber + " from " + tier + " tier (" + rewardType + ")");
+            } catch (NumberFormatException e) {
+                player.sendMessage("Invalid reward number: " + args[argStartIndex + 1]);
+                player.sendMessage("Use /challenge listtierrewards [id] " + tier + " to see reward numbers");
+                return true;
             }
             return true;
         }
@@ -7472,6 +8222,35 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
     
     /**
+     * Checks if a material is a tool, armor, or weapon (items that shouldn't be multiplied)
+     */
+    private boolean isToolArmorOrWeapon(Material material) {
+        if (material == null) return false;
+        
+        String matName = material.name().toUpperCase();
+        
+        // Check for tools
+        if (matName.contains("_AXE") || matName.contains("_PICKAXE") || 
+            matName.contains("_SHOVEL") || matName.contains("_HOE") ||
+            matName.contains("_SWORD") || matName.contains("_BOW") ||
+            matName.contains("_CROSSBOW") || matName.contains("_TRIDENT") ||
+            matName.equals("SHEARS") || matName.equals("FLINT_AND_STEEL") ||
+            matName.equals("FISHING_ROD") || matName.equals("CARROT_ON_A_STICK") ||
+            matName.equals("WARPED_FUNGUS_ON_A_STICK") || matName.equals("SHIELD")) {
+            return true;
+        }
+        
+        // Check for armor
+        if (matName.contains("_HELMET") || matName.contains("_CHESTPLATE") ||
+            matName.contains("_LEGGINGS") || matName.contains("_BOOTS") ||
+            matName.equals("ELYTRA") || matName.equals("TURTLE_HELMET")) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
      * Applies a single tier reward to a player
      */
     private void applyTierReward(Player player, TierReward reward, double difficultyMultiplier, double speedMultiplier) {
@@ -7486,16 +8265,29 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             case HAND -> {
                 if (reward.itemStack != null) {
                     ItemStack item = reward.itemStack.clone();
-                    int newAmount = (int) Math.max(1, Math.round(item.getAmount() * totalMultiplier));
-                    item.setAmount(newAmount);
-                    player.getInventory().addItem(item);
+                    // Don't multiply tools, armor, or weapons
+                    if (isToolArmorOrWeapon(item.getType())) {
+                        // Give item as-is without multiplier
+                        player.getInventory().addItem(item);
+                    } else {
+                        int newAmount = (int) Math.max(1, Math.round(item.getAmount() * totalMultiplier));
+                        item.setAmount(newAmount);
+                        player.getInventory().addItem(item);
+                    }
                 }
             }
             case ITEM -> {
                 if (reward.material != null) {
-                    int newAmount = (int) Math.max(1, Math.round(reward.amount * totalMultiplier));
-                    ItemStack item = new ItemStack(reward.material, newAmount);
-                    player.getInventory().addItem(item);
+                    // Don't multiply tools, armor, or weapons
+                    if (isToolArmorOrWeapon(reward.material)) {
+                        // Give item as-is without multiplier
+                        ItemStack item = new ItemStack(reward.material, reward.amount);
+                        player.getInventory().addItem(item);
+                    } else {
+                        int newAmount = (int) Math.max(1, Math.round(reward.amount * totalMultiplier));
+                        ItemStack item = new ItemStack(reward.material, newAmount);
+                        player.getInventory().addItem(item);
+                    }
                 }
             }
             case COMMAND -> {
@@ -7676,6 +8468,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 // Check if this part looks like a material (all caps or mixed case)
                 String part = parts[i];
                 if (part.length() > 0 && Character.isUpperCase(part.charAt(0))) {
+                    // Check if this material is a tool, armor, or weapon - don't multiply those
+                    try {
+                        Material material = Material.valueOf(part.toUpperCase());
+                        if (isToolArmorOrWeapon(material)) {
+                            // Don't multiply tools, armor, or weapons - return command as-is
+                            return command;
+                        }
+                    } catch (IllegalArgumentException ignored) {
+                        // Not a valid material, continue
+                    }
+                    
                     // Next part might be the amount
                     try {
                         int amount = Integer.parseInt(parts[i + 1]);

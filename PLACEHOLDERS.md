@@ -6,6 +6,8 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 **Note:** All placeholders are player-specific and will return data for the player viewing them (in scoreboards, chat, etc.).
 
+**Special Keyword:** You can use `active` as a challenge ID in any placeholder that requires a challenge ID. This will automatically use the player's current active challenge. If the player is not in a challenge, it will return `N/A` or `none` (depending on the placeholder).
+
 ---
 
 ## Table of Contents
@@ -23,18 +25,17 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 |------------|-------------|---------|------------|
 | `%conradchallenges_active%` | Current challenge ID the player is in | Challenge ID or `none` | None |
 | `%conradchallenges_active_name%` | Display name of current challenge | Challenge name or `none` | None |
-| `%conradchallenges_besttime_<id>%` | Player's best completion time (seconds) | Time in seconds or `N/A` | `<id>` = challenge ID |
-| `%conradchallenges_besttime_formatted_<id>%` | Player's best completion time (formatted) | Formatted time (e.g., `1m 30s`) or `N/A` | `<id>` = challenge ID |
-| `%conradchallenges_completed_<id>%` | Whether player has completed challenge | `true` or `false` | `<id>` = challenge ID |
-| `%conradchallenges_completions_<id>%` | Number of times player completed challenge | Number (0 or 1) | `<id>` = challenge ID |
-| `%conradchallenges_cooldown_<id>%` | Remaining cooldown time (seconds) | Seconds remaining or `0` | `<id>` = challenge ID |
-| `%conradchallenges_cooldown_formatted_<id>%` | Remaining cooldown time (formatted) | Formatted time or `Ready` | `<id>` = challenge ID |
-| `%conradchallenges_top_<id>_<pos>%` | Player name at leaderboard position | Player name or `N/A` | `<id>` = challenge ID, `<pos>` = position (1-based) |
-| `%conradchallenges_top_time_<id>_<pos>%` | Completion time at leaderboard position (seconds) | Time in seconds or `N/A` | `<id>` = challenge ID, `<pos>` = position (1-based) |
-| `%conradchallenges_top_time_formatted_<id>_<pos>%` | Completion time at leaderboard position (formatted) | Formatted time or `N/A` | `<id>` = challenge ID, `<pos>` = position (1-based) |
-| `%conradchallenges_rank_<id>%` | Player's rank in challenge leaderboard | Rank number or `N/A` | `<id>` = challenge ID |
-| `%conradchallenges_leaderboard_count_<id>%` | Total entries in challenge leaderboard | Number of entries | `<id>` = challenge ID |
-| `%conradchallenges_rank_<id>%` | Player's rank in challenge leaderboard | Rank number or `N/A` | `<id>` = challenge ID |
+| `%conradchallenges_besttime_<id>%` | Player's best completion time (seconds) | Time in seconds or `N/A` | `<id>` = challenge ID or `active` |
+| `%conradchallenges_besttime_formatted_<id>%` | Player's best completion time (formatted) | Formatted time (e.g., `1m 30s`) or `N/A` | `<id>` = challenge ID or `active` |
+| `%conradchallenges_completed_<id>%` | Whether player has completed challenge | `true` or `false` | `<id>` = challenge ID or `active` |
+| `%conradchallenges_completions_<id>%` | Number of times player completed challenge | Number (0 or 1) | `<id>` = challenge ID or `active` |
+| `%conradchallenges_cooldown_<id>%` | Remaining cooldown time (seconds) | Seconds remaining or `0` | `<id>` = challenge ID or `active` |
+| `%conradchallenges_cooldown_formatted_<id>%` | Remaining cooldown time (formatted) | Formatted time or `Ready` | `<id>` = challenge ID or `active` |
+| `%conradchallenges_top_<id>_<pos>%` | Player name at leaderboard position | Player name or `N/A` | `<id>` = challenge ID or `active`, `<pos>` = position (1-based) |
+| `%conradchallenges_top_time_<id>_<pos>%` | Completion time at leaderboard position (seconds) | Time in seconds or `N/A` | `<id>` = challenge ID or `active`, `<pos>` = position (1-based) |
+| `%conradchallenges_top_time_formatted_<id>_<pos>%` | Completion time at leaderboard position (formatted) | Formatted time or `N/A` | `<id>` = challenge ID or `active`, `<pos>` = position (1-based) |
+| `%conradchallenges_rank_<id>%` | Player's rank in challenge leaderboard | Rank number or `N/A` | `<id>` = challenge ID or `active` |
+| `%conradchallenges_leaderboard_count_<id>%` | Total entries in challenge leaderboard | Number of entries | `<id>` = challenge ID or `active` |
 | `%conradchallenges_total_completions%` | Total unique challenges completed | Number of challenges | None |
 | `%conradchallenges_challenges_completed%` | Number of unique challenges completed | Number of challenges | None |
 | `%conradchallenges_world_alias%` | World alias for player's current world | World alias (with color codes) or world name | None |
@@ -83,17 +84,21 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 **Description:** Returns the player's best completion time for a specific challenge in seconds.
 
 **Parameters:**
-- `<challengeid>` - The ID of the challenge (e.g., `dungeon1`, `parkour_challenge`)
+- `<challengeid>` - The ID of the challenge (e.g., `dungeon1`, `parkour_challenge`) or `active` to use the player's current active challenge
 
 **Returns:**
 - Time in seconds (e.g., `90`, `125`) if the player has completed the challenge
-- `N/A` if the player has not completed the challenge
+- `N/A` if the player has not completed the challenge or is not in a challenge (when using `active`)
 
 **Example:**
 ```
 %conradchallenges_besttime_dungeon1%
 → "90" (90 seconds)
 → "N/A" (not completed)
+
+%conradchallenges_besttime_active%
+→ "90" (best time in current challenge)
+→ "N/A" (not in a challenge or not completed)
 ```
 
 ---
@@ -102,11 +107,11 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 **Description:** Returns the player's best completion time for a specific challenge in a human-readable format.
 
 **Parameters:**
-- `<challengeid>` - The ID of the challenge
+- `<challengeid>` - The ID of the challenge or `active` to use the player's current active challenge
 
 **Returns:**
 - Formatted time (e.g., `1m 30s`, `45s`, `2m`) if the player has completed the challenge
-- `N/A` if the player has not completed the challenge
+- `N/A` if the player has not completed the challenge or is not in a challenge (when using `active`)
 
 **Format:**
 - Less than 60 seconds: `45s`
@@ -119,6 +124,10 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 → "1m 30s"
 → "45s"
 → "N/A" (not completed)
+
+%conradchallenges_besttime_formatted_active%
+→ "1m 30s" (best time in current challenge)
+→ "N/A" (not in a challenge or not completed)
 ```
 
 ---
@@ -215,18 +224,22 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 **Description:** Returns the player name at a specific position in the challenge leaderboard.
 
 **Parameters:**
-- `<challengeid>` - The ID of the challenge
+- `<challengeid>` - The ID of the challenge or `active` to use the player's current active challenge
 - `<position>` - The leaderboard position (1 = first place, 2 = second place, etc.)
 
 **Returns:**
 - Player name at the specified position
-- `N/A` if the position doesn't exist or challenge has no completions
+- `N/A` if the position doesn't exist, challenge has no completions, or player is not in a challenge (when using `active`)
 
 **Example:**
 ```
 %conradchallenges_top_dungeon1_1%
 → "PlayerName" (first place)
 → "N/A" (no leaderboard entries)
+
+%conradchallenges_top_active_1%
+→ "PlayerName" (first place in current challenge)
+→ "N/A" (not in a challenge or no leaderboard entries)
 ```
 
 ---
@@ -275,17 +288,21 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 **Description:** Returns the player's current rank in a challenge leaderboard.
 
 **Parameters:**
-- `<challengeid>` - The ID of the challenge
+- `<challengeid>` - The ID of the challenge or `active` to use the player's current active challenge
 
 **Returns:**
 - Player's rank (1-based, where 1 = first place) if the player has completed the challenge
-- `N/A` if the player has not completed the challenge
+- `N/A` if the player has not completed the challenge or is not in a challenge (when using `active`)
 
 **Example:**
 ```
 %conradchallenges_rank_dungeon1%
 → "3" (player is in 3rd place)
 → "N/A" (player hasn't completed)
+
+%conradchallenges_rank_active%
+→ "3" (player is in 3rd place in current challenge)
+→ "N/A" (not in a challenge or hasn't completed)
 ```
 
 ---
@@ -379,11 +396,25 @@ world-aliases:
 ## Examples
 
 ### Scoreboard Example
+
+**Using specific challenge ID:**
 ```
 Challenge: %conradchallenges_active_name%
 Best Time: %conradchallenges_besttime_formatted_dungeon1%
 Rank: #%conradchallenges_rank_dungeon1%
 Cooldown: %conradchallenges_cooldown_formatted_dungeon1%
+```
+
+**Using `active` keyword (automatically uses current challenge):**
+```
+Challenge: %conradchallenges_active_name%
+Best Time: %conradchallenges_besttime_formatted_active%
+Rank: #%conradchallenges_rank_active%
+Cooldown: %conradchallenges_cooldown_formatted_active%
+Top Leaderboard:
+#1: %conradchallenges_top_active_1% - %conradchallenges_top_time_formatted_active_1%
+#2: %conradchallenges_top_active_2% - %conradchallenges_top_time_formatted_active_2%
+#3: %conradchallenges_top_active_3% - %conradchallenges_top_time_formatted_active_3%
 ```
 
 ### Leaderboard Display
@@ -410,6 +441,7 @@ World: %conradchallenges_world_alias%
 - Leaderboard positions are **1-based** (1 = first place, 2 = second place, etc.)
 - Cooldowns return `0` or `Ready` when expired or not set
 - Challenge IDs are case-sensitive and must match exactly
+- **Special `active` keyword**: Use `active` as the challenge ID in any placeholder to automatically use the player's current active challenge. If the player is not in a challenge, placeholders will return `N/A` or `none` (depending on the placeholder type)
 
 ## Compatibility
 
@@ -423,3 +455,37 @@ These placeholders work with:
 
 **Plugin:** ConradChallenges v3.0.4  
 **PlaceholderAPI Expansion:** Automatically registered when PlaceholderAPI is installed
+
+---
+
+## Using the `active` Keyword
+
+Instead of hardcoding a specific challenge ID, you can use `active` as a special keyword that automatically uses the player's current active challenge. This is especially useful for scoreboards that should display information about whatever challenge the player is currently in.
+
+### When to Use `active`
+
+- **Dynamic scoreboards** that show data for the current challenge
+- **Leaderboards** that automatically switch based on the active challenge
+- **Player stats** that update based on the current challenge
+
+### Examples with `active`
+
+```
+# Leaderboard for current challenge
+%conradchallenges_top_active_1%
+%conradchallenges_top_time_formatted_active_1%
+
+# Player stats for current challenge
+%conradchallenges_rank_active%
+%conradchallenges_besttime_formatted_active%
+
+# Cooldown for current challenge
+%conradchallenges_cooldown_formatted_active%
+```
+
+### Behavior
+
+- If the player **is in a challenge**: `active` resolves to that challenge's ID and returns data for it
+- If the player **is not in a challenge**: Returns `N/A` or `none` (depending on the placeholder type)
+
+This allows you to create a single scoreboard configuration that works for all challenges without needing separate scoreboards for each challenge ID.
