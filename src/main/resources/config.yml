@@ -27,6 +27,19 @@ difficulty-reward-multipliers:
   hard: 2.0      # Hard = Medium * 2.0 (3.0x Easy total)
   extreme: 3.0   # Extreme = Hard * 3.0 (9.0x Easy total)
 
+# Lives system: Number of lives per difficulty tier
+# When a player dies, they keep inventory and are teleported back to challenge destination
+# When lives run out, they're removed from challenge and drop inventory
+lives-per-tier:
+  easy: 3        # Easy tier gets 3 lives
+  medium: 2      # Medium tier gets 2 lives
+  hard: 1        # Hard tier gets 1 life
+  extreme: 1     # Extreme tier gets 1 life
+
+# Buy-back fee: Amount to pay to get back into challenge after running out of lives
+# Players can use /buyback command to pay this fee and re-enter with lives reset
+buy-back-fee: 6000.0  # Default: $6000
+
 # GateKeeper NPC UUID list (set via /conradchallenges setnpc)
 npcs: []
 

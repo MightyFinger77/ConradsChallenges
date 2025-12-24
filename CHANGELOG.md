@@ -1,5 +1,41 @@
 # Changelog
 
+## Version 3.0.5
+
+### Features
+- **Lives System**: Players now have a limited number of lives based on difficulty tier. When dying with lives remaining, players keep inventory and respawn in the challenge. When lives run out, players are removed and drop inventory normally.
+- **Buy-Back System**: New `/buyback` command allows players who ran out of lives to pay a fee and re-enter the challenge with lives reset. Fee is configurable in `config.yml`.
+- **Dead Party Member Rewards**: Party members who die (run out of lives) but whose party completes the challenge receive Easy tier rewards with 0.5x multiplier, regardless of the actual difficulty tier selected.
+- **MythicMobs Spawner Cooldown Reset**: All MythicMobs spawner cooldowns within a challenge's regeneration area are automatically reset when players complete or exit a challenge. This ensures teams don't have to wait on spawner cooldowns from previous teams.
+- **Lives Placeholder**: New PlaceholderAPI placeholder `%conradchallenges_lives%` displays remaining lives for a player in their current challenge.
+
+### Improvements
+- **Regeneration Performance Optimization**: Chunk collection phase during regeneration is now async and time-budgeted, preventing TPS drops on large challenge areas. The initial chunk collection that previously blocked the main thread when iterating through millions of blocks is now spread across multiple ticks.
+- **Completion Key Consumption**: `/cc` command now consumes completion keys from ALL party members who have them, not just one key from one player.
+- **Item Reward Display**: Item rewards are now properly displayed in completion messages along with money rewards.
+- **Custom Item Serialization**: HAND rewards now fully preserve custom items including NBT data, CustomModelData (resource pack models/textures), custom names, lore, and all other item properties.
+
+### Fixes
+- Fixed missing message keys `admin.reward-money-format` and `admin.reward-money-format-decimal` that caused "Message not found" errors.
+- Fixed custom items (with NBT/CustomModelData) not being saved properly - now uses full ItemStack serialization instead of just Material and amount.
+
+### Commands
+- `/buyback` - Buy back into a challenge after running out of lives (requires economy plugin)
+
+### Configuration
+- `lives-per-tier` - Configure lives per difficulty tier (easy, medium, hard, extreme)
+- `buy-back-fee` - Configure the fee amount for buying back into challenges
+
+### Technical Changes
+- Added `scheduleChunkCollection()` method to process chunk collection in async batches (10ms per tick)
+- Added `resetMythicMobsSpawnersInArea()` method that uses reflection to reset spawner cooldowns and warmup timers
+- Added `runRewardCommandsForDeadPartyMember()` method to give dead party members Easy tier rewards with 0.5x multiplier
+- ItemStack serialization now uses `ItemStack.serialize()` and `ItemStack.deserialize()` for full NBT preservation
+- Lives tracking system with per-player and per-tier configuration
+- Dead party member tracking for reward distribution on party completion
+- Spawner cooldown reset runs on challenge completion (`/cc`) and exit (`/exits`) commands
+- MythicMobs integration uses reflection to maintain compatibility across different API versions
+
 ## Version 3.0.4
 
 ### Features

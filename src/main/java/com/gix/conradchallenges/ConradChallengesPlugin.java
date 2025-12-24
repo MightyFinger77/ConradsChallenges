@@ -374,6 +374,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private final Map<String, Double> difficultyRewardMultipliers = new HashMap<>();
     // Cumulative multipliers (tier name -> total multiplier including all previous tiers)
     private final Map<String, Double> cumulativeRewardMultipliers = new HashMap<>();
+    
+    // Lives system: Track remaining lives per player (player UUID -> remaining lives)
+    private final Map<UUID, Integer> playerLives = new HashMap<>();
+    // Lives per tier (tier name -> number of lives)
+    private final Map<String, Integer> tierLives = new HashMap<>();
+    // Buy-back fee (amount to pay to get back into challenge with lives reset)
+    private double buyBackFee = 100.0;  // Default 100
+    
+    // Track dead party members (player UUID -> challenge ID) - for giving rewards when party completes
+    private final Map<UUID, String> deadPartyMembers = new HashMap<>();
 
     @Override
     public void onEnable() {
@@ -391,6 +401,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         loadChallengeAliases();
         loadDifficultyTiers();
         loadDifficultyRewardMultipliers();
+        loadLivesSystem();
         loadChallengesFromConfig();
         setupDataFile();
         loadData();
@@ -912,6 +923,38 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         "x, Extreme=" + cumulativeRewardMultipliers.get("extreme") + "x");
     }
     
+    private void loadLivesSystem() {
+        FileConfiguration config = getConfig();
+        
+        // Load lives per tier
+        ConfigurationSection livesSection = config.getConfigurationSection("lives-per-tier");
+        if (livesSection == null) {
+            getLogger().warning("No lives-per-tier section found in config, using defaults");
+            tierLives.put("easy", 3);
+            tierLives.put("medium", 2);
+            tierLives.put("hard", 1);
+            tierLives.put("extreme", 1);
+        } else {
+            tierLives.put("easy", livesSection.getInt("easy", 3));
+            tierLives.put("medium", livesSection.getInt("medium", 2));
+            tierLives.put("hard", livesSection.getInt("hard", 1));
+            tierLives.put("extreme", livesSection.getInt("extreme", 1));
+        }
+        
+        getLogger().info("Loaded lives per tier: Easy=" + tierLives.get("easy") + 
+                        ", Medium=" + tierLives.get("medium") + 
+                        ", Hard=" + tierLives.get("hard") + 
+                        ", Extreme=" + tierLives.get("extreme"));
+        
+        // Load buy-back fee
+        buyBackFee = config.getDouble("buy-back-fee", 100.0);
+        if (buyBackFee < 0) {
+            buyBackFee = 100.0;
+            getLogger().warning("Invalid buy-back-fee in config (negative), using default: 100.0");
+        }
+        getLogger().info("Buy-back fee set to: $" + buyBackFee);
+    }
+    
     private void saveNpcIds() {
         List<String> list = npcIds.stream().map(UUID::toString).collect(Collectors.toList());
         getConfig().set("npcs", list);
@@ -1062,18 +1105,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                 TierReward reward = new TierReward(type, chance);
                                 switch (type) {
                                     case HAND -> {
-                                        String itemData = String.valueOf(map.get("item-data"));
-                                        if (itemData != null && !itemData.isEmpty()) {
+                                        Object itemDataObj = map.get("item-data");
+                                        if (itemDataObj != null) {
                                             try {
-                                                // Deserialize ItemStack from base64 or use Material
-                                                if (itemData.contains(";")) {
-                                                    String[] parts = itemData.split(";");
-                                                    Material mat = Material.valueOf(parts[0]);
-                                                    int amount = parts.length > 1 ? Integer.parseInt(parts[1]) : 1;
-                                                    reward.itemStack = new ItemStack(mat, amount);
+                                                // Try to deserialize as Map (new format with full ItemStack data)
+                                                if (itemDataObj instanceof Map) {
+                                                    @SuppressWarnings("unchecked")
+                                                    Map<String, Object> itemMap = (Map<String, Object>) itemDataObj;
+                                                    reward.itemStack = ItemStack.deserialize(itemMap);
                                                 } else {
-                                                    Material mat = Material.valueOf(itemData);
-                                                    reward.itemStack = new ItemStack(mat, 1);
+                                                    // Fallback to old format (Material;amount) for backward compatibility
+                                                    String itemData = String.valueOf(itemDataObj);
+                                                    if (!itemData.isEmpty()) {
+                                                        if (itemData.contains(";")) {
+                                                            String[] parts = itemData.split(";");
+                                                            Material mat = Material.valueOf(parts[0]);
+                                                            int amount = parts.length > 1 ? Integer.parseInt(parts[1]) : 1;
+                                                            reward.itemStack = new ItemStack(mat, amount);
+                                                        } else {
+                                                            Material mat = Material.valueOf(itemData);
+                                                            reward.itemStack = new ItemStack(mat, 1);
+                                                        }
+                                                    }
                                                 }
                                             } catch (Exception e) {
                                                 getLogger().warning("Failed to load HAND reward item for challenge " + id + ": " + e.getMessage());
@@ -1114,17 +1167,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         TierReward reward = new TierReward(type, chance);
                         switch (type) {
                             case HAND -> {
-                                String itemData = String.valueOf(map.get("item-data"));
-                                if (itemData != null && !itemData.isEmpty()) {
+                                Object itemDataObj = map.get("item-data");
+                                if (itemDataObj != null) {
                                     try {
-                                        if (itemData.contains(";")) {
-                                            String[] parts = itemData.split(";");
-                                            Material mat = Material.valueOf(parts[0]);
-                                            int amount = parts.length > 1 ? Integer.parseInt(parts[1]) : 1;
-                                            reward.itemStack = new ItemStack(mat, amount);
+                                        // Try to deserialize as Map (new format with full ItemStack data)
+                                        if (itemDataObj instanceof Map) {
+                                            @SuppressWarnings("unchecked")
+                                            Map<String, Object> itemMap = (Map<String, Object>) itemDataObj;
+                                            reward.itemStack = ItemStack.deserialize(itemMap);
                                         } else {
-                                            Material mat = Material.valueOf(itemData);
-                                            reward.itemStack = new ItemStack(mat, 1);
+                                            // Fallback to old format (Material;amount) for backward compatibility
+                                            String itemData = String.valueOf(itemDataObj);
+                                            if (!itemData.isEmpty()) {
+                                                if (itemData.contains(";")) {
+                                                    String[] parts = itemData.split(";");
+                                                    Material mat = Material.valueOf(parts[0]);
+                                                    int amount = parts.length > 1 ? Integer.parseInt(parts[1]) : 1;
+                                                    reward.itemStack = new ItemStack(mat, amount);
+                                                } else {
+                                                    Material mat = Material.valueOf(itemData);
+                                                    reward.itemStack = new ItemStack(mat, 1);
+                                                }
+                                            }
                                         }
                                     } catch (Exception e) {
                                         getLogger().warning("Failed to load HAND reward item for challenge " + id + ": " + e.getMessage());
@@ -2055,7 +2119,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     switch (reward.type) {
                         case HAND -> {
                             if (reward.itemStack != null) {
-                                rewardMap.put("item-data", reward.itemStack.getType().name() + ";" + reward.itemStack.getAmount());
+                                // Serialize full ItemStack including NBT, custom names, lore, CustomModelData, etc.
+                                // This preserves all item data including custom resource pack models/textures
+                                rewardMap.put("item-data", reward.itemStack.serialize());
                             }
                         }
                         case ITEM -> {
@@ -3849,27 +3915,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
 
             // Check if any party member has a Completion Key
-            Player keyHolder = null;
-            ItemStack completionKey = null;
+            List<Player> keyHolders = new ArrayList<>();
             
-            // First check the player who used the command
-            completionKey = findCompletionKey(player);
-            if (completionKey != null) {
-                keyHolder = player;
-            } else {
-                // Check other party members
-                for (Player member : partyMembers) {
-                    if (member.equals(player)) continue; // Already checked
-                    ItemStack key = findCompletionKey(member);
-                    if (key != null) {
-                        completionKey = key;
-                        keyHolder = member;
-                        break;
-                    }
+            // Check all party members for completion keys
+            for (Player member : partyMembers) {
+                ItemStack key = findCompletionKey(member);
+                if (key != null) {
+                    keyHolders.add(member);
                 }
             }
 
-            if (completionKey == null || keyHolder == null) {
+            if (keyHolders.isEmpty()) {
                 if (partyMembers.size() > 1) {
                     player.sendMessage(getMessage("completion.no-key-party"));
                     player.sendMessage(getMessage("completion.key-required"));
@@ -3881,12 +3937,21 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
-            // Consume the key from whoever has it
-            consumeCompletionKey(keyHolder, completionKey);
+            // Consume keys from all party members who have them
+            for (Player keyHolder : keyHolders) {
+                ItemStack key = findCompletionKey(keyHolder);
+                if (key != null) {
+                    consumeCompletionKey(keyHolder, key);
+                    // Notify if it's not the command user
+                    if (!keyHolder.equals(player)) {
+                        keyHolder.sendMessage(getMessage("completion.key-consumed", "player", player.getName()));
+                    }
+                }
+            }
             
-            // If party member other than command user has the key, notify them
-            if (!keyHolder.equals(player)) {
-                keyHolder.sendMessage(getMessage("completion.key-consumed", "player", player.getName()));
+            // Notify command user if multiple keys were consumed
+            if (keyHolders.size() > 1) {
+                player.sendMessage(getMessage("completion.keys-consumed-multiple", "count", String.valueOf(keyHolders.size())));
             }
 
             // Complete challenge for all party members
@@ -3935,6 +4000,22 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 // Clean up challenge state
                 activeChallenges.remove(memberUuid);
                 challengeStartTimes.remove(memberUuid);
+                playerLives.remove(memberUuid);
+            }
+            
+            // Give rewards to dead party members (easy tier with 0.5x multiplier)
+            for (Map.Entry<UUID, String> entry : new HashMap<>(deadPartyMembers).entrySet()) {
+                UUID deadPlayerUuid = entry.getKey();
+                String deadPlayerChallengeId = entry.getValue();
+                
+                if (deadPlayerChallengeId.equals(challengeId)) {
+                    Player deadPlayer = Bukkit.getPlayer(deadPlayerUuid);
+                    if (deadPlayer != null && deadPlayer.isOnline()) {
+                        // Give easy tier rewards with 0.5x multiplier
+                        runRewardCommandsForDeadPartyMember(deadPlayer, cfg, challengeId);
+                        deadPartyMembers.remove(deadPlayerUuid);
+                    }
+                }
             }
             
                 // Clean up difficulty tier if no players are active in this challenge
@@ -3981,6 +4062,81 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return new ArrayList<>();
         });
 
+        // /buyback - Buy back into challenge after running out of lives
+        Objects.requireNonNull(getCommand("buyback")).setExecutor((sender, cmd, label, args) -> {
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(getMessage("general.players-only"));
+                return true;
+            }
+            UUID uuid = player.getUniqueId();
+            
+            // Check if player was in a challenge but ran out of lives
+            // First check dead party members
+            String challengeId = deadPartyMembers.get(uuid);
+            
+            // If not found, check pending death teleports (for solo players or recently dead)
+            if (challengeId == null) {
+                challengeId = pendingDeathTeleports.get(uuid);
+            }
+            
+            if (challengeId == null) {
+                player.sendMessage(getMessage("buyback.no-challenge"));
+                return true;
+            }
+            
+            ChallengeConfig cfg = challenges.get(challengeId);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.config-invalid"));
+                return true;
+            }
+            
+            // Check if economy is available
+            if (economy == null) {
+                player.sendMessage(getMessage("buyback.no-economy"));
+                return true;
+            }
+            
+            // Check if player has enough money
+            double balance = economy.getBalance(player);
+            if (balance < buyBackFee) {
+                player.sendMessage(getMessage("buyback.insufficient-funds", "fee", String.format("%.2f", buyBackFee), "balance", String.format("%.2f", balance)));
+                return true;
+            }
+            
+            // Check if challenge is still available (not locked or in use by others)
+            if (isChallengeLocked(challengeId)) {
+                player.sendMessage(getMessage("buyback.challenge-locked"));
+                return true;
+            }
+            
+            // Charge the fee
+            economy.withdrawPlayer(player, buyBackFee);
+            
+            // Reset lives and add player back to challenge
+            String tier = activeChallengeDifficulties.getOrDefault(challengeId, "easy");
+            int lives = tierLives.getOrDefault(tier, 3);
+            playerLives.put(uuid, lives);
+            
+            // Add back to active challenges
+            activeChallenges.put(uuid, challengeId);
+            challengeStartTimes.put(uuid, System.currentTimeMillis());
+            
+            // Remove from dead party members and pending teleports
+            deadPartyMembers.remove(uuid);
+            pendingDeathTeleports.remove(uuid);
+            
+            // Teleport player back to challenge destination
+            Location challengeDest = getTeleportLocation(cfg);
+            if (challengeDest != null) {
+                player.teleport(challengeDest);
+                player.sendMessage(getMessage("buyback.success", "fee", String.format("%.2f", buyBackFee), "lives", String.valueOf(lives)));
+            } else {
+                player.sendMessage(ChatColor.RED + "Error: No teleport location set for challenge!");
+            }
+            
+            return true;
+        });
+
         // /exit - Exit challenge without completing (no rewards)
         Objects.requireNonNull(getCommand("exit")).setExecutor((sender, cmd, label, args) -> {
             if (!(sender instanceof Player player)) {
@@ -4007,6 +4163,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             String exitedChallengeId = activeChallenges.remove(uuid);
             completedChallenges.remove(uuid);
             challengeStartTimes.remove(uuid);
+            playerLives.remove(uuid);
+            deadPartyMembers.remove(uuid);
             
             // Clean up difficulty tier if no players are active in this challenge
             if (exitedChallengeId != null) {
@@ -6724,6 +6882,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         consumeChallengeBook(p, cfg.bookTitle);
                         activeChallenges.put(p.getUniqueId(), cfg.id);
                         challengeStartTimes.put(p.getUniqueId(), System.currentTimeMillis());
+                        
+                        // Initialize lives based on difficulty tier
+                        String tier = activeChallengeDifficulties.getOrDefault(cfg.id, "easy");
+                        int lives = tierLives.getOrDefault(tier, 3);
+                        playerLives.put(p.getUniqueId(), lives);
 
                         Location teleportLoc = getTeleportLocation(cfg);
                         if (teleportLoc != null) {
@@ -7439,22 +7602,68 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         ChallengeConfig cfg = challenges.get(challengeId);
         if (cfg == null) return;
         
-        // Remove player from challenge immediately
-        String removedChallengeId = activeChallenges.remove(uuid);
-        completedChallenges.remove(uuid);
-        challengeStartTimes.remove(uuid);
-        
-        // Clean up difficulty tier if no players are active in this challenge
-        if (removedChallengeId != null) {
-            cleanupChallengeDifficultyIfEmpty(removedChallengeId);
+        // Check if player has lives remaining
+        Integer remainingLives = playerLives.get(uuid);
+        if (remainingLives == null) {
+            remainingLives = tierLives.getOrDefault(activeChallengeDifficulties.getOrDefault(challengeId, "easy"), 3);
+            playerLives.put(uuid, remainingLives);
         }
         
-        // Mark player for teleport on respawn
-        pendingDeathTeleports.put(uuid, challengeId);
-        
-        // Check if challenge is now available and process queue
-        if (!isChallengeLocked(challengeId)) {
-            processQueue(challengeId);
+        if (remainingLives > 0) {
+            // Player has lives remaining - keep inventory and teleport back to challenge
+            remainingLives--;
+            playerLives.put(uuid, remainingLives);
+            
+            // Keep inventory (cancel drops)
+            event.setKeepInventory(true);
+            event.getDrops().clear();
+            event.setKeepLevel(true);
+            event.setDroppedExp(0);
+            
+            // Schedule teleport back to challenge destination on respawn
+            pendingDeathTeleports.put(uuid, challengeId);
+            
+            // Send message about remaining lives
+            player.sendMessage(getMessage("lives.died-with-lives", "remaining", String.valueOf(remainingLives)));
+            
+            // Don't remove from challenge - they're still in it
+            // Don't process queue - challenge is still active
+        } else {
+            // No lives remaining - remove from challenge and drop inventory
+            String removedChallengeId = activeChallenges.remove(uuid);
+            completedChallenges.remove(uuid);
+            challengeStartTimes.remove(uuid);
+            playerLives.remove(uuid);
+            
+            // Track as dead party member if in a party
+            // Check if there are other active players in this challenge
+            boolean hasOtherActivePlayers = false;
+            for (Map.Entry<UUID, String> entry : activeChallenges.entrySet()) {
+                if (entry.getValue().equals(challengeId) && !entry.getKey().equals(uuid)) {
+                    hasOtherActivePlayers = true;
+                    break;
+                }
+            }
+            if (hasOtherActivePlayers) {
+                // Party member died but party is still active - track for rewards
+                deadPartyMembers.put(uuid, challengeId);
+            }
+            
+            // Clean up difficulty tier if no players are active in this challenge
+            if (removedChallengeId != null) {
+                cleanupChallengeDifficultyIfEmpty(removedChallengeId);
+            }
+            
+            // Mark player for teleport to spawn on respawn
+            pendingDeathTeleports.put(uuid, challengeId);
+            
+            // Send message about no lives
+            player.sendMessage(getMessage("lives.died-no-lives", "fee", String.format("%.2f", buyBackFee)));
+            
+            // Check if challenge is now available and process queue
+            if (!isChallengeLocked(challengeId)) {
+                processQueue(challengeId);
+            }
         }
     }
     
@@ -7643,6 +7852,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     activeChallenges.put(uuid, challengeId);
                     challengeStartTimes.put(uuid, System.currentTimeMillis());
                     
+                    // Initialize lives based on difficulty tier
+                    String tier = activeChallengeDifficulties.getOrDefault(challengeId, "easy");
+                    int lives = tierLives.getOrDefault(tier, 3);
+                    playerLives.put(uuid, lives);
+                    
                     // Teleport player back to challenge
                     Location teleportLoc = getTeleportLocation(cfg);
                     if (teleportLoc != null) {
@@ -7681,16 +7895,30 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String challengeId = pendingDeathTeleports.remove(uuid);
         if (challengeId == null) return;
         
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null) return;
+        
         // Schedule teleport for next tick (after respawn is complete)
         new BukkitRunnable() {
             @Override
             public void run() {
                 if (!player.isOnline()) return;
                 
-                // Teleport player back to spawn (same as /exit)
-                if (spawnLocation != null) {
-                    player.teleport(spawnLocation);
-                    player.sendMessage(getMessage("challenge.died"));
+                // Check if player still has lives (still in challenge)
+                Integer remainingLives = playerLives.get(uuid);
+                if (remainingLives != null && remainingLives >= 0 && activeChallenges.containsKey(uuid)) {
+                    // Player has lives and is still in challenge - teleport back to challenge destination
+                    Location challengeDest = getTeleportLocation(cfg);
+                    if (challengeDest != null) {
+                        player.teleport(challengeDest);
+                        player.sendMessage(getMessage("lives.respawned-in-challenge", "remaining", String.valueOf(remainingLives)));
+                    }
+                } else {
+                    // No lives or not in challenge - teleport to spawn
+                    if (spawnLocation != null) {
+                        player.teleport(spawnLocation);
+                        player.sendMessage(getMessage("challenge.died"));
+                    }
                 }
             }
         }.runTaskLater(this, 1L);
@@ -8199,6 +8427,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     public int getChallengesCompletedCount(UUID uuid) {
         return getTotalCompletions(uuid); // Same as total for now
     }
+    
+    /**
+     * Gets the remaining lives for a player in their current challenge, or 0 if not in a challenge.
+     */
+    public int getPlayerLives(UUID uuid) {
+        Integer lives = playerLives.get(uuid);
+        return lives != null ? lives : 0;
+    }
 
     /**
      * Collects all tier rewards with inheritance (lower tiers get multiplied when inherited by higher tiers)
@@ -8310,11 +8546,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     
     /**
      * Applies a single tier reward to a player
+     * @return The ItemStack that was given (if any), or null if no item was given or RNG failed
      */
-    private void applyTierReward(Player player, TierReward reward, double difficultyMultiplier, double speedMultiplier) {
+    private ItemStack applyTierReward(Player player, TierReward reward, double difficultyMultiplier, double speedMultiplier) {
         // Check RNG chance
         if (Math.random() > reward.chance) {
-            return; // Failed RNG roll
+            return null; // Failed RNG roll
         }
         
         double totalMultiplier = difficultyMultiplier * speedMultiplier;
@@ -8327,10 +8564,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     if (isToolArmorOrWeapon(item.getType())) {
                         // Give item as-is without multiplier
                         player.getInventory().addItem(item);
+                        return item;
                     } else {
                         int newAmount = (int) Math.max(1, Math.round(item.getAmount() * totalMultiplier));
                         item.setAmount(newAmount);
                         player.getInventory().addItem(item);
+                        return item;
                     }
                 }
             }
@@ -8341,10 +8580,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         // Give item as-is without multiplier
                         ItemStack item = new ItemStack(reward.material, reward.amount);
                         player.getInventory().addItem(item);
+                        return item;
                     } else {
                         int newAmount = (int) Math.max(1, Math.round(reward.amount * totalMultiplier));
                         ItemStack item = new ItemStack(reward.material, newAmount);
                         player.getInventory().addItem(item);
+                        return item;
                     }
                 }
             }
@@ -8354,8 +8595,39 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     String multipliedCmd = applyRewardMultiplier(cmd, totalMultiplier);
                     Bukkit.dispatchCommand(Bukkit.getConsoleSender(), multipliedCmd);
                 }
+                return null; // Commands don't return items
             }
         }
+        return null;
+    }
+    
+    /**
+     * Gets a display name for an item, using custom name if available, otherwise formatted material name
+     */
+    private String getItemDisplayName(ItemStack item) {
+        if (item == null) {
+            return "Unknown";
+        }
+        
+        // Check for custom display name
+        if (item.hasItemMeta() && item.getItemMeta().hasDisplayName()) {
+            return item.getItemMeta().getDisplayName();
+        }
+        
+        // Format material name (IRON_HOE -> Iron Hoe)
+        String matName = item.getType().name().toLowerCase().replace("_", " ");
+        String[] words = matName.split(" ");
+        StringBuilder formatted = new StringBuilder();
+        for (String word : words) {
+            if (!word.isEmpty()) {
+                formatted.append(Character.toUpperCase(word.charAt(0)));
+                if (word.length() > 1) {
+                    formatted.append(word.substring(1));
+                }
+                formatted.append(" ");
+            }
+        }
+        return formatted.toString().trim();
     }
     
     private void runRewardCommands(Player player, ChallengeConfig cfg, String challengeId) {
@@ -8396,7 +8668,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         boolean hasTierRewards = !tierRewards.isEmpty();
         if (hasTierRewards) {
             for (TierReward reward : tierRewards) {
-                applyTierReward(player, reward, finalDifficultyMultiplier, finalSpeedMultiplier);
+                ItemStack givenItem = applyTierReward(player, reward, finalDifficultyMultiplier, finalSpeedMultiplier);
+                if (givenItem != null) {
+                    // Add item to reward message
+                    String itemName = getItemDisplayName(givenItem);
+                    int amount = givenItem.getAmount();
+                    if (amount > 1) {
+                        rewardMessages.add("&e" + amount + "x " + itemName);
+                    } else {
+                        rewardMessages.add("&e" + itemName);
+                    }
+                }
             }
         }
         
@@ -8404,7 +8686,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (isNewRecord[0] && cfg.completionType == CompletionType.SPEED && cfg.topTimeRewards != null && !cfg.topTimeRewards.isEmpty()) {
             // Top time rewards get 3x multiplier (difficulty multiplier still applies)
             for (TierReward reward : cfg.topTimeRewards) {
-                applyTierReward(player, reward, finalDifficultyMultiplier, 3.0); // 3x for top time
+                ItemStack givenItem = applyTierReward(player, reward, finalDifficultyMultiplier, 3.0); // 3x for top time
+                if (givenItem != null) {
+                    // Add item to reward message
+                    String itemName = getItemDisplayName(givenItem);
+                    int amount = givenItem.getAmount();
+                    if (amount > 1) {
+                        rewardMessages.add("&e" + amount + "x " + itemName);
+                    } else {
+                        rewardMessages.add("&e" + itemName);
+                    }
+                }
             }
         }
         
@@ -8481,6 +8773,123 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     player.sendMessage(getMessage("admin.challenge-completed-party"));
                 } else {
                     player.sendMessage(getMessage("admin.challenge-completed-rewards", "rewards", String.join(getMessage("admin.reward-separator"), rewardMessages)));
+                }
+            }
+        }.runTaskLater(this, 1L);
+    }
+    
+    /**
+     * Gives rewards to a dead party member who died but the party completed the challenge.
+     * Uses easy tier rewards with 0.5x multiplier.
+     */
+    private void runRewardCommandsForDeadPartyMember(Player player, ChallengeConfig cfg, String challengeId) {
+        UUID uuid = player.getUniqueId();
+        
+        // Always use easy tier with 0.5x multiplier for dead party members
+        String difficultyTier = "easy";
+        double difficultyMultiplier = 0.5; // 0.5x multiplier
+        
+        // No speed multiplier for dead players
+        double speedMultiplier = 1.0;
+        
+        // Collect easy tier rewards only
+        List<TierReward> tierRewards = collectTierRewards(cfg, difficultyTier);
+        
+        // Get balance before (if economy is available)
+        final double balanceBefore = economy != null ? economy.getBalance(player) : 0.0;
+        
+        // Track rewards given
+        final double[] totalMoney = {0.0};
+        final List<String> rewardMessages = new ArrayList<>();
+        final double finalDifficultyMultiplier = difficultyMultiplier;
+        final double finalSpeedMultiplier = speedMultiplier;
+        
+        // Apply tier rewards if any exist
+        boolean hasTierRewards = !tierRewards.isEmpty();
+        if (hasTierRewards) {
+            for (TierReward reward : tierRewards) {
+                ItemStack givenItem = applyTierReward(player, reward, finalDifficultyMultiplier, finalSpeedMultiplier);
+                if (givenItem != null) {
+                    // Add item to reward message
+                    String itemName = getItemDisplayName(givenItem);
+                    int amount = givenItem.getAmount();
+                    if (amount > 1) {
+                        rewardMessages.add("&e" + amount + "x " + itemName);
+                    } else {
+                        rewardMessages.add("&e" + itemName);
+                    }
+                }
+            }
+        }
+        
+        if (!hasTierRewards) {
+            // Fallback to old system (fallbackRewardCommands) with 0.5x multiplier
+            if (cfg.fallbackRewardCommands != null && !cfg.fallbackRewardCommands.isEmpty()) {
+                for (RewardWithChance rwc : cfg.fallbackRewardCommands) {
+                    // Check RNG chance
+                    if (Math.random() > rwc.chance) {
+                        continue; // Failed RNG roll
+                    }
+                    
+                    String cmd = rwc.command.replace("%player%", player.getName());
+                    double totalMultiplier = finalDifficultyMultiplier * finalSpeedMultiplier;
+                    String multipliedCmd = applyRewardMultiplier(cmd, totalMultiplier);
+                    
+                    // Parse eco commands to extract money (for display purposes)
+                    String lowerCmd = multipliedCmd.toLowerCase();
+                    if (lowerCmd.startsWith("eco give ") || lowerCmd.startsWith("/eco give ")) {
+                        String[] parts = multipliedCmd.split("\\s+");
+                        if (parts.length >= 3) {
+                            try {
+                                for (int i = parts.length - 1; i >= 0; i--) {
+                                    try {
+                                        double amount = Double.parseDouble(parts[i]);
+                                        totalMoney[0] += amount;
+                                        break;
+                                    } catch (NumberFormatException ignored) {
+                                    }
+                                }
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    }
+                    
+                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), multipliedCmd);
+                }
+            }
+        }
+        
+        if (!hasTierRewards && (cfg.fallbackRewardCommands == null || cfg.fallbackRewardCommands.isEmpty())) {
+            return; // No rewards to give
+        }
+        
+        // Schedule balance check after 1 tick to ensure economy plugin has processed commands
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                // If economy is available, check actual balance change (more accurate)
+                double finalTotalMoney = totalMoney[0];
+                if (economy != null) {
+                    double balanceAfter = economy.getBalance(player);
+                    double actualChange = balanceAfter - balanceBefore;
+                    if (actualChange > 0) {
+                        finalTotalMoney = actualChange;
+                    }
+                }
+                
+                // Build reward message
+                if (finalTotalMoney > 0) {
+                    if (finalTotalMoney == (long) finalTotalMoney) {
+                        rewardMessages.add(getMessage("admin.reward-money-format", "amount", String.valueOf((long) finalTotalMoney)));
+                    } else {
+                        rewardMessages.add(getMessage("admin.reward-money-format-decimal", "amount", String.format("%.2f", finalTotalMoney)));
+                    }
+                }
+                
+                if (rewardMessages.isEmpty()) {
+                    player.sendMessage(getMessage("lives.dead-party-reward-none"));
+                } else {
+                    player.sendMessage(getMessage("lives.dead-party-reward", "rewards", String.join(getMessage("admin.reward-separator"), rewardMessages)));
                 }
             }
         }.runTaskLater(this, 1L);

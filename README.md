@@ -236,6 +236,7 @@ Fallback rewards are used if no difficulty tier rewards are set. They work with 
 - Chance defaults to 1.0 (100%) if not specified
 - All fallback rewards get difficulty multipliers applied (Easy=1.0x, Medium=1.5x, Hard=3.0x, Extreme=9.0x)
 - For SPEED challenges, speed multipliers also apply (Gold=1.5x, Silver=1.0x, Bronze=0.5x, New Record=3.0x)
+- **Each player gets their own separate roll** on the loot table - rewards are not shared between party members
 
 #### Clear All Fallback Rewards:
 ```
@@ -512,6 +513,31 @@ difficulty-reward-multipliers:
   - If Gold time (SPEED): Multiply by 1.5x
   - If new record (SPEED): Multiply by 3.0x
 
+### Lives System
+
+Players receive a limited number of lives when entering a challenge, based on the difficulty tier selected. Lives determine what happens when a player dies:
+
+**Lives Per Tier (configurable in `config.yml`):**
+- **Easy**: 3 lives (default)
+- **Medium**: 2 lives (default)
+- **Hard**: 1 life (default)
+- **Extreme**: 1 life (default)
+
+**When a player dies:**
+- **With lives remaining**: Player keeps inventory, respawns in challenge destination, lives decrement
+- **No lives remaining**: Player is removed from challenge, drops inventory (normal death), teleported to spawn
+
+**Buy-Back System:**
+- Players who run out of lives can use `/buyback` command to pay a fee (configurable, default $6000)
+- Paying the fee resets lives and teleports player back to challenge destination
+- Requires economy plugin (Vault) to be installed
+
+**Dead Party Member Rewards:**
+- If a party member dies (runs out of lives) but the party completes the challenge:
+  - Dead members receive Easy tier rewards with 0.5x multiplier
+  - This applies regardless of the actual difficulty tier the party selected
+  - Rewards are automatically given when the party completes
+
 ---
 
 ## Configuration Options
@@ -539,6 +565,23 @@ solo-countdown-seconds: 30
 
 # Countdown time in seconds before party members are teleported to challenge
 party-countdown-seconds: 45
+```
+
+### Lives System Settings
+
+```yaml
+# Lives system: Number of lives per difficulty tier
+# When a player dies, they keep inventory and are teleported back to challenge destination
+# When lives run out, they're removed from challenge and drop inventory
+lives-per-tier:
+  easy: 3        # Easy tier gets 3 lives
+  medium: 2      # Medium tier gets 2 lives
+  hard: 1        # Hard tier gets 1 life
+  extreme: 1     # Extreme tier gets 1 life
+
+# Buy-back fee: Amount to pay to get back into challenge after running out of lives
+# Players can use /buyback command to pay this fee and re-enter with lives reset
+buy-back-fee: 6000.0  # Default: $6000
 ```
 
 ### Anti-Forgery System
@@ -809,6 +852,14 @@ Completely disables a challenge. Players cannot start it or be queued.
 - **Explosion Protection**: Blocks in the challenge area are protected from explosions (creepers, TNT, etc.)
 - **Block Breaking**: You can break blocks normally (no protection)
 - **Movement**: You cannot walk outside the regeneration area - movement is blocked and you'll be teleported back if you try to leave
+- **Lives System**: You have a limited number of lives based on difficulty tier:
+  - **Easy**: 3 lives (default)
+  - **Medium**: 2 lives (default)
+  - **Hard**: 1 life (default)
+  - **Extreme**: 1 life (default)
+  - When you die with lives remaining: You keep your inventory and respawn in the challenge
+  - When you run out of lives: You're removed from the challenge and drop inventory (normal death)
+  - Use `/buyback` to pay a fee and re-enter the challenge with lives reset
 
 ### Completing the Challenge
 
@@ -832,7 +883,10 @@ Completely disables a challenge. Players cannot start it or be queued.
 ### Exiting a Challenge
 
 - **Complete**: Use `/challengecomplete` or `/cc` after meeting requirements, then right-click GateKeeper
+  - **Completion Keys**: All party members' completion keys will be consumed when using `/cc`
+  - One completion key from any party member is required to complete
 - **Exit Early**: Use `/exit` to leave without completing (no rewards, no cooldown)
+- **Buy Back**: If you ran out of lives, use `/buyback` to pay a fee and re-enter the challenge with lives reset
 
 ### Disconnect/Reconnect
 
@@ -849,6 +903,10 @@ If you disconnect while in a challenge:
 3. **Accept Invites**: Each player types `/accept` to join
 4. **Start Together**: Party leader types `/accept` again or uses `/party confirm` to start
 5. **Complete Together**: All party members must complete requirements, then one member right-clicks GateKeeper
+6. **Completion Keys**: When using `/cc`, all completion keys from all party members are consumed
+7. **Dead Party Members**: If a party member dies (runs out of lives) but the party completes:
+   - Dead members receive Easy tier rewards with 0.5x multiplier
+   - This applies even if the party was on a higher difficulty tier
 
 ---
 

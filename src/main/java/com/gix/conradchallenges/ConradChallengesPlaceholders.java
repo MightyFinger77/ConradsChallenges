@@ -277,7 +277,8 @@ public class ConradChallengesPlaceholders {
             "rank_<challengeid>",
             "total_completions",
             "world_alias",
-            "challenge_alias_<challengeid>"
+            "challenge_alias_<challengeid>",
+            "lives"
         );
     }
     
@@ -302,7 +303,8 @@ public class ConradChallengesPlaceholders {
             "rank_<challengeid>",
             "total_completions",
             "world_alias",
-            "challenge_alias_<challengeid>"
+            "challenge_alias_<challengeid>",
+            "lives"
         ));
     }
 
@@ -472,6 +474,12 @@ public class ConradChallengesPlaceholders {
             String challengeId = resolveChallengeId(uuid, args[2]);
             if (challengeId == null) return "N/A";
             return plugin.getChallengeAlias(challengeId);
+        }
+
+        // %conradchallenges_lives% - Remaining lives for player in their current challenge
+        if (params.equalsIgnoreCase("lives")) {
+            int lives = plugin.getPlayerLives(uuid);
+            return String.valueOf(lives);
         }
 
         return null; // Placeholder is unknown

@@ -44,6 +44,9 @@ commands:
   countdown:
     description: Set your countdown display preference (title, actionbar, bossbar, chat)
     usage: /<command> [title|actionbar|bossbar|chat]
+  buyback:
+    description: Buy back into a challenge after running out of lives
+    usage: /<command>
 
 permissions:
   conradchallenges.use:

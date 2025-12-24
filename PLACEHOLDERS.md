@@ -39,6 +39,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 | `%conradchallenges_total_completions%` | Total unique challenges completed | Number of challenges | None |
 | `%conradchallenges_world_alias%` | World alias for player's current world | World alias (with color codes) or world name | None |
 | `%conradchallenges_challenge_alias_<id>%` | Challenge alias for a specific challenge ID | Challenge alias (with color codes) or challenge ID | `<id>` = challenge ID or `active` |
+| `%conradchallenges_lives%` | Remaining lives for player in their current challenge | Number of lives or `0` | None |
 | `%conradchallenges_besttime_active%` | Player's best completion time for active challenge (seconds) | Time in seconds or `N/A` | None |
 | `%conradchallenges_besttime_formatted_active%` | Player's best completion time for active challenge (formatted) | Formatted time or `N/A` | None |
 | `%conradchallenges_completed_active%` | Whether player has completed active challenge | `true` or `false` | None |
@@ -430,6 +431,27 @@ challenge-aliases:
 
 ---
 
+### Lives System
+
+#### `%conradchallenges_lives%`
+**Description:** Returns the remaining lives for the player in their current challenge. Lives are based on the difficulty tier selected when entering the challenge.
+
+**Returns:**
+- Number of remaining lives (e.g., `3`, `2`, `1`) if the player is in a challenge
+- `0` if the player is not in a challenge or has no lives remaining
+
+**Note:** Lives are configured per difficulty tier in `config.yml` under `lives-per-tier`. When a player dies with lives remaining, they keep their inventory and respawn in the challenge. When lives run out, they're removed from the challenge and drop inventory.
+
+**Example:**
+```
+%conradchallenges_lives%
+→ "3" (3 lives remaining in Easy tier challenge)
+→ "1" (1 life remaining in Hard tier challenge)
+→ "0" (not in a challenge or no lives remaining)
+```
+
+---
+
 ## Examples
 
 ### Scoreboard Example
@@ -490,7 +512,7 @@ These placeholders work with:
 
 ---
 
-**Plugin:** ConradChallenges v3.0.4  
+**Plugin:** ConradChallenges v3.0.5  
 **PlaceholderAPI Expansion:** Automatically registered when PlaceholderAPI is installed
 
 ---

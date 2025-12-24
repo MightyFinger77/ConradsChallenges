@@ -414,6 +414,9 @@ admin:
   challenge-no-rewards: "&eChallenge completed, but no rewards are configured for this challenge."
   challenge-completed-party: "&aChallenge completed! Rewards have been given."
   challenge-completed-rewards: "&aChallenge completed! You received: %rewards%&a."
+  reward-money-format: "&e$%amount%"
+  reward-money-format-decimal: "&e$%amount%"
+  reward-separator: "&7, "
   npc-no-book: "&eConrad Challenge Books are for purchase at the Book Bazaar! Come back and see me once you have one."
   npc-ouch: "&cOuch, Asshole!"
   npc-thank-you: "&aThank you! That was delicious!"
@@ -436,6 +439,7 @@ completion:
   key-required-party: "&7One Completion Key will complete the challenge for the entire party."
   no-key: "&cYou need a Completion Key to complete this challenge!"
   key-consumed: "&e%player% used /challengecomplete. Your Completion Key was consumed to complete the challenge for the party."
+  keys-consumed-multiple: "&7%count% Completion Key(s) were consumed from party members."
   completed-speed: "&aYou completed &e%challenge% &ain &e%seconds%&a seconds!"
   completed-speed-tier: "&7Tier: &6%tier%&7. Speak to GateKeeper to receive your reward."
   completed-speed-failed: "&cYou took &e%elapsed%&c seconds, slower than the required maximum of &e%max%&c seconds."
@@ -456,4 +460,20 @@ sorry:
   what-apologizing: "&e[GateKeeper] ...What are you apologizing for?"
   forgiven-message: "&e[GateKeeper] Hmph. At least you admit you were wrong."
   forgiven-hint: "&e[GateKeeper] I'll forgive you this once. Don't try to trick me again."
+
+# Lives system messages
+lives:
+  died-with-lives: "&cYou died! You have &e%remaining%&c live(s) remaining. You will respawn in the challenge."
+  died-no-lives: "&cYou ran out of lives! You have been removed from the challenge. Use &e/buyback &cto pay &e$%fee%&c and re-enter."
+  respawned-in-challenge: "&aYou respawned in the challenge! You have &e%remaining%&c live(s) remaining."
+  dead-party-reward: "&7Your party completed the challenge! You received (reduced rewards): %rewards%&7."
+  dead-party-reward-none: "&7Your party completed the challenge, but you received no rewards."
+
+# Buy-back command messages
+buyback:
+  no-challenge: "&cYou are not eligible for buy-back. You must have recently died in a challenge."
+  no-economy: "&cBuy-back is not available - economy system is not set up."
+  insufficient-funds: "&cYou don't have enough money! Buy-back costs &e$%fee%&c, but you only have &e$%balance%&c."
+  challenge-locked: "&cThe challenge is currently in use by another player or party. Please wait."
+  success: "&aYou paid &e$%fee%&a to buy back into the challenge! You have &e%lives%&a live(s)."
 
