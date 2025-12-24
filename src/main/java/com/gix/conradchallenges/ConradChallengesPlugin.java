@@ -1146,6 +1146,26 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     }
                 }
             }
+            
+            // Migrate old speed tier rewards to fallback rewards if no other rewards are configured
+            // This provides backward compatibility for old configs
+            boolean hasTierRewards = cfg.difficultyTierRewards != null && !cfg.difficultyTierRewards.isEmpty();
+            if (!hasTierRewards && cfg.fallbackRewardCommands.isEmpty() && cfg.completionType == CompletionType.SPEED 
+                    && cfg.speedTiers != null && !cfg.speedTiers.isEmpty()) {
+                // Collect all reward commands from speed tiers and add them as fallback rewards
+                for (SpeedTier tier : cfg.speedTiers) {
+                    if (tier.rewardCommands != null) {
+                        for (String cmd : tier.rewardCommands) {
+                            if (cmd != null && !cmd.isEmpty()) {
+                                cfg.fallbackRewardCommands.add(new RewardWithChance(cmd, 1.0));
+                            }
+                        }
+                    }
+                }
+                if (!cfg.fallbackRewardCommands.isEmpty()) {
+                    getLogger().info("Migrated " + cfg.fallbackRewardCommands.size() + " old speed tier reward(s) to fallback rewards for challenge " + id);
+                }
+            }
 
             // Load regeneration area
             ConfigurationSection regenSec = cs.getConfigurationSection("regeneration");
@@ -3917,8 +3937,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 challengeStartTimes.remove(memberUuid);
             }
             
-            // Clean up difficulty tier if no players are active in this challenge
-            cleanupChallengeDifficultyIfEmpty(cfg.id);
+                // Clean up difficulty tier if no players are active in this challenge
+                cleanupChallengeDifficultyIfEmpty(cfg.id);
+            
+            // Reset MythicMobs spawner cooldowns in the challenge area
+            resetMythicMobsSpawnersInArea(cfg);
             
             return true;
         });
@@ -3988,6 +4011,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Clean up difficulty tier if no players are active in this challenge
             if (exitedChallengeId != null) {
                 cleanupChallengeDifficultyIfEmpty(exitedChallengeId);
+                // Reset MythicMobs spawner cooldowns in the challenge area
+                resetMythicMobsSpawnersInArea(cfg);
             }
             
             // Check if challenge is now available and process queue
@@ -9524,6 +9549,64 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
     
     /**
+     * Helper method to collect chunks that need loading in time-budgeted batches (async)
+     * This prevents blocking the main thread when iterating through millions of blocks
+     */
+    private void scheduleChunkCollection(String challengeId, World world, List<BlockState> finalStates,
+                                         int[] currentIndex, java.util.Set<String> chunksToLoad,
+                                         long timeBudgetNs, int totalBlocks) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                long startTime = System.nanoTime();
+                
+                // Process blocks until time budget is exceeded
+                while (currentIndex[0] < finalStates.size()) {
+                    // Check time budget
+                    if (System.nanoTime() - startTime >= timeBudgetNs) {
+                        // Time budget exceeded, schedule next tick
+                        scheduleChunkCollection(challengeId, world, finalStates, currentIndex, chunksToLoad, timeBudgetNs, totalBlocks);
+                        return;
+                    }
+                    
+                    BlockState state = finalStates.get(currentIndex[0]);
+                    Location loc = state.getLocation();
+                    int chunkX = loc.getBlockX() >> 4;
+                    int chunkZ = loc.getBlockZ() >> 4;
+                    if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                        chunksToLoad.add(chunkX + "," + chunkZ);
+                    }
+                    
+                    currentIndex[0]++;
+                }
+                
+                // All chunks collected
+                if (currentIndex[0] >= finalStates.size()) {
+                    // Chunk collection complete, proceed with chunk loading or comparison
+                    if (chunksToLoad.isEmpty()) {
+                        // All chunks already loaded, start comparison phase immediately
+                        final int[] compareIndex = {0};
+                        final java.util.List<BlockState> blocksToRestore = new java.util.ArrayList<>();
+                        final int[] skipped = {0};
+                        final long compareTimeBudget = 12_000_000L; // 12ms per tick for comparison
+                        scheduleNextComparisonBatch(challengeId, world, finalStates, compareIndex, compareTimeBudget, totalBlocks, blocksToRestore, skipped);
+                    } else {
+                        // Pre-load chunks in time-budgeted batches, then start comparison phase
+                        getLogger().info("Pre-loading " + chunksToLoad.size() + " chunks for regeneration...");
+                        final java.util.List<String> chunksList = new java.util.ArrayList<>(chunksToLoad);
+                        final int[] chunkIndex = {0};
+                        final long chunkLoadBudget = 8_000_000L; // 8ms per tick for chunk loading
+                        scheduleNextChunkLoadBatch(challengeId, world, finalStates, chunksList, chunkIndex, chunkLoadBudget);
+                    }
+                } else {
+                    // More blocks to process, schedule next tick
+                    scheduleChunkCollection(challengeId, world, finalStates, currentIndex, chunksToLoad, timeBudgetNs, totalBlocks);
+                }
+            }
+        }.runTaskLater(this, 1L);
+    }
+    
+    /**
      * Helper method to schedule the next batch of chunk loading
      */
     private void scheduleNextChunkLoadBatch(String challengeId, World world, List<BlockState> finalStates,
@@ -9958,33 +10041,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         int totalBlocks = finalStates.size();
         getLogger().info("Starting regeneration for challenge '" + challengeId + "' (" + totalBlocks + " blocks to check)");
         
-        // Pre-load chunks in time-budgeted batches on main thread, then start comparison phase
-        // Collect unique chunks that need to be loaded
+        // Collect chunks that need to be loaded in async batches to avoid blocking main thread
+        // This is especially important for large areas with millions of blocks
+        final int[] chunkCollectionIndex = {0};
         final java.util.Set<String> chunksToLoad = new java.util.HashSet<>();
-        for (BlockState state : finalStates) {
-            Location loc = state.getLocation();
-            int chunkX = loc.getBlockX() >> 4;
-            int chunkZ = loc.getBlockZ() >> 4;
-            if (!world.isChunkLoaded(chunkX, chunkZ)) {
-                chunksToLoad.add(chunkX + "," + chunkZ);
-            }
-        }
-        
-        if (chunksToLoad.isEmpty()) {
-            // All chunks already loaded, start comparison phase immediately
-            final int[] currentIndex = {0};
-            final java.util.List<BlockState> blocksToRestore = new java.util.ArrayList<>();
-            final int[] skipped = {0};
-            final long compareTimeBudget = 12_000_000L; // 12ms per tick for comparison (increased for speed)
-            scheduleNextComparisonBatch(challengeId, world, finalStates, currentIndex, compareTimeBudget, totalBlocks, blocksToRestore, skipped);
-        } else {
-            // Pre-load chunks in time-budgeted batches, then start comparison phase
-            getLogger().info("Pre-loading " + chunksToLoad.size() + " chunks for regeneration...");
-            final java.util.List<String> chunksList = new java.util.ArrayList<>(chunksToLoad);
-            final int[] chunkIndex = {0};
-            final long chunkLoadBudget = 8_000_000L; // 8ms per tick for chunk loading (increased for speed)
-            scheduleNextChunkLoadBatch(challengeId, world, finalStates, chunksList, chunkIndex, chunkLoadBudget);
-        }
+        final long chunkCollectionBudget = 10_000_000L; // 10ms per tick for chunk collection
+        scheduleChunkCollection(challengeId, world, finalStates, chunkCollectionIndex, chunksToLoad, chunkCollectionBudget, totalBlocks);
     }
 
     // ====== EDIT MODE HELPERS ======
@@ -10426,6 +10488,139 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         } catch (Exception e) {
             getLogger().warning("Error processing MythicMobs spawn event: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Resets cooldowns for all MythicMobs spawners within a challenge's regeneration area.
+     * This ensures teams don't have to wait on spawner cooldowns from previous teams.
+     * 
+     * @param cfg The challenge configuration
+     */
+    private void resetMythicMobsSpawnersInArea(ChallengeConfig cfg) {
+        // Check if MythicMobs is installed
+        if (Bukkit.getPluginManager().getPlugin("MythicMobs") == null) {
+            return; // MythicMobs not installed
+        }
+        
+        // Check if regeneration area is set
+        if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) {
+            return; // No regeneration area set
+        }
+        
+        World world = cfg.regenerationCorner1.getWorld();
+        if (world == null) {
+            return; // World not loaded
+        }
+        
+        // Calculate regeneration area bounds
+        int minX = Math.min(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
+        int maxX = Math.max(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
+        int minY, maxY;
+        if (cfg.regenerationAutoExtendY) {
+            minY = world.getMinHeight();
+            maxY = world.getMaxHeight() - 1;
+        } else {
+            minY = Math.min(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
+            maxY = Math.max(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
+        }
+        int minZ = Math.min(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
+        int maxZ = Math.max(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
+        
+        try {
+            // Get MythicMobs API using reflection
+            Class<?> mythicAPI = Class.forName("io.lumine.mythic.bukkit.MythicBukkit");
+            Object mythicPlugin = mythicAPI.getMethod("inst").invoke(null);
+            
+            // Get spawner manager
+            Object spawnerManager = mythicAPI.getMethod("getSpawnerManager").invoke(mythicPlugin);
+            if (spawnerManager == null) {
+                return;
+            }
+            
+            // Get all spawners - try different method names for different MM versions
+            java.util.Collection<?> spawners = null;
+            try {
+                Method getAllSpawnersMethod = spawnerManager.getClass().getMethod("getSpawners");
+                spawners = (java.util.Collection<?>) getAllSpawnersMethod.invoke(spawnerManager);
+            } catch (NoSuchMethodException e) {
+                try {
+                    Method getSpawnersMethod = spawnerManager.getClass().getMethod("getSpawners");
+                    Object spawnersMap = getSpawnersMethod.invoke(spawnerManager);
+                    if (spawnersMap instanceof java.util.Map) {
+                        spawners = ((java.util.Map<?, ?>) spawnersMap).values();
+                    }
+                } catch (Exception e2) {
+                    getLogger().fine("Could not get MythicMobs spawners (version may differ): " + e2.getMessage());
+                    return;
+                }
+            }
+            
+            if (spawners == null || spawners.isEmpty()) {
+                return; // No spawners found
+            }
+            
+            int resetCount = 0;
+            
+            // Iterate through all spawners and reset those in the regeneration area
+            for (Object spawner : spawners) {
+                try {
+                    // Get spawner location
+                    Method getLocationMethod = spawner.getClass().getMethod("getLocation");
+                    Location spawnerLoc = (Location) getLocationMethod.invoke(spawner);
+                    
+                    if (spawnerLoc == null || !spawnerLoc.getWorld().equals(world)) {
+                        continue; // Wrong world
+                    }
+                    
+                    // Check if spawner is within regeneration area bounds
+                    int x = spawnerLoc.getBlockX();
+                    int y = spawnerLoc.getBlockY();
+                    int z = spawnerLoc.getBlockZ();
+                    
+                    if (x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ) {
+                        // Spawner is in the regeneration area - reset its cooldowns
+                        try {
+                            // Reset cooldown timer
+                            Method setCooldownMethod = spawner.getClass().getMethod("setRemainingCooldownSeconds", long.class);
+                            setCooldownMethod.invoke(spawner, 0L);
+                        } catch (NoSuchMethodException e) {
+                            // Try alternative method name
+                            try {
+                                Method setCooldownMethod = spawner.getClass().getMethod("setCooldown", long.class);
+                                setCooldownMethod.invoke(spawner, 0L);
+                            } catch (Exception e2) {
+                                // Method not available in this version
+                            }
+                        }
+                        
+                        try {
+                            // Reset warmup timer
+                            Method setWarmupMethod = spawner.getClass().getMethod("setRemainingWarmupSeconds", long.class);
+                            setWarmupMethod.invoke(spawner, 0L);
+                        } catch (NoSuchMethodException e) {
+                            // Try alternative method name
+                            try {
+                                Method setWarmupMethod = spawner.getClass().getMethod("setWarmup", long.class);
+                                setWarmupMethod.invoke(spawner, 0L);
+                            } catch (Exception e2) {
+                                // Method not available in this version
+                            }
+                        }
+                        
+                        resetCount++;
+                    }
+                } catch (Exception e) {
+                    // Skip this spawner if we can't process it
+                    getLogger().fine("Error processing MythicMobs spawner: " + e.getMessage());
+                }
+            }
+            
+            if (resetCount > 0) {
+                getLogger().fine("Reset cooldowns for " + resetCount + " MythicMobs spawner(s) in challenge area '" + cfg.id + "'");
+            }
+        } catch (Exception e) {
+            getLogger().warning("Error resetting MythicMobs spawner cooldowns: " + e.getMessage());
         }
     }
 
