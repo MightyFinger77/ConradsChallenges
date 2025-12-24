@@ -23,7 +23,7 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 | Placeholder | Description | Returns | Parameters |
 |------------|-------------|---------|------------|
-| `%conradchallenges_active%` | Current challenge ID the player is in | Challenge ID or `none` | None |
+| `%conradchallenges_active%` | Current challenge alias/ID the player is in | Challenge alias (if configured) or challenge ID, or `none` | None |
 | `%conradchallenges_active_name%` | Display name of current challenge | Challenge name or `none` | None |
 | `%conradchallenges_besttime_<id>%` | Player's best completion time (seconds) | Time in seconds or `N/A` | `<id>` = challenge ID or `active` |
 | `%conradchallenges_besttime_formatted_<id>%` | Player's best completion time (formatted) | Formatted time (e.g., `1m 30s`) or `N/A` | `<id>` = challenge ID or `active` |
@@ -37,8 +37,19 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 | `%conradchallenges_rank_<id>%` | Player's rank in challenge leaderboard | Rank number or `N/A` | `<id>` = challenge ID or `active` |
 | `%conradchallenges_leaderboard_count_<id>%` | Total entries in challenge leaderboard | Number of entries | `<id>` = challenge ID or `active` |
 | `%conradchallenges_total_completions%` | Total unique challenges completed | Number of challenges | None |
-| `%conradchallenges_challenges_completed%` | Number of unique challenges completed | Number of challenges | None |
 | `%conradchallenges_world_alias%` | World alias for player's current world | World alias (with color codes) or world name | None |
+| `%conradchallenges_challenge_alias_<id>%` | Challenge alias for a specific challenge ID | Challenge alias (with color codes) or challenge ID | `<id>` = challenge ID or `active` |
+| `%conradchallenges_besttime_active%` | Player's best completion time for active challenge (seconds) | Time in seconds or `N/A` | None |
+| `%conradchallenges_besttime_formatted_active%` | Player's best completion time for active challenge (formatted) | Formatted time or `N/A` | None |
+| `%conradchallenges_completed_active%` | Whether player has completed active challenge | `true` or `false` | None |
+| `%conradchallenges_completions_active%` | Number of times player completed active challenge | Number (0 or 1) | None |
+| `%conradchallenges_cooldown_active%` | Remaining cooldown time for active challenge (seconds) | Seconds remaining or `0` | None |
+| `%conradchallenges_cooldown_formatted_active%` | Remaining cooldown time for active challenge (formatted) | Formatted time or `Ready` | None |
+| `%conradchallenges_top_active_<pos>%` | Player name at leaderboard position for active challenge | Player name or `N/A` | `<pos>` = position (1-based) |
+| `%conradchallenges_top_time_active_<pos>%` | Completion time at leaderboard position for active challenge (seconds) | Time in seconds or `N/A` | `<pos>` = position (1-based) |
+| `%conradchallenges_top_time_formatted_active_<pos>%` | Completion time at leaderboard position for active challenge (formatted) | Formatted time or `N/A` | `<pos>` = position (1-based) |
+| `%conradchallenges_rank_active%` | Player's rank in active challenge leaderboard | Rank number or `N/A` | None |
+| `%conradchallenges_leaderboard_count_active%` | Total entries in active challenge leaderboard | Number of entries | None |
 
 ---
 
@@ -47,16 +58,20 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 ### Player Status
 
 #### `%conradchallenges_active%`
-**Description:** Returns the ID of the challenge the player is currently in.
+**Description:** Returns the challenge alias (if configured) or challenge ID of the challenge the player is currently in.
 
 **Returns:**
-- Challenge ID (e.g., `dungeon1`, `parkour_challenge`) if player is in a challenge
+- Challenge alias (with color codes) if configured in `config.yml` under `challenge-aliases`
+- Challenge ID (e.g., `dungeon1`, `parkour_challenge`) if player is in a challenge but no alias is configured
 - `none` if player is not in any challenge
+
+**Note:** This placeholder now returns the challenge alias instead of the raw challenge ID if an alias is configured. Use challenge aliases to display custom names with color codes in scoreboards and other displays.
 
 **Example:**
 ```
 %conradchallenges_active%
-→ "dungeon1" (if in challenge)
+→ "Dungeon Challenge" (if alias is configured as "&6&lDungeon Challenge")
+→ "dungeon1" (if in challenge but no alias configured)
 → "none" (if not in challenge)
 ```
 
@@ -344,23 +359,6 @@ This document lists all available PlaceholderAPI placeholders provided by Conrad
 
 ---
 
-#### `%conradchallenges_challenges_completed%`
-**Description:** Returns the number of unique challenges the player has completed.
-
-**Returns:**
-- Number of unique challenges completed
-
-**Note:** This is currently the same as `total_completions` since we track one completion per challenge.
-
-**Example:**
-```
-%conradchallenges_challenges_completed%
-→ "5" (player has completed 5 different challenges)
-→ "0" (player hasn't completed any)
-```
-
----
-
 ### World Information
 
 #### `%conradchallenges_world_alias%`
@@ -390,6 +388,45 @@ world-aliases:
 ```
 
 **Note:** Color codes use `&` format (e.g., `&a` for green, `&c` for red). The placeholder automatically translates these to Minecraft color codes.
+
+---
+
+### Challenge Information
+
+#### `%conradchallenges_challenge_alias_<challengeid>%`
+**Description:** Returns the challenge alias for a specific challenge ID. Challenge aliases are configured in `config.yml` under the `challenge-aliases` section and allow you to replace challenge IDs with custom display names (with color codes).
+
+**Parameters:**
+- `<challengeid>` - The ID of the challenge or `active` to use the player's current active challenge
+
+**Returns:**
+- Challenge alias (with color codes applied) if configured in `config.yml`
+- Challenge ID if no alias is configured
+- `N/A` if challenge doesn't exist or player is not in a challenge (when using `active`)
+
+**Configuration:**
+Challenge aliases are configured in `config.yml`:
+```yaml
+challenge-aliases:
+  dungeon1: "&6&lDungeon Challenge"
+  dungeon2: "&c&lBoss Arena"
+  parkour_easy: "&aEasy Parkour"
+```
+
+**Example:**
+```
+%conradchallenges_challenge_alias_dungeon1%
+→ "Dungeon Challenge" (if alias is configured as "&6&lDungeon Challenge")
+→ "dungeon1" (if no alias is configured)
+
+%conradchallenges_challenge_alias_active%
+→ "Dungeon Challenge" (alias for current active challenge)
+→ "N/A" (not in a challenge)
+```
+
+**Note:** 
+- Color codes use `&` format (e.g., `&6` for gold, `&c` for red, `&l` for bold). The placeholder automatically translates these to Minecraft color codes.
+- The `%conradchallenges_active%` placeholder now returns the challenge alias (if configured) instead of the raw challenge ID.
 
 ---
 
@@ -426,7 +463,7 @@ Top Leaderboard:
 
 ### Player Stats
 ```
-Challenges Completed: %conradchallenges_challenges_completed%
+Challenges Completed: %conradchallenges_total_completions%
 Current Challenge: %conradchallenges_active_name%
 World: %conradchallenges_world_alias%
 ```

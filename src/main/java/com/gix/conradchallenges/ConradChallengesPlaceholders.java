@@ -276,8 +276,8 @@ public class ConradChallengesPlaceholders {
             "leaderboard_count_<challengeid>",
             "rank_<challengeid>",
             "total_completions",
-            "challenges_completed",
-            "world_alias"
+            "world_alias",
+            "challenge_alias_<challengeid>"
         );
     }
     
@@ -301,8 +301,8 @@ public class ConradChallengesPlaceholders {
             "leaderboard_count_<challengeid>",
             "rank_<challengeid>",
             "total_completions",
-            "challenges_completed",
-            "world_alias"
+            "world_alias",
+            "challenge_alias_<challengeid>"
         ));
     }
 
@@ -328,10 +328,11 @@ public class ConradChallengesPlaceholders {
         UUID uuid = player.getUniqueId();
         String[] args = params.split("_");
 
-        // %conradchallenges_active% - Current active challenge ID
+        // %conradchallenges_active% - Current active challenge ID (or alias if configured)
         if (params.equalsIgnoreCase("active")) {
             String active = plugin.getActiveChallenge(uuid);
-            return active != null ? active : "none";
+            if (active == null) return "none";
+            return plugin.getChallengeAlias(active);
         }
 
         // %conradchallenges_active_name% - Current active challenge name
@@ -455,19 +456,22 @@ public class ConradChallengesPlaceholders {
             return rank > 0 ? String.valueOf(rank) : "N/A";
         }
 
-        // %conradchallenges_total_completions% - Total completions across all challenges
+        // %conradchallenges_total_completions% - Total unique challenges completed
         if (params.equalsIgnoreCase("total_completions")) {
             return String.valueOf(plugin.getTotalCompletions(uuid));
-        }
-
-        // %conradchallenges_challenges_completed% - Number of unique challenges completed
-        if (params.equalsIgnoreCase("challenges_completed")) {
-            return String.valueOf(plugin.getChallengesCompletedCount(uuid));
         }
 
         // %conradchallenges_world_alias% - World alias for player's current world
         if (params.equalsIgnoreCase("world_alias")) {
             return plugin.getWorldAlias(player);
+        }
+
+        // %conradchallenges_challenge_alias_<challengeid>% - Challenge alias for a specific challenge ID
+        // Supports "active" as challenge ID to use current active challenge
+        if (args.length >= 3 && args[0].equalsIgnoreCase("challenge") && args[1].equalsIgnoreCase("alias")) {
+            String challengeId = resolveChallengeId(uuid, args[2]);
+            if (challengeId == null) return "N/A";
+            return plugin.getChallengeAlias(challengeId);
         }
 
         return null; // Placeholder is unknown

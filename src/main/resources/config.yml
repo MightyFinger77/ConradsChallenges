@@ -67,6 +67,17 @@ challenge-area:
 #   world_the_end: "&aSurvival"
 world-aliases: {}
 
+# Challenge aliases allow you to replace challenge IDs with custom display names (with color codes).
+# Use the placeholder %conradchallenges_challenge_alias_<id>% in scoreboards, chat, holograms, etc.
+# to display the challenge alias for a specific challenge ID.
+# You can also use %conradchallenges_challenge_alias_active% to get the alias for the player's current active challenge.
+# Example:
+# challenge-aliases:
+#   dungeon1: "&6&lDungeon Challenge"
+#   dungeon2: "&c&lBoss Arena"
+#   parkour_easy: "&aEasy Parkour"
+challenge-aliases: {}
+
 # Challenges are created via /conradchallenges challenge create <id>
 # Use /conradchallenges challenge setbook, setdestination, etc. to configure them
 challenges: []

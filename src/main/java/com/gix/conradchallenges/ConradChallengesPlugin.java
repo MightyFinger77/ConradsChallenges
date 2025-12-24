@@ -355,6 +355,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     
     // World aliases for display names
     private final Map<String, String> worldAliases = new HashMap<>();
+    private final Map<String, String> challengeAliases = new HashMap<>();
     // Edit mode: Store original locations before edit (editor UUID -> original location)
     private final Map<UUID, Location> editorOriginalLocations = new HashMap<>();
     // Edit mode: Store original locations for disconnected players (editor UUID -> original location)
@@ -387,6 +388,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         loadNpcIds();
         loadSpawnLocation();
         loadWorldAliases();
+        loadChallengeAliases();
         loadDifficultyTiers();
         loadDifficultyRewardMultipliers();
         loadChallengesFromConfig();
@@ -682,6 +684,37 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         } else {
             getLogger().info("No world aliases configured");
         }
+    }
+    
+    /**
+     * Loads challenge aliases from config.yml
+     */
+    private void loadChallengeAliases() {
+        FileConfiguration config = getConfig();
+        ConfigurationSection aliasesSection = config.getConfigurationSection("challenge-aliases");
+        challengeAliases.clear();
+        
+        if (aliasesSection != null) {
+            for (String challengeId : aliasesSection.getKeys(false)) {
+                String alias = aliasesSection.getString(challengeId);
+                if (alias != null && !alias.isEmpty()) {
+                    challengeAliases.put(challengeId, ChatColor.translateAlternateColorCodes('&', alias));
+                }
+            }
+            getLogger().info("Loaded " + challengeAliases.size() + " challenge aliases");
+        } else {
+            getLogger().info("No challenge aliases configured");
+        }
+    }
+    
+    /**
+     * Gets the challenge alias for a challenge ID, or returns the challenge ID if no alias is set.
+     * @param challengeId The challenge ID to get the alias for
+     * @return The challenge alias (with color codes) or the challenge ID if no alias exists
+     */
+    public String getChallengeAlias(String challengeId) {
+        if (challengeId == null) return "Unknown";
+        return challengeAliases.getOrDefault(challengeId, challengeId);
     }
     
     /**
