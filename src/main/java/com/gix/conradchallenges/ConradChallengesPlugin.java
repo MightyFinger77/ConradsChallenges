@@ -5297,7 +5297,21 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         switch (reward.type) {
                             case HAND -> {
                                 if (reward.itemStack != null) {
-                                    player.sendMessage("  " + (i + 1) + ". HAND: " + reward.itemStack.getType().name() + " x" + reward.itemStack.getAmount() + " (chance: " + chanceStr + ")");
+                                    String itemInfo = reward.itemStack.getType().name() + " x" + reward.itemStack.getAmount();
+                                    // Check if it's a custom item and add indicator
+                                    if (isCustomItem(reward.itemStack)) {
+                                        org.bukkit.inventory.meta.ItemMeta meta = reward.itemStack.getItemMeta();
+                                        String customInfo = "";
+                                        if (meta != null && meta.hasCustomModelData()) {
+                                            customInfo = " [Custom Model: " + meta.getCustomModelData() + "]";
+                                        } else if (meta != null && meta.hasDisplayName()) {
+                                            customInfo = " [Custom Item]";
+                                        } else if (meta != null && meta.hasLore()) {
+                                            customInfo = " [Custom Item]";
+                                        }
+                                        itemInfo += customInfo;
+                                    }
+                                    player.sendMessage("  " + (i + 1) + ". HAND: " + itemInfo + " (chance: " + chanceStr + ")");
                                 }
                             }
                             case ITEM -> {
@@ -8438,7 +8452,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
     /**
      * Collects all tier rewards with inheritance (lower tiers get multiplied when inherited by higher tiers)
-     * All rewards from lower tiers get the current tier's cumulative multiplier
+     * All rewards from lower tiers get the current tier's cumulative multiplier.
+     * Prevents duplicate rewards - if multiple tiers have the same item/material/command, only the highest tier version is kept.
      */
     private List<TierReward> collectTierRewards(ChallengeConfig cfg, String difficultyTier) {
         List<TierReward> allRewards = new ArrayList<>();
@@ -8449,26 +8464,151 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         // Get the current tier's cumulative multiplier (this applies to all inherited rewards)
         double currentTierMultiplier = cumulativeRewardMultipliers.getOrDefault(difficultyTier, 1.0);
         
-        // Collect rewards from all tiers up to and including current tier
-        // All rewards get the current tier's multiplier (inheritance)
-        for (int i = 0; i <= currentTierIndex; i++) {
+        // Track rewards we've already added to prevent duplicates
+        // Key format: "TYPE:MATERIAL" for items, "TYPE:COMMAND" for commands
+        Set<String> seenRewards = new HashSet<>();
+        
+        // Collect rewards in REVERSE order (higher tiers first) so higher tier rewards take precedence
+        for (int i = currentTierIndex; i >= 0; i--) {
             String tierName = tierOrder.get(i);
             List<TierReward> tierRewards = cfg.difficultyTierRewards.get(tierName);
             if (tierRewards != null) {
-                // All rewards from this tier get the current tier's multiplier
                 for (TierReward reward : tierRewards) {
-                    // Create a copy
-                    TierReward rewardCopy = new TierReward(reward.type, reward.chance);
-                    rewardCopy.material = reward.material;
-                    rewardCopy.amount = reward.amount;
-                    rewardCopy.itemStack = reward.itemStack != null ? reward.itemStack.clone() : null;
-                    rewardCopy.command = reward.command;
-                    allRewards.add(rewardCopy);
+                    // Generate a unique key for this reward to check for duplicates
+                    String rewardKey = getRewardKey(reward);
+                    
+                    // Only add if we haven't seen this reward type yet (higher tiers processed first)
+                    if (!seenRewards.contains(rewardKey)) {
+                        seenRewards.add(rewardKey);
+                        
+                        // Create a copy
+                        TierReward rewardCopy = new TierReward(reward.type, reward.chance);
+                        rewardCopy.material = reward.material;
+                        rewardCopy.amount = reward.amount;
+                        rewardCopy.itemStack = reward.itemStack != null ? reward.itemStack.clone() : null;
+                        rewardCopy.command = reward.command;
+                        allRewards.add(rewardCopy);
+                    }
                 }
             }
         }
         
         return allRewards;
+    }
+    
+    /**
+     * Generates a unique key for a reward to detect duplicates.
+     * Same material/item type = duplicate, even if amounts differ.
+     * Custom items (with CustomModelData, custom name, or custom lore) are treated as different from regular items.
+     * Commands are compared by base structure (command type and target, ignoring amounts).
+     */
+    private String getRewardKey(TierReward reward) {
+        switch (reward.type) {
+            case HAND:
+                if (reward.itemStack != null) {
+                    // Check if item has custom data (CustomModelData, custom name, custom lore)
+                    String customSuffix = getItemCustomDataSuffix(reward.itemStack);
+                    // Include custom data in key so custom items are treated as different from regular items
+                    return "HAND:" + reward.itemStack.getType().name() + customSuffix;
+                }
+                return "HAND:UNKNOWN";
+            case ITEM:
+                if (reward.material != null) {
+                    // ITEM type rewards are always regular items (no custom data)
+                    return "ITEM:" + reward.material.name();
+                }
+                return "ITEM:UNKNOWN";
+            case COMMAND:
+                if (reward.command != null) {
+                    // Normalize command for comparison: remove player placeholder, normalize whitespace
+                    // Compare base command structure (e.g., "eco give" vs "give diamond")
+                    // This prevents duplicate commands like "eco give %player% 1000" and "eco give %player% 2000"
+                    String normalized = reward.command.toLowerCase()
+                        .replace("%player%", "")
+                        .replaceAll("\\s+", " ") // Normalize whitespace
+                        .trim();
+                    // Extract command base (first 2-3 words typically identify the command type)
+                    String[] parts = normalized.split("\\s+");
+                    if (parts.length >= 2) {
+                        // For commands like "eco give" or "give diamond", use first 2 parts
+                        return "COMMAND:" + parts[0] + " " + parts[1];
+                    } else if (parts.length == 1) {
+                        return "COMMAND:" + parts[0];
+                    }
+                    return "COMMAND:" + normalized;
+                }
+                return "COMMAND:UNKNOWN";
+            default:
+                return "UNKNOWN:" + reward.type.name();
+        }
+    }
+    
+    /**
+     * Gets a suffix string for custom item data to include in duplicate detection keys.
+     * Returns empty string for regular items, or a suffix like ":CUSTOM:123" for custom items.
+     */
+    private String getItemCustomDataSuffix(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) {
+            return "";
+        }
+        
+        org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return "";
+        }
+        
+        // Check for CustomModelData (most common custom item identifier)
+        if (meta.hasCustomModelData()) {
+            return ":CUSTOM:" + meta.getCustomModelData();
+        }
+        
+        // Check for custom display name
+        if (meta.hasDisplayName()) {
+            return ":CUSTOM:NAME";
+        }
+        
+        // Check for custom lore
+        if (meta.hasLore() && meta.getLore() != null && !meta.getLore().isEmpty()) {
+            return ":CUSTOM:LORE";
+        }
+        
+        // Check for enchantments (could be considered custom)
+        if (meta.hasEnchants() && !meta.getEnchants().isEmpty()) {
+            return ":CUSTOM:ENCHANT";
+        }
+        
+        return "";
+    }
+    
+    /**
+     * Checks if an item is a custom item (has CustomModelData, custom name, or custom lore).
+     */
+    private boolean isCustomItem(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) {
+            return false;
+        }
+        
+        org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
+        if (meta == null) {
+            return false;
+        }
+        
+        // Check for CustomModelData (most common custom item identifier)
+        if (meta.hasCustomModelData()) {
+            return true;
+        }
+        
+        // Check for custom display name
+        if (meta.hasDisplayName()) {
+            return true;
+        }
+        
+        // Check for custom lore
+        if (meta.hasLore() && meta.getLore() != null && !meta.getLore().isEmpty()) {
+            return true;
+        }
+        
+        return false;
     }
     
     /**
