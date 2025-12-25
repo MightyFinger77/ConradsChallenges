@@ -303,6 +303,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     
     // Track regeneration status per challenge (challenge ID -> true if regeneration is complete)
     private final Map<String, Boolean> challengeRegenerationStatus = new HashMap<>();
+    
+    // Track last spawner reset time per challenge to prevent duplicate resets
+    private final Map<String, Long> lastSpawnerResetTime = new HashMap<>();
+    
+    // Store original spawner levels so we can revert them (challenge ID -> spawner object -> original level)
+    private final Map<String, Map<Object, Integer>> originalSpawnerLevels = new HashMap<>();
     // Track which players are in which countdown (challenge ID -> list of players)
     private final Map<String, List<Player>> countdownPlayers = new HashMap<>();
     // Track bossbars for countdown display (player UUID -> bossbar)
@@ -350,6 +356,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     // Regeneration: Store initial block states for each challenge (challenge ID -> list of block states)
     private final Map<String, List<BlockState>> challengeInitialStates = new HashMap<>();
     
+    // Regeneration: Store container inventories separately (challenge ID -> map of location string to inventory items array)
+    // This is necessary because BlockState snapshots don't reliably preserve container inventories
+    private final Map<String, Map<String, ItemStack[]>> challengeContainerInventories = new HashMap<>();
+    
+    // Regeneration: Store container NBT data for exact restoration (WorldEdit-style approach)
+    // challenge ID -> map of location string to serialized NBT data (byte array)
+    private final Map<String, Map<String, byte[]>> challengeContainerNBT = new HashMap<>();
+    
+    // NMS reflection cache for performance (only initialized once)
+    private java.lang.reflect.Method getTileEntityMethod;
+    private java.lang.reflect.Method saveMethod;
+    private java.lang.reflect.Method loadMethod;
+    private boolean nmsAvailable = false;
+    
     // Edit mode: Track which challenges are being edited (challenge ID -> editor UUID)
     private final Map<String, UUID> challengeEditors = new HashMap<>();
     
@@ -382,6 +402,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     // Buy-back fee (amount to pay to get back into challenge with lives reset)
     private double buyBackFee = 100.0;  // Default 100
     
+    // Debug logging for spawner level management
+    private boolean debugSpawnerLevels = false;
+    
     // Track dead party members (player UUID -> challenge ID) - for giving rewards when party completes
     private final Map<UUID, String> deadPartyMembers = new HashMap<>();
 
@@ -402,6 +425,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         loadDifficultyTiers();
         loadDifficultyRewardMultipliers();
         loadLivesSystem();
+        loadDebugSettings();
         loadChallengesFromConfig();
         setupDataFile();
         loadData();
@@ -410,8 +434,140 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         registerCommands();
         setupPlaceholderAPI();
         setupMythicMobsListener();
+        
+        // Initialize NMS reflection for container NBT handling (WorldEdit-style)
+        initializeNMS();
 
         getLogger().info("ConradChallenges v2.0 enabled.");
+    }
+    
+    /**
+     * Initialize NMS reflection for tile entity NBT access (WorldEdit-style approach)
+     * This allows us to directly read/write container NBT data for exact restoration
+     */
+    private void initializeNMS() {
+        try {
+            // Get server version
+            String version = Bukkit.getServer().getClass().getPackage().getName().split("\\.")[3];
+            String nmsPackage = "net.minecraft.server." + version;
+            String craftPackage = "org.bukkit.craftbukkit." + version;
+            
+            // Get CraftBlock and BlockPosition classes
+            Class<?> craftBlockClass = Class.forName(craftPackage + ".block.CraftBlock");
+            Class<?> blockPositionClass = Class.forName(nmsPackage + ".core.BlockPosition");
+            Class<?> worldClass = Class.forName(nmsPackage + ".world.level.World");
+            Class<?> tileEntityClass = Class.forName(nmsPackage + ".world.level.block.entity.TileEntity");
+            Class<?> nbtTagCompoundClass = Class.forName(nmsPackage + ".nbt.NBTTagCompound");
+            
+            // Get methods
+            getTileEntityMethod = worldClass.getMethod("getBlockEntity", blockPositionClass);
+            saveMethod = tileEntityClass.getMethod("save", nbtTagCompoundClass);
+            loadMethod = tileEntityClass.getMethod("load", nbtTagCompoundClass);
+            
+            nmsAvailable = true;
+            getLogger().info("NMS tile entity access initialized (version: " + version + ")");
+        } catch (Exception e) {
+            nmsAvailable = false;
+            getLogger().warning("NMS tile entity access not available, falling back to Bukkit API: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Capture container NBT data (WorldEdit-style) for exact restoration
+     * Returns serialized NBT as byte array, or null if not available
+     */
+    private byte[] captureContainerNBT(Block block) {
+        if (!nmsAvailable || !(block.getState() instanceof Container)) {
+            return null;
+        }
+        
+        try {
+            String version = Bukkit.getServer().getClass().getPackage().getName().split("\\.")[3];
+            String nmsPackage = "net.minecraft.server." + version;
+            String craftPackage = "org.bukkit.craftbukkit." + version;
+            
+            Class<?> craftBlockClass = Class.forName(craftPackage + ".block.CraftBlock");
+            Class<?> blockPositionClass = Class.forName(nmsPackage + ".core.BlockPosition");
+            Class<?> worldClass = Class.forName(nmsPackage + ".world.level.World");
+            Class<?> nbtTagCompoundClass = Class.forName(nmsPackage + ".nbt.NBTTagCompound");
+            Class<?> nbtIoClass = Class.forName(nmsPackage + ".nbt.NBTCompressedStreamTools");
+            
+            // Get CraftBlock instance
+            Object craftBlock = craftBlockClass.cast(block);
+            Object nmsWorld = craftBlockClass.getMethod("getHandle").invoke(craftBlock);
+            Object blockPos = blockPositionClass.getConstructor(int.class, int.class, int.class)
+                .newInstance(block.getX(), block.getY(), block.getZ());
+            
+            // Get tile entity
+            Object tileEntity = getTileEntityMethod.invoke(nmsWorld, blockPos);
+            if (tileEntity == null) {
+                return null;
+            }
+            
+            // Create NBT compound and save tile entity data
+            Object nbt = nbtTagCompoundClass.getConstructor().newInstance();
+            saveMethod.invoke(tileEntity, nbt);
+            
+            // Compress NBT to byte array
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            java.lang.reflect.Method writeMethod = nbtIoClass.getMethod("a", nbtTagCompoundClass, java.io.DataOutput.class);
+            writeMethod.invoke(null, nbt, new java.io.DataOutputStream(baos));
+            
+            return baos.toByteArray();
+        } catch (Exception e) {
+            getLogger().fine("Failed to capture container NBT at " + block.getLocation() + ": " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Restore container NBT data (WorldEdit-style) for exact restoration
+     * Returns true if successful, false otherwise
+     */
+    private boolean restoreContainerNBT(Block block, byte[] nbtData) {
+        if (!nmsAvailable || nbtData == null || nbtData.length == 0) {
+            return false;
+        }
+        
+        try {
+            String version = Bukkit.getServer().getClass().getPackage().getName().split("\\.")[3];
+            String nmsPackage = "net.minecraft.server." + version;
+            String craftPackage = "org.bukkit.craftbukkit." + version;
+            
+            Class<?> craftBlockClass = Class.forName(craftPackage + ".block.CraftBlock");
+            Class<?> blockPositionClass = Class.forName(nmsPackage + ".core.BlockPosition");
+            Class<?> worldClass = Class.forName(nmsPackage + ".world.level.World");
+            Class<?> nbtTagCompoundClass = Class.forName(nmsPackage + ".nbt.NBTTagCompound");
+            Class<?> nbtIoClass = Class.forName(nmsPackage + ".nbt.NBTCompressedStreamTools");
+            
+            // Get CraftBlock instance
+            Object craftBlock = craftBlockClass.cast(block);
+            Object nmsWorld = craftBlockClass.getMethod("getHandle").invoke(craftBlock);
+            Object blockPos = blockPositionClass.getConstructor(int.class, int.class, int.class)
+                .newInstance(block.getX(), block.getY(), block.getZ());
+            
+            // Get tile entity
+            Object tileEntity = getTileEntityMethod.invoke(nmsWorld, blockPos);
+            if (tileEntity == null) {
+                return false;
+            }
+            
+            // Decompress NBT from byte array
+            java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(nbtData);
+            java.lang.reflect.Method readMethod = nbtIoClass.getMethod("a", java.io.DataInput.class);
+            Object nbt = readMethod.invoke(null, new java.io.DataInputStream(bais));
+            
+            // Load NBT into tile entity
+            loadMethod.invoke(tileEntity, nbt);
+            
+            // Update the block to persist changes
+            block.getState().update(true, true);
+            
+            return true;
+        } catch (Exception e) {
+            getLogger().fine("Failed to restore container NBT at " + block.getLocation() + ": " + e.getMessage());
+            return false;
+        }
     }
 
     @Override
@@ -461,6 +617,38 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }, 20L); // 1 second delay to ensure PlaceholderAPI is ready
     }
 
+    /**
+     * Helper method to restore container items from stored item array (fallback when NBT not available)
+     */
+    private void restoreContainerItems(Block block, Container container, String challengeId, String locKey) {
+        Map<String, ItemStack[]> containerInvMap = challengeContainerInventories.get(challengeId);
+        if (containerInvMap != null && containerInvMap.containsKey(locKey)) {
+            ItemStack[] storedItems = containerInvMap.get(locKey);
+            container.getInventory().clear();
+            int itemsRestored = 0;
+            for (int j = 0; j < storedItems.length && j < container.getInventory().getSize(); j++) {
+                ItemStack item = storedItems[j];
+                if (item != null && item.getType() != Material.AIR) {
+                    container.getInventory().setItem(j, item.clone());
+                    itemsRestored++;
+                }
+            }
+            BlockState state = block.getState();
+            if (state instanceof Container) {
+                state.update(true, true);
+            }
+            if (itemsRestored > 0) {
+                getLogger().info("[CONTAINER DEBUG] Restored " + itemsRestored + " items (fallback) to container at " + locKey);
+            }
+        } else {
+            getLogger().info("[CONTAINER DEBUG] No stored inventory data for container at " + locKey + " - initializing empty");
+            BlockState state = block.getState();
+            if (state instanceof Container) {
+                state.update(true, true);
+            }
+        }
+    }
+    
     // ====== DATA.YML ======
 
     private void setupDataFile() {
@@ -921,6 +1109,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         "x, Medium=" + cumulativeRewardMultipliers.get("medium") + 
                         "x, Hard=" + cumulativeRewardMultipliers.get("hard") + 
                         "x, Extreme=" + cumulativeRewardMultipliers.get("extreme") + "x");
+    }
+    
+    private void loadDebugSettings() {
+        FileConfiguration config = getConfig();
+        debugSpawnerLevels = config.getBoolean("debug-spawner-levels", false);
+        if (debugSpawnerLevels) {
+            getLogger().info("Debug spawner level logging: enabled");
+        }
     }
     
     private void loadLivesSystem() {
@@ -4021,6 +4217,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 // Clean up difficulty tier if no players are active in this challenge
                 cleanupChallengeDifficultyIfEmpty(cfg.id);
             
+            // Revert spawner levels back to original before resetting cooldowns
+            revertSpawnerLevelsForChallenge(cfg);
+            
             // Reset MythicMobs spawner cooldowns in the challenge area
             resetMythicMobsSpawnersInArea(cfg);
             
@@ -4169,6 +4368,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Clean up difficulty tier if no players are active in this challenge
             if (exitedChallengeId != null) {
                 cleanupChallengeDifficultyIfEmpty(exitedChallengeId);
+                
+                // Revert spawner levels back to original before resetting cooldowns
+                revertSpawnerLevelsForChallenge(cfg);
+                
                 // Reset MythicMobs spawner cooldowns in the challenge area
                 resetMythicMobsSpawnersInArea(cfg);
             }
@@ -5511,6 +5714,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             
             // Clear any old initial states when setting a new regeneration area
             challengeInitialStates.remove(id);
+            challengeContainerInventories.remove(id); // Also clear stored container inventories
+            challengeContainerNBT.remove(id); // Also clear stored container NBT data
             challengeRegenerationStatus.remove(id);
             
             // Try to get WorldEdit selection first
@@ -5646,7 +5851,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             cfg.regenerationCorner1 = null;
             cfg.regenerationCorner2 = null;
             cfg.regenerationAutoExtendY = false; // Reset auto-extend Y as well
-            challengeInitialStates.remove(id); // Clear initial states from memory
+            challengeInitialStates.remove(id);
+            challengeContainerInventories.remove(id); // Also clear stored container inventories
+            challengeContainerNBT.remove(id); // Also clear stored container NBT data // Clear initial states from memory
             challengeRegenerationStatus.remove(id); // Clear regeneration status
             saveChallengeToConfig(cfg);
             player.sendMessage(getMessage("admin.challenge-clearregenerationarea-success", "id", id));
@@ -5791,6 +5998,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             
             // Clear any old initial states when setting a new regeneration area
             challengeInitialStates.remove(id);
+            challengeContainerInventories.remove(id); // Also clear stored container inventories
+            challengeContainerNBT.remove(id); // Also clear stored container NBT data
             challengeRegenerationStatus.remove(id);
             
             player.sendMessage(getMessage("admin.challenge-areasync-success", "id", id,
@@ -6728,6 +6937,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         
         // Regenerate challenge area at the start of countdown (if regeneration is configured)
+        // Spawner cooldowns will be reset after regeneration completes
         // Don't regenerate if challenge is being edited
         if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null && !isChallengeBeingEdited(cfg.id)) {
             // regenerateChallengeArea will set the status itself
@@ -6847,6 +7057,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     }
                     
                     // Regeneration complete - proceed with teleport
+                    // (Spawner cooldowns already reset after regeneration completed)
+                    
                     // Final check before teleporting - ensure all players still have their books
                     // Only teleport accepted players (if acceptedPlayers set is provided)
                     List<Player> playersToTeleport = new ArrayList<>();
@@ -6928,6 +7140,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         // Start time-limit watcher for this player
                         startTimeLimitWatcher(p, cfg);
                     }
+                    
+                    // Set spawner levels based on difficulty tier (after all players are in)
+                    // Run on main thread since MythicMobs API requires it
+                    // Add 5-tick delay (0.25 seconds) after regeneration to let spawners sync
+                    String tier = activeChallengeDifficulties.getOrDefault(cfg.id, "easy");
+                    final String finalTier = tier;
+                    Bukkit.getScheduler().runTaskLater(ConradChallengesPlugin.this, new Runnable() {
+                        @Override
+                        public void run() {
+                            setSpawnerLevelsForChallenge(cfg, finalTier);
+                        }
+                    }, 5L); // 5 ticks = 0.25 seconds delay
+                    
                     // Clean up tracking
                     activeCountdownTasks.remove(cfg.id);
                     countdownPlayers.remove(cfg.id);
@@ -8453,7 +8678,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     /**
      * Collects all tier rewards with inheritance (lower tiers get multiplied when inherited by higher tiers)
      * All rewards from lower tiers get the current tier's cumulative multiplier.
-     * Prevents duplicate rewards - if multiple tiers have the same item/material/command, only the highest tier version is kept.
+     * Prevents duplicate rewards - if multiple tiers have the EXACT same reward (same type, material, amount, command),
+     * only the highest tier version is kept. Different amounts/values are treated as different rewards.
      */
     private List<TierReward> collectTierRewards(ChallengeConfig cfg, String difficultyTier) {
         List<TierReward> allRewards = new ArrayList<>();
@@ -8465,7 +8691,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         double currentTierMultiplier = cumulativeRewardMultipliers.getOrDefault(difficultyTier, 1.0);
         
         // Track rewards we've already added to prevent duplicates
-        // Key format: "TYPE:MATERIAL" for items, "TYPE:COMMAND" for commands
+        // Key format includes amounts/values to distinguish similar rewards
         Set<String> seenRewards = new HashSet<>();
         
         // Collect rewards in REVERSE order (higher tiers first) so higher tier rewards take precedence
@@ -8475,9 +8701,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             if (tierRewards != null) {
                 for (TierReward reward : tierRewards) {
                     // Generate a unique key for this reward to check for duplicates
+                    // Now includes amounts/values so different amounts are treated as different rewards
                     String rewardKey = getRewardKey(reward);
                     
-                    // Only add if we haven't seen this reward type yet (higher tiers processed first)
+                    // Only add if we haven't seen this EXACT reward yet (higher tiers processed first)
                     if (!seenRewards.contains(rewardKey)) {
                         seenRewards.add(rewardKey);
                         
@@ -8498,9 +8725,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     
     /**
      * Generates a unique key for a reward to detect duplicates.
-     * Same material/item type = duplicate, even if amounts differ.
+     * Now includes amounts/values to distinguish similar rewards with different amounts.
      * Custom items (with CustomModelData, custom name, or custom lore) are treated as different from regular items.
-     * Commands are compared by base structure (command type and target, ignoring amounts).
+     * Commands include the full command (with amounts) to distinguish different reward values.
      */
     private String getRewardKey(TierReward reward) {
         switch (reward.type) {
@@ -8509,32 +8736,44 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     // Check if item has custom data (CustomModelData, custom name, custom lore)
                     String customSuffix = getItemCustomDataSuffix(reward.itemStack);
                     // Include custom data in key so custom items are treated as different from regular items
-                    return "HAND:" + reward.itemStack.getType().name() + customSuffix;
+                    // Also include a hash of the item's NBT data to distinguish items with different properties
+                    String nbtHash = "";
+                    try {
+                        if (reward.itemStack.hasItemMeta()) {
+                            // Create a simple hash from item meta to distinguish items
+                            org.bukkit.inventory.meta.ItemMeta meta = reward.itemStack.getItemMeta();
+                            if (meta != null) {
+                                // Use display name and lore as part of the key
+                                if (meta.hasDisplayName()) {
+                                    nbtHash += ":" + meta.getDisplayName().hashCode();
+                                }
+                                if (meta.hasLore()) {
+                                    nbtHash += ":" + meta.getLore().hashCode();
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        // Ignore errors
+                    }
+                    return "HAND:" + reward.itemStack.getType().name() + customSuffix + nbtHash;
                 }
                 return "HAND:UNKNOWN";
             case ITEM:
                 if (reward.material != null) {
-                    // ITEM type rewards are always regular items (no custom data)
-                    return "ITEM:" + reward.material.name();
+                    // Include amount in key so different amounts are treated as different rewards
+                    int amount = reward.amount > 0 ? reward.amount : 1;
+                    return "ITEM:" + reward.material.name() + ":" + amount;
                 }
                 return "ITEM:UNKNOWN";
             case COMMAND:
                 if (reward.command != null) {
-                    // Normalize command for comparison: remove player placeholder, normalize whitespace
-                    // Compare base command structure (e.g., "eco give" vs "give diamond")
-                    // This prevents duplicate commands like "eco give %player% 1000" and "eco give %player% 2000"
+                    // Include the FULL command (with amounts) so different reward values are treated as different
+                    // Normalize: remove player placeholder, normalize whitespace, but keep amounts
                     String normalized = reward.command.toLowerCase()
                         .replace("%player%", "")
                         .replaceAll("\\s+", " ") // Normalize whitespace
                         .trim();
-                    // Extract command base (first 2-3 words typically identify the command type)
-                    String[] parts = normalized.split("\\s+");
-                    if (parts.length >= 2) {
-                        // For commands like "eco give" or "give diamond", use first 2 parts
-                        return "COMMAND:" + parts[0] + " " + parts[1];
-                    } else if (parts.length == 1) {
-                        return "COMMAND:" + parts[0];
-                    }
+                    // Use the full normalized command as the key (includes amounts)
                     return "COMMAND:" + normalized;
                 }
                 return "COMMAND:UNKNOWN";
@@ -8912,7 +9151,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 if (rewardMessages.isEmpty()) {
                     player.sendMessage(getMessage("admin.challenge-completed-party"));
                 } else {
-                    player.sendMessage(getMessage("admin.challenge-completed-rewards", "rewards", String.join(getMessage("admin.reward-separator"), rewardMessages)));
+                    // Translate color codes in reward messages before joining
+                    List<String> translatedRewardMessages = new ArrayList<>();
+                    for (String msg : rewardMessages) {
+                        translatedRewardMessages.add(ChatColor.translateAlternateColorCodes('&', msg));
+                    }
+                    String separator = ChatColor.translateAlternateColorCodes('&', getMessage("admin.reward-separator"));
+                    String rewardsText = String.join(separator, translatedRewardMessages);
+                    player.sendMessage(getMessage("admin.challenge-completed-rewards", "rewards", rewardsText));
                 }
             }
         }.runTaskLater(this, 1L);
@@ -9029,7 +9275,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 if (rewardMessages.isEmpty()) {
                     player.sendMessage(getMessage("lives.dead-party-reward-none"));
                 } else {
-                    player.sendMessage(getMessage("lives.dead-party-reward", "rewards", String.join(getMessage("admin.reward-separator"), rewardMessages)));
+                    // Translate color codes in reward messages before joining
+                    List<String> translatedRewardMessages = new ArrayList<>();
+                    for (String msg : rewardMessages) {
+                        translatedRewardMessages.add(ChatColor.translateAlternateColorCodes('&', msg));
+                    }
+                    String separator = ChatColor.translateAlternateColorCodes('&', getMessage("admin.reward-separator"));
+                    String rewardsText = String.join(separator, translatedRewardMessages);
+                    player.sendMessage(getMessage("lives.dead-party-reward", "rewards", rewardsText));
                 }
             }
         }.runTaskLater(this, 1L);
@@ -9643,6 +9896,46 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     try {
                         Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
                         BlockState state = block.getState();
+                        
+                        // For containers, capture NBT data (WorldEdit-style) for exact restoration
+                        // This is more reliable than BlockState snapshots
+                        if (state instanceof Container container) {
+                            try {
+                                String locKey = currentX[0] + "," + currentY[0] + "," + currentZ[0];
+                                
+                                // Try to capture NBT data first (most reliable)
+                                byte[] nbtData = captureContainerNBT(block);
+                                if (nbtData != null && nbtData.length > 0) {
+                                    challengeContainerNBT.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, nbtData);
+                                    getLogger().info("[CONTAINER DEBUG] Stored container NBT at " + locKey + " for challenge '" + challengeId + "' (" + nbtData.length + " bytes)");
+                                } else {
+                                    // Fallback: store inventory items if NBT capture fails
+                                    org.bukkit.inventory.Inventory inv = container.getInventory();
+                                    if (inv != null) {
+                                        ItemStack[] items = new ItemStack[inv.getSize()];
+                                        boolean hasItems = false;
+                                        for (int i = 0; i < inv.getSize(); i++) {
+                                            ItemStack item = inv.getItem(i);
+                                            if (item != null && item.getType() != Material.AIR) {
+                                                items[i] = item.clone();
+                                                hasItems = true;
+                                            } else {
+                                                items[i] = null;
+                                            }
+                                        }
+                                        challengeContainerInventories.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, items);
+                                        long itemCount = java.util.Arrays.stream(items).filter(item -> item != null && item.getType() != Material.AIR).count();
+                                        if (hasItems) {
+                                            getLogger().info("[CONTAINER DEBUG] Stored container inventory (fallback) at " + locKey + " for challenge '" + challengeId + "' (" + itemCount + " items)");
+                                        }
+                                    }
+                                }
+                            } catch (Exception invException) {
+                                // If container access fails, log but continue - state will still be captured
+                                getLogger().fine("Could not access container at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " (continuing anyway)");
+                            }
+                        }
+                        
                         states.add(state);
                     } catch (Exception e) {
                         failedBlocks[0]++;
@@ -9780,6 +10073,46 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     try {
                         Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
                         BlockState state = block.getState();
+                        
+                        // For containers, capture NBT data (WorldEdit-style) for exact restoration
+                        // This is more reliable than BlockState snapshots
+                        if (state instanceof Container container) {
+                            try {
+                                String locKey = currentX[0] + "," + currentY[0] + "," + currentZ[0];
+                                
+                                // Try to capture NBT data first (most reliable)
+                                byte[] nbtData = captureContainerNBT(block);
+                                if (nbtData != null && nbtData.length > 0) {
+                                    challengeContainerNBT.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, nbtData);
+                                    getLogger().info("[CONTAINER DEBUG] Stored container NBT at " + locKey + " for challenge '" + challengeId + "' (" + nbtData.length + " bytes)");
+                                } else {
+                                    // Fallback: store inventory items if NBT capture fails
+                                    org.bukkit.inventory.Inventory inv = container.getInventory();
+                                    if (inv != null) {
+                                        ItemStack[] items = new ItemStack[inv.getSize()];
+                                        boolean hasItems = false;
+                                        for (int i = 0; i < inv.getSize(); i++) {
+                                            ItemStack item = inv.getItem(i);
+                                            if (item != null && item.getType() != Material.AIR) {
+                                                items[i] = item.clone();
+                                                hasItems = true;
+                                            } else {
+                                                items[i] = null;
+                                            }
+                                        }
+                                        challengeContainerInventories.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, items);
+                                        long itemCount = java.util.Arrays.stream(items).filter(item -> item != null && item.getType() != Material.AIR).count();
+                                        if (hasItems) {
+                                            getLogger().info("[CONTAINER DEBUG] Stored container inventory (fallback) at " + locKey + " for challenge '" + challengeId + "' (" + itemCount + " items)");
+                                        }
+                                    }
+                                }
+                            } catch (Exception invException) {
+                                // If container access fails, log but continue - state will still be captured
+                                getLogger().fine("Could not access container at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " (continuing anyway)");
+                            }
+                        }
+                        
                         states.add(state);
                     } catch (Exception e) {
                         failedBlocks[0]++;
@@ -9838,6 +10171,21 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             try {
                 Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
                 BlockState state = block.getState();
+                
+                // For containers, explicitly access the inventory to ensure it's loaded and captured
+                // This is done in a separate try-catch to avoid breaking the entire capture if one container fails
+                if (state instanceof Container container) {
+                    try {
+                        // Access the inventory to ensure it's loaded in the BlockState snapshot
+                        // This is critical for proper inventory preservation during regeneration
+                        container.getInventory();
+                    } catch (Exception invException) {
+                        // If inventory access fails, log but continue - state will still be captured
+                        // This can happen if the container is in an invalid state
+                        getLogger().fine("Could not access inventory for container at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " (continuing anyway)");
+                    }
+                }
+                
                 states.add(state);
             } catch (Exception e) {
                 failedBlocks[0]++;
@@ -9917,6 +10265,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         final World world = cfg.regenerationCorner1.getWorld();
         final String challengeId = cfg.id;
         
+        // Clear old container inventories and NBT data before recapturing to avoid mixing old/new data
+        challengeContainerInventories.remove(challengeId);
+        challengeContainerNBT.remove(challengeId);
+        
         // Calculate bounding box
         int minX = Math.min(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
         int maxX = Math.max(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
@@ -9977,6 +10329,46 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     try {
                         Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
                         BlockState state = block.getState();
+                        
+                        // For containers, capture NBT data (WorldEdit-style) for exact restoration
+                        // This is more reliable than BlockState snapshots
+                        if (state instanceof Container container) {
+                            try {
+                                String locKey = currentX[0] + "," + currentY[0] + "," + currentZ[0];
+                                
+                                // Try to capture NBT data first (most reliable)
+                                byte[] nbtData = captureContainerNBT(block);
+                                if (nbtData != null && nbtData.length > 0) {
+                                    challengeContainerNBT.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, nbtData);
+                                    getLogger().info("[CONTAINER DEBUG] Stored container NBT at " + locKey + " for challenge '" + challengeId + "' (" + nbtData.length + " bytes)");
+                                } else {
+                                    // Fallback: store inventory items if NBT capture fails
+                                    org.bukkit.inventory.Inventory inv = container.getInventory();
+                                    if (inv != null) {
+                                        ItemStack[] items = new ItemStack[inv.getSize()];
+                                        boolean hasItems = false;
+                                        for (int i = 0; i < inv.getSize(); i++) {
+                                            ItemStack item = inv.getItem(i);
+                                            if (item != null && item.getType() != Material.AIR) {
+                                                items[i] = item.clone();
+                                                hasItems = true;
+                                            } else {
+                                                items[i] = null;
+                                            }
+                                        }
+                                        challengeContainerInventories.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, items);
+                                        long itemCount = java.util.Arrays.stream(items).filter(item -> item != null && item.getType() != Material.AIR).count();
+                                        if (hasItems) {
+                                            getLogger().info("[CONTAINER DEBUG] Stored container inventory (fallback) at " + locKey + " for challenge '" + challengeId + "' (" + itemCount + " items)");
+                                        }
+                                    }
+                                }
+                            } catch (Exception invException) {
+                                // If container access fails, log but continue - state will still be captured
+                                getLogger().fine("Could not access container at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " (continuing anyway)");
+                            }
+                        }
+                        
                         states.add(state);
                     } catch (Exception e) {
                         failedBlocks[0]++;
@@ -10001,10 +10393,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 if (currentX[0] > maxX) {
                     // Done capturing all blocks
                     challengeInitialStates.put(challengeId, states);
+                    Map<String, ItemStack[]> containerInvMap = challengeContainerInventories.get(challengeId);
+                    int containerCount = containerInvMap != null ? containerInvMap.size() : 0;
                     if (failedBlocks[0] > 0) {
-                        getLogger().warning("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + failedBlocks[0] + " failed)");
+                        getLogger().warning("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + failedBlocks[0] + " failed, " + containerCount + " container inventories stored)");
                     } else {
-                        getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks)");
+                        getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + containerCount + " container inventories stored)");
                     }
                     if (callback != null) {
                         callback.accept(true);
@@ -10021,6 +10415,38 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                 try {
                                     Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
                                     BlockState state = block.getState();
+                                    
+                                    // For containers, store inventory items separately since BlockState snapshots don't reliably preserve them
+                                    // This is done in a separate try-catch to avoid breaking the entire capture if one container fails
+                                    if (state instanceof Container container) {
+                                        try {
+                                            org.bukkit.inventory.Inventory inv = container.getInventory();
+                                            if (inv != null) {
+                                                // Store inventory items separately - BlockState snapshots don't preserve container inventories
+                                                ItemStack[] items = new ItemStack[inv.getSize()];
+                                                boolean hasItems = false;
+                                                for (int i = 0; i < inv.getSize(); i++) {
+                                                    ItemStack item = inv.getItem(i);
+                                                    if (item != null && item.getType() != Material.AIR) {
+                                                        items[i] = item.clone(); // Clone to preserve the item
+                                                        hasItems = true;
+                                                    } else {
+                                                        items[i] = null;
+                                                    }
+                                                }
+                                                
+                                                // Only store if there are items (saves memory)
+                                                if (hasItems) {
+                                                    String locKey = currentX[0] + "," + currentY[0] + "," + currentZ[0];
+                                                    challengeContainerInventories.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, items);
+                                                }
+                                            }
+                                        } catch (Exception invException) {
+                                            // If inventory access fails, log but continue - state will still be captured
+                                            getLogger().fine("Could not access inventory for container at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " (continuing anyway)");
+                                        }
+                                    }
+                                    
                                     states.add(state);
                                 } catch (Exception e) {
                                     failedBlocks[0]++;
@@ -10265,31 +10691,54 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                 }
                             }
                             
-                            // Check special tile entities (only if block data matches or is simple block)
-                            if (!needsRestore) {
-                                if (originalState instanceof Container originalContainer) {
-                                    // For containers, check if contents changed
-                                    BlockState currentState = block.getState();
-                                    if (currentState instanceof Container currentContainer) {
-                                        // Compare inventory contents
-                                        if (originalContainer.getInventory() != null && currentContainer.getInventory() != null) {
-                                            for (int i = 0; i < originalContainer.getInventory().getSize(); i++) {
+                            // ALWAYS check containers for inventory changes (inventory changes don't affect block type/data)
+                            // This must run regardless of needsRestore status
+                            if (originalState instanceof Container originalContainer) {
+                                // For containers, ALWAYS check if contents changed (inventory changes don't affect block type/data)
+                                BlockState currentState = block.getState();
+                                if (currentState instanceof Container currentContainer) {
+                                    // Compare inventory contents - use isSimilar() for better comparison
+                                    if (originalContainer.getInventory() != null && currentContainer.getInventory() != null) {
+                                        int inventorySize = originalContainer.getInventory().getSize();
+                                        if (inventorySize != currentContainer.getInventory().getSize()) {
+                                            needsRestore = true;
+                                        } else {
+                                            for (int i = 0; i < inventorySize; i++) {
                                                 ItemStack originalItem = originalContainer.getInventory().getItem(i);
                                                 ItemStack currentItem = currentContainer.getInventory().getItem(i);
                                                 
+                                                // Both null = same, continue
                                                 if (originalItem == null && currentItem == null) continue;
+                                                
+                                                // One null, one not = different
                                                 if (originalItem == null || currentItem == null) {
                                                     needsRestore = true;
                                                     break;
                                                 }
-                                                if (!originalItem.equals(currentItem)) {
+                                                
+                                                // Compare using isSimilar() which handles NBT and metadata better
+                                                // Also check amount separately as isSimilar() ignores amount
+                                                if (!originalItem.isSimilar(currentItem) || originalItem.getAmount() != currentItem.getAmount()) {
                                                     needsRestore = true;
                                                     break;
                                                 }
                                             }
                                         }
+                                    } else {
+                                        // One inventory is null but not both - needs restore
+                                        if (originalContainer.getInventory() == null != (currentContainer.getInventory() == null)) {
+                                            needsRestore = true;
+                                        }
                                     }
-                                } else if (originalState instanceof org.bukkit.block.Sign originalSign) {
+                                } else {
+                                    // Current state is not a container but original was - needs restore
+                                    needsRestore = true;
+                                }
+                            }
+                            
+                            // Check other special tile entities (only if block data matches or is simple block)
+                            if (!needsRestore) {
+                                if (originalState instanceof org.bukkit.block.Sign originalSign) {
                                     BlockState currentState = block.getState();
                                     if (currentState instanceof org.bukkit.block.Sign currentSign) {
                                         for (int i = 0; i < 4; i++) {
@@ -10312,6 +10761,24 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                         if (originalSpawner.getSpawnedType() != currentSpawner.getSpawnedType()) {
                                             needsRestore = true;
                                         }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Always restore containers if we have stored inventory data for them
+                        // This is the most reliable check since BlockState snapshots don't preserve inventories
+                        if (!needsRestore && originalState instanceof Container) {
+                            String locKey = loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ();
+                            Map<String, ItemStack[]> containerInvMap = challengeContainerInventories.get(challengeId);
+                            if (containerInvMap != null && containerInvMap.containsKey(locKey)) {
+                                ItemStack[] storedItems = containerInvMap.get(locKey);
+                                // Check if stored inventory has any items
+                                for (ItemStack item : storedItems) {
+                                    if (item != null && item.getType() != Material.AIR) {
+                                        needsRestore = true;
+                                        getLogger().fine("Forcing container restore at " + locKey + " - has stored inventory");
+                                        break;
                                     }
                                 }
                             }
@@ -10406,6 +10873,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         Material originalType = originalState.getType();
                         org.bukkit.block.data.BlockData originalData = originalState.getBlockData();
                         
+                        // Check if this is a container or other tile entity that needs special handling
+                        // Containers MUST use BlockState path to preserve inventory contents
+                        boolean needsTileEntityHandling = originalState instanceof Container || 
+                                                         originalState instanceof org.bukkit.block.Sign ||
+                                                         originalState instanceof org.bukkit.block.Banner ||
+                                                         originalState instanceof org.bukkit.block.CreatureSpawner ||
+                                                         originalState instanceof org.bukkit.block.CommandBlock;
+                        
                         // Check if this is a multi-block structure (doors, beds, etc.)
                         // These need applyPhysics=true to properly link both halves
                         boolean isMultiBlock = originalType.name().contains("DOOR") || 
@@ -10419,45 +10894,47 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                              originalType.name().contains("PEONY") ||
                                              originalType.name().contains("TALL_SEAGRASS");
                         
-                        if (isMultiBlock) {
-                            // For multi-block structures (doors, beds, etc.), use BlockState.update() with applyPhysics=true
-                            // This ensures both halves are properly linked together
-                            // Must use BlockState path to properly restore multi-block relationships
-                            BlockState newState = block.getState();
-                            newState.setType(originalType);
-                            newState.setBlockData(originalData);
+                        if (isMultiBlock || needsTileEntityHandling) {
+                            // For multi-block structures and tile entities, use BlockState.update()
+                            // This ensures proper restoration of container inventories, signs, spawners, etc.
                             
-                            // Use update(true, true) - first true = force update, second true = apply physics
-                            // This will automatically create/link the other half of doors/beds
-                            // The physics update ensures the halves connect properly
-                            newState.update(true, true);
-                        } else {
-                            // Fast path: Use direct Block.setType() and setBlockData() with applyPhysics=false
-                            // This bypasses expensive BlockState.update() overhead for simple blocks
-                            block.setType(originalType, false);  // false = no physics updates
-                            block.setBlockData(originalData, false);  // false = no physics updates
-                            
-                            // For special tile entities, we need to use BlockState to restore data
-                            if (originalState instanceof Container || 
-                                originalState instanceof org.bukkit.block.Sign ||
-                                originalState instanceof org.bukkit.block.Banner ||
-                                originalState instanceof org.bukkit.block.CreatureSpawner ||
-                                originalState instanceof org.bukkit.block.CommandBlock) {
+                            // For containers, we need to set the block type first, then get a fresh BlockState
+                            // This ensures the container is properly initialized before we try to set inventory
+                            if (originalState instanceof Container) {
+                                getLogger().info("[CONTAINER DEBUG] Restoring container at " + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ());
+                                // Set block type and data first to initialize the container
+                                block.setType(originalType, false);
+                                block.setBlockData(originalData, false);
                                 
+                                // Now get a fresh BlockState (this will have the container properly initialized)
                                 BlockState newState = block.getState();
                                 
-                                // Restore container contents if applicable
-                                if (originalState instanceof Container originalContainer && newState instanceof Container newContainer) {
-                                    newContainer.getInventory().clear();
-                                    if (originalContainer.getInventory() != null) {
-                                        for (int j = 0; j < originalContainer.getInventory().getSize(); j++) {
-                                            ItemStack item = originalContainer.getInventory().getItem(j);
-                                            if (item != null && item.getType() != Material.AIR) {
-                                                newContainer.getInventory().setItem(j, item.clone());
-                                            }
+                                // Restore container contents using NBT data (WorldEdit-style) for exact restoration
+                                // Falls back to item array if NBT not available
+                                if (newState instanceof Container newContainer) {
+                                    String locKey = loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ();
+                                    
+                                    // Try NBT restoration first (most reliable)
+                                    Map<String, byte[]> containerNBTMap = challengeContainerNBT.get(challengeId);
+                                    if (containerNBTMap != null && containerNBTMap.containsKey(locKey)) {
+                                        byte[] nbtData = containerNBTMap.get(locKey);
+                                        if (restoreContainerNBT(block, nbtData)) {
+                                            getLogger().info("[CONTAINER DEBUG] Restored container NBT at " + locKey + " for challenge '" + challengeId + "'");
+                                        } else {
+                                            getLogger().warning("[CONTAINER DEBUG] Failed to restore container NBT at " + locKey + ", falling back to item array");
+                                            // Fall through to item array restoration
+                                            restoreContainerItems(block, newContainer, challengeId, locKey);
                                         }
+                                    } else {
+                                        // No NBT data, use item array fallback
+                                        restoreContainerItems(block, newContainer, challengeId, locKey);
                                     }
                                 }
+                            } else {
+                                // For non-container tile entities, use the standard BlockState approach
+                                BlockState newState = block.getState();
+                                newState.setType(originalType);
+                                newState.setBlockData(originalData);
                                 
                                 // Copy tile entity data for special blocks
                                 if (originalState instanceof org.bukkit.block.Sign originalSign && 
@@ -10500,9 +10977,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                     newCmd.setName(originalCmd.getName());
                                 }
                                 
-                                // Only update for tile entities that need it
-                                newState.update(true, false);
+                                // Update with appropriate physics setting
+                                // Multi-block structures need physics=true, containers/tile entities need physics=false
+                                newState.update(true, isMultiBlock);
                             }
+                        } else {
+                            // Fast path: Use direct Block.setType() and setBlockData() with applyPhysics=false
+                            // This bypasses expensive BlockState.update() overhead for simple blocks
+                            block.setType(originalType, false);  // false = no physics updates
+                            block.setBlockData(originalData, false);  // false = no physics updates
                         }
                         restored[0]++;
                     } catch (Exception e) {
@@ -10523,6 +11006,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     
                     // Mark regeneration as complete
                     challengeRegenerationStatus.put(challengeId, true);
+                    
+                    // Spawner cooldowns will be reset when challenge completes/exits, not during start
                     
                     // Check if countdown already finished and teleport players if so
                     CountdownTaskWrapper wrapper = activeCountdownTasks.get(challengeId);
@@ -11047,18 +11532,44 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
      * @param cfg The challenge configuration
      */
     private void resetMythicMobsSpawnersInArea(ChallengeConfig cfg) {
+        // Cooldown check: prevent duplicate resets within 2 seconds
+        Long lastReset = lastSpawnerResetTime.get(cfg.id);
+        long currentTime = System.currentTimeMillis();
+        if (lastReset != null && (currentTime - lastReset) < 2000L) {
+            getLogger().fine("Skipping spawner reset for challenge '" + cfg.id + "' - reset was called " + 
+                ((currentTime - lastReset) / 1000.0) + " seconds ago (cooldown: 2 seconds)");
+            return; // Too soon since last reset
+        }
+        
+        // Update last reset time
+        lastSpawnerResetTime.put(cfg.id, currentTime);
+        
+        // Run async to avoid TPS hangups - filter spawners async, then reset on main thread
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            findAndResetSpawnersAsync(cfg);
+        });
+    }
+    
+    private void findAndResetSpawnersAsync(ChallengeConfig cfg) {
+        if (debugSpawnerLevels) {
+            getLogger().info("Finding MythicMobs spawners to reset for challenge '" + cfg.id + "' (async)");
+        }
+        
         // Check if MythicMobs is installed
         if (Bukkit.getPluginManager().getPlugin("MythicMobs") == null) {
+            getLogger().fine("MythicMobs not installed, skipping spawner reset");
             return; // MythicMobs not installed
         }
         
         // Check if regeneration area is set
         if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) {
+            getLogger().fine("No regeneration area set for challenge '" + cfg.id + "', skipping spawner reset");
             return; // No regeneration area set
         }
         
         World world = cfg.regenerationCorner1.getWorld();
         if (world == null) {
+            getLogger().fine("World not loaded for challenge '" + cfg.id + "', skipping spawner reset");
             return; // World not loaded
         }
         
@@ -11076,6 +11587,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         int minZ = Math.min(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
         int maxZ = Math.max(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
         
+        String worldName = world.getName();
+        getLogger().info("Regeneration area bounds: X[" + minX + " to " + maxX + "] Y[" + minY + " to " + maxY + "] Z[" + minZ + " to " + maxZ + "] in world '" + worldName + "'");
+        
         try {
             // Get MythicMobs API using reflection
             Class<?> mythicAPI = Class.forName("io.lumine.mythic.bukkit.MythicBukkit");
@@ -11084,80 +11598,358 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Get spawner manager
             Object spawnerManager = mythicAPI.getMethod("getSpawnerManager").invoke(mythicPlugin);
             if (spawnerManager == null) {
+                getLogger().warning("MythicMobs spawner manager is null - cannot reset spawners");
                 return;
             }
             
-            // Get all spawners - try different method names for different MM versions
+            getLogger().info("Got spawner manager: " + spawnerManager.getClass().getName());
+            
+            // MythicMobs spawners are stored by name/ID, typically in a Map<String, Spawner>
+            // Try to get all spawners - they're usually stored as a Map
             java.util.Collection<?> spawners = null;
+            
+            // Try method 1: getSpawners() - most common MythicMobs method
             try {
-                Method getAllSpawnersMethod = spawnerManager.getClass().getMethod("getSpawners");
-                spawners = (java.util.Collection<?>) getAllSpawnersMethod.invoke(spawnerManager);
+                Method getSpawnersMethod = spawnerManager.getClass().getMethod("getSpawners");
+                Object result = getSpawnersMethod.invoke(spawnerManager);
+                if (result instanceof java.util.Map) {
+                    spawners = ((java.util.Map<?, ?>) result).values();
+                    getLogger().info("Got spawners via getSpawners() returning Map: " + (spawners != null ? spawners.size() : "null"));
+                } else if (result instanceof java.util.Collection) {
+                    spawners = (java.util.Collection<?>) result;
+                    getLogger().info("Got spawners via getSpawners() returning Collection: " + (spawners != null ? spawners.size() : "null"));
+                } else {
+                    getLogger().info("getSpawners() returned unexpected type: " + (result != null ? result.getClass().getName() : "null"));
+                }
             } catch (NoSuchMethodException e) {
-                try {
-                    Method getSpawnersMethod = spawnerManager.getClass().getMethod("getSpawners");
-                    Object spawnersMap = getSpawnersMethod.invoke(spawnerManager);
-                    if (spawnersMap instanceof java.util.Map) {
-                        spawners = ((java.util.Map<?, ?>) spawnersMap).values();
+                getLogger().info("getSpawners() method not found, trying alternatives");
+            } catch (Exception e) {
+                getLogger().warning("Error calling getSpawners(): " + e.getMessage());
+                e.printStackTrace();
+            }
+            
+            // Try method 2: getSpawnerMap() or similar Map-returning methods
+            if (spawners == null || spawners.isEmpty()) {
+                String[] methodNames = {"getSpawnerMap", "getSpawnersMap", "getAllSpawners", "getActiveSpawners"};
+                for (String methodName : methodNames) {
+                    try {
+                        Method method = spawnerManager.getClass().getMethod(methodName);
+                        Object result = method.invoke(spawnerManager);
+                        if (result instanceof java.util.Map) {
+                            spawners = ((java.util.Map<?, ?>) result).values();
+                            getLogger().fine("Got spawners via " + methodName + "() returning Map: " + (spawners != null ? spawners.size() : "null"));
+                            break;
+                        } else if (result instanceof java.util.Collection) {
+                            spawners = (java.util.Collection<?>) result;
+                            getLogger().fine("Got spawners via " + methodName + "() returning Collection: " + (spawners != null ? spawners.size() : "null"));
+                            break;
+                        }
+                    } catch (NoSuchMethodException e) {
+                        // Try next method
+                    } catch (Exception e) {
+                        getLogger().fine("Error calling " + methodName + "(): " + e.getMessage());
                     }
-                } catch (Exception e2) {
-                    getLogger().fine("Could not get MythicMobs spawners (version may differ): " + e2.getMessage());
-                    return;
+                }
+            }
+            
+            // Try method 3: Direct field access to spawners map (MythicMobs often stores as Map<String, Spawner>)
+            if (spawners == null || spawners.isEmpty()) {
+                try {
+                    java.lang.reflect.Field[] fields = spawnerManager.getClass().getDeclaredFields();
+                    for (java.lang.reflect.Field field : fields) {
+                        String fieldName = field.getName().toLowerCase();
+                        // Look for fields that might contain spawners (map, spawners, etc.)
+                        if ((fieldName.contains("spawner") || fieldName.contains("map")) && 
+                            java.util.Map.class.isAssignableFrom(field.getType())) {
+                            field.setAccessible(true);
+                            Object fieldValue = field.get(spawnerManager);
+                            if (fieldValue instanceof java.util.Map) {
+                                spawners = ((java.util.Map<?, ?>) fieldValue).values();
+                                getLogger().fine("Got spawners via field " + field.getName() + ": " + (spawners != null ? spawners.size() : "null"));
+                                if (spawners != null && !spawners.isEmpty()) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    getLogger().fine("Error accessing spawner fields: " + e.getMessage());
+                }
+            }
+            
+            // Try method 4: Try all public methods that return Map or Collection
+            if (spawners == null || spawners.isEmpty()) {
+                getLogger().fine("Trying all public methods on spawner manager to find spawners...");
+                for (Method method : spawnerManager.getClass().getMethods()) {
+                    if (method.getParameterCount() == 0) {
+                        Class<?> returnType = method.getReturnType();
+                        if (java.util.Map.class.isAssignableFrom(returnType) || 
+                            java.util.Collection.class.isAssignableFrom(returnType)) {
+                            try {
+                                Object result = method.invoke(spawnerManager);
+                                if (result instanceof java.util.Map) {
+                                    java.util.Map<?, ?> map = (java.util.Map<?, ?>) result;
+                                    if (!map.isEmpty()) {
+                                        spawners = map.values();
+                                        getLogger().fine("Found spawners via method " + method.getName() + "(): " + spawners.size());
+                                        break;
+                                    }
+                                } else if (result instanceof java.util.Collection) {
+                                    java.util.Collection<?> coll = (java.util.Collection<?>) result;
+                                    if (!coll.isEmpty()) {
+                                        spawners = coll;
+                                        getLogger().fine("Found spawners via method " + method.getName() + "(): " + spawners.size());
+                                        break;
+                                    }
+                                }
+                            } catch (Exception e) {
+                                // Skip this method
+                            }
+                        }
+                    }
                 }
             }
             
             if (spawners == null || spawners.isEmpty()) {
-                return; // No spawners found
+                getLogger().warning("No MythicMobs spawners found globally - spawner collection is " + (spawners == null ? "null" : "empty"));
+                getLogger().warning("Spawner manager class: " + spawnerManager.getClass().getName());
+                // Log available methods for debugging
+                String spawnerMethods = java.util.Arrays.stream(spawnerManager.getClass().getMethods())
+                    .map(Method::getName)
+                    .filter(name -> name.toLowerCase().contains("spawner"))
+                    .collect(java.util.stream.Collectors.joining(", "));
+                getLogger().info("Available spawner-related methods: " + spawnerMethods);
+                
+                // Try alternative approach: get spawners by checking blocks in the area
+                getLogger().info("Trying alternative approach: checking blocks in regeneration area for MythicMobs spawners...");
+                try {
+                    // Try getSpawnerAt(Location) method
+                    Method getSpawnerAtMethod = null;
+                    try {
+                        getSpawnerAtMethod = spawnerManager.getClass().getMethod("getSpawnerAt", Location.class);
+                    } catch (NoSuchMethodException e) {
+                        // Try with Block parameter
+                        try {
+                            getSpawnerAtMethod = spawnerManager.getClass().getMethod("getSpawnerAt", Block.class);
+                        } catch (NoSuchMethodException e2) {
+                            getLogger().info("getSpawnerAt() method not found");
+                        }
+                    }
+                    
+                    if (getSpawnerAtMethod != null) {
+                        java.util.List<Object> foundSpawners = new java.util.ArrayList<>();
+                        getLogger().info("Checking all spawner blocks in regeneration area for MythicMobs spawners...");
+                        int checkedBlocks = 0;
+                        int spawnerBlocks = 0;
+                        // Check all blocks in the regeneration area
+                        for (int x = minX; x <= maxX; x++) {
+                            for (int y = minY; y <= maxY; y++) {
+                                for (int z = minZ; z <= maxZ; z++) {
+                                    checkedBlocks++;
+                                    Location checkLoc = new Location(world, x, y, z);
+                                    Block block = checkLoc.getBlock();
+                                    if (block.getType() == Material.SPAWNER) {
+                                        spawnerBlocks++;
+                                        try {
+                                            Object spawner = getSpawnerAtMethod.getParameterCount() == 1 && 
+                                                             getSpawnerAtMethod.getParameterTypes()[0] == Location.class
+                                                             ? getSpawnerAtMethod.invoke(spawnerManager, checkLoc)
+                                                             : getSpawnerAtMethod.invoke(spawnerManager, block);
+                                            if (spawner != null && !foundSpawners.contains(spawner)) {
+                                                foundSpawners.add(spawner);
+                                                getLogger().info("Found MythicMobs spawner at " + checkLoc);
+                                            }
+                                        } catch (Exception e) {
+                                            // Not a MythicMobs spawner or error
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        getLogger().info("Checked " + checkedBlocks + " blocks, found " + spawnerBlocks + " spawner blocks, " + foundSpawners.size() + " MythicMobs spawners");
+                        if (!foundSpawners.isEmpty()) {
+                            spawners = foundSpawners;
+                            getLogger().info("Found " + spawners.size() + " MythicMobs spawner(s) by checking blocks in area");
+                        }
+                    }
+                } catch (Exception e) {
+                    getLogger().warning("Error trying alternative spawner detection: " + e.getMessage());
+                }
+                
+                if (spawners == null || spawners.isEmpty()) {
+                    return; // No spawners found
+                }
             }
             
-            int resetCount = 0;
+            getLogger().info("Found " + spawners.size() + " total MythicMobs spawner(s) to check (async filtering)");
             
-            // Iterate through all spawners and reset those in the regeneration area
+            // Collect spawners that need resetting (async filtering)
+            java.util.List<Object> spawnersToReset = new java.util.ArrayList<>();
+            int checkedCount = 0;
+            int noLocationCount = 0;
+            int wrongWorldCount = 0;
+            
+            // Iterate through all spawners and find those in the regeneration area (async)
+            // OPTIMIZATION: Check world first before expensive location conversion
             for (Object spawner : spawners) {
                 try {
-                    // Get spawner location
-                    Method getLocationMethod = spawner.getClass().getMethod("getLocation");
-                    Location spawnerLoc = (Location) getLocationMethod.invoke(spawner);
+                    // Step 1: Get AbstractLocation and check world FIRST (cheap check)
+                    Object abstractLoc = null;
+                    String spawnerWorldName = null;
+                    World spawnerWorldObj = null;
                     
-                    if (spawnerLoc == null || !spawnerLoc.getWorld().equals(world)) {
+                    try {
+                        Method getLocationMethod = spawner.getClass().getMethod("getLocation");
+                        abstractLoc = getLocationMethod.invoke(spawner);
+                        if (abstractLoc != null) {
+                            // Extract world from AbstractLocation first (cheap check)
+                            try {
+                                Method getWorld = abstractLoc.getClass().getMethod("getWorld");
+                                Object worldObj = getWorld.invoke(abstractLoc);
+                                
+                                if (worldObj instanceof World) {
+                                    spawnerWorldObj = (World) worldObj;
+                                    spawnerWorldName = spawnerWorldObj.getName();
+                                } else if (worldObj instanceof String) {
+                                    spawnerWorldName = (String) worldObj;
+                                    spawnerWorldObj = Bukkit.getWorld(spawnerWorldName);
+                                }
+                            } catch (Exception e) {
+                                // Can't get world from AbstractLocation, will try other methods
+                            }
+                        }
+                    } catch (Exception e) {
+                        // getLocation() failed, will try other methods below
+                    }
+                    
+                    // Step 2: Skip spawners in wrong world immediately (FAST FILTER)
+                    if (spawnerWorldName != null && !spawnerWorldName.equals(worldName)) {
+                        wrongWorldCount++;
+                        continue; // Skip this spawner - wrong world
+                    }
+                    
+                    // Step 3: Only convert to full Location if world matches (or couldn't determine world)
+                    Location spawnerLoc = null;
+                    
+                    if (abstractLoc != null && (spawnerWorldName == null || spawnerWorldName.equals(worldName))) {
+                        // World matches (or unknown) - now get full location
+                        // Try BukkitAdapter.adapt() first (fastest)
+                        try {
+                            Class<?> bukkitAdapterClass = Class.forName("io.lumine.mythic.bukkit.utils.BukkitAdapter");
+                            Method adaptMethod = bukkitAdapterClass.getMethod("adapt", abstractLoc.getClass());
+                            spawnerLoc = (Location) adaptMethod.invoke(null, abstractLoc);
+                            if (spawnerLoc != null && debugSpawnerLevels) {
+                                getLogger().fine("Got location via BukkitAdapter.adapt()");
+                            }
+                        } catch (Exception e) {
+                            // BukkitAdapter failed, extract coordinates directly
+                        }
+                        
+                        // If adapt failed, extract coordinates from AbstractLocation
+                        if (spawnerLoc == null) {
+                            try {
+                                Method getX = abstractLoc.getClass().getMethod("getX");
+                                Method getY = abstractLoc.getClass().getMethod("getY");
+                                Method getZ = abstractLoc.getClass().getMethod("getZ");
+                                double x = ((Number) getX.invoke(abstractLoc)).doubleValue();
+                                double y = ((Number) getY.invoke(abstractLoc)).doubleValue();
+                                double z = ((Number) getZ.invoke(abstractLoc)).doubleValue();
+                                
+                                // Use world we already got, or fallback
+                                World locWorld = spawnerWorldObj != null ? spawnerWorldObj : world;
+                                spawnerLoc = new Location(locWorld, x, y, z);
+                                if (debugSpawnerLevels) {
+                                    getLogger().fine("Got location from AbstractLocation coordinates");
+                                }
+                            } catch (Exception e) {
+                                if (debugSpawnerLevels) {
+                                    getLogger().fine("Could not extract coordinates from AbstractLocation: " + e.getMessage());
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Fallback methods if AbstractLocation approach didn't work
+                    if (spawnerLoc == null) {
+                        // Try getBlockLocation() if getLocation() didn't work
+                        try {
+                            Method getBlockLocationMethod = spawner.getClass().getMethod("getBlockLocation");
+                            Location tempLoc = (Location) getBlockLocationMethod.invoke(spawner);
+                            if (tempLoc != null) {
+                                // Check world before using
+                                if (tempLoc.getWorld() != null && tempLoc.getWorld().getName().equals(worldName)) {
+                                    spawnerLoc = tempLoc;
+                                    if (debugSpawnerLevels) {
+                                        getLogger().fine("Got location via getBlockLocation()");
+                                    }
+                                } else {
+                                    wrongWorldCount++;
+                                    continue; // Wrong world
+                                }
+                            }
+                        } catch (Exception e) {
+                            // Try getBlock() and get location from block
+                            try {
+                                Method getBlockMethod = spawner.getClass().getMethod("getBlock");
+                                Block block = (Block) getBlockMethod.invoke(spawner);
+                                if (block != null) {
+                                    Location tempLoc = block.getLocation();
+                                    // Check world before using
+                                    if (tempLoc.getWorld() != null && tempLoc.getWorld().getName().equals(worldName)) {
+                                        spawnerLoc = tempLoc;
+                                        if (debugSpawnerLevels) {
+                                            getLogger().fine("Got location via getBlock().getLocation()");
+                                        }
+                                    } else {
+                                        wrongWorldCount++;
+                                        continue; // Wrong world
+                                    }
+                                }
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    }
+                    
+                    // Final check - if we still don't have a location, skip
+                    if (spawnerLoc == null) {
+                        noLocationCount++;
+                        if (noLocationCount <= 3) { // Log first 3 failures
+                            getLogger().info("Could not get location for spawner: " + spawner.getClass().getName());
+                        }
+                        continue;
+                    }
+                    
+                    // Verify world one more time (safety check)
+                    World spawnerWorld = spawnerLoc.getWorld();
+                    if (spawnerWorld == null || !spawnerWorld.getName().equals(worldName)) {
+                        wrongWorldCount++;
                         continue; // Wrong world
                     }
                     
                     // Check if spawner is within regeneration area bounds
+                    // Use block coordinates for precise comparison (avoid floating point issues)
                     int x = spawnerLoc.getBlockX();
                     int y = spawnerLoc.getBlockY();
                     int z = spawnerLoc.getBlockZ();
                     
-                    if (x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ) {
-                        // Spawner is in the regeneration area - reset its cooldowns
-                        try {
-                            // Reset cooldown timer
-                            Method setCooldownMethod = spawner.getClass().getMethod("setRemainingCooldownSeconds", long.class);
-                            setCooldownMethod.invoke(spawner, 0L);
-                        } catch (NoSuchMethodException e) {
-                            // Try alternative method name
-                            try {
-                                Method setCooldownMethod = spawner.getClass().getMethod("setCooldown", long.class);
-                                setCooldownMethod.invoke(spawner, 0L);
-                            } catch (Exception e2) {
-                                // Method not available in this version
-                            }
+                    checkedCount++;
+                    
+                    // Manual coordinate check to avoid precision errors
+                    boolean inBounds = (x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ);
+                    
+                    // Log first few spawners checked for debugging (only if in correct world)
+                    if (debugSpawnerLevels && checkedCount <= 3) {
+                        getLogger().fine("Checking spawner at " + spawnerLoc + " (X:" + x + " Y:" + y + " Z:" + z + 
+                            ") - Bounds: X[" + minX + "-" + maxX + "] Y[" + minY + "-" + maxY + "] Z[" + minZ + "-" + maxZ + "] - In bounds: " + inBounds);
+                    }
+                    
+                    if (inBounds) {
+                        // Spawner is in the regeneration area - add to list for resetting
+                        if (debugSpawnerLevels) {
+                            getLogger().info("Found spawner in regeneration area at " + spawnerLoc + " (X:" + x + " Y:" + y + " Z:" + z + ")");
                         }
+                        spawnersToReset.add(spawner);
                         
-                        try {
-                            // Reset warmup timer
-                            Method setWarmupMethod = spawner.getClass().getMethod("setRemainingWarmupSeconds", long.class);
-                            setWarmupMethod.invoke(spawner, 0L);
-                        } catch (NoSuchMethodException e) {
-                            // Try alternative method name
-                            try {
-                                Method setWarmupMethod = spawner.getClass().getMethod("setWarmup", long.class);
-                                setWarmupMethod.invoke(spawner, 0L);
-                            } catch (Exception e2) {
-                                // Method not available in this version
-                            }
-                        }
-                        
-                        resetCount++;
                     }
                 } catch (Exception e) {
                     // Skip this spawner if we can't process it
@@ -11165,14 +11957,681 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
             
-            if (resetCount > 0) {
-                getLogger().fine("Reset cooldowns for " + resetCount + " MythicMobs spawner(s) in challenge area '" + cfg.id + "'");
+            // Reset spawners on main thread (MythicMobs API needs main thread)
+            final java.util.List<Object> finalSpawnersToReset = new java.util.ArrayList<>(spawnersToReset);
+            final int finalCheckedCount = checkedCount;
+            final int finalNoLocationCount = noLocationCount;
+            final int finalWrongWorldCount = wrongWorldCount;
+            
+            if (!finalSpawnersToReset.isEmpty()) {
+                Bukkit.getScheduler().runTask(this, () -> {
+                    int resetCount = 0;
+                    for (Object spawner : finalSpawnersToReset) {
+                        try {
+                            boolean reset = false;
+                            
+                            // Try resetTimer() method (singular - most common in MythicMobs)
+                            try {
+                                Method resetTimerMethod = spawner.getClass().getMethod("resetTimer");
+                                resetTimerMethod.invoke(spawner);
+                                reset = true;
+                                if (debugSpawnerLevels) {
+                                    getLogger().info("Reset spawner using resetTimer()");
+                                }
+                            } catch (NoSuchMethodException e) {
+                                // Try resetTimers() (plural)
+                                try {
+                                    Method resetTimersMethod = spawner.getClass().getMethod("resetTimers");
+                                    resetTimersMethod.invoke(spawner);
+                                    reset = true;
+                                    if (debugSpawnerLevels) {
+                                        getLogger().info("Reset spawner using resetTimers()");
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            } catch (Exception e) {
+                                if (debugSpawnerLevels) {
+                                    getLogger().fine("Error calling resetTimer(): " + e.getMessage());
+                                }
+                            }
+                            
+                            if (reset) {
+                                resetCount++;
+                            }
+                        } catch (Exception e) {
+                            getLogger().fine("Error resetting spawner: " + e.getMessage());
+                        }
+                    }
+                    
+                    if (debugSpawnerLevels) {
+                        getLogger().info("Checked " + finalCheckedCount + " MythicMobs spawner(s), reset cooldowns for " + resetCount + " spawner(s) in challenge area '" + cfg.id + "'");
+                    }
+                    if (finalNoLocationCount > 0) {
+                        getLogger().info("Could not get location for " + finalNoLocationCount + " spawner(s)");
+                    }
+                    if (finalWrongWorldCount > 0) {
+                        getLogger().info(finalWrongWorldCount + " spawner(s) were in wrong world");
+                    }
+                    if (resetCount == 0 && finalCheckedCount > 0) {
+                        getLogger().warning("No spawners were reset in challenge area '" + cfg.id + "' - check if spawners are within regeneration bounds");
+                    }
+                });
+            } else {
+                getLogger().info("Checked " + finalCheckedCount + " MythicMobs spawner(s), no spawners found in regeneration area '" + cfg.id + "'");
+                if (finalNoLocationCount > 0) {
+                    getLogger().info("Could not get location for " + finalNoLocationCount + " spawner(s)");
+                }
+                if (finalWrongWorldCount > 0) {
+                    getLogger().info(finalWrongWorldCount + " spawner(s) were in wrong world");
+                }
             }
         } catch (Exception e) {
-            getLogger().warning("Error resetting MythicMobs spawner cooldowns: " + e.getMessage());
+            getLogger().warning("Error finding/resetting MythicMobs spawners: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
+    /**
+     * Sets spawner levels based on difficulty tier for all spawners in a challenge's regeneration area.
+     * Stores original levels so they can be reverted later.
+     * 
+     * @param cfg The challenge configuration
+     * @param tier The difficulty tier ("easy", "medium", "hard", "extreme")
+     */
+    private void setSpawnerLevelsForChallenge(ChallengeConfig cfg, String tier) {
+        // Get the level modifier for this tier
+        Integer levelModifier = difficultyTierModifiers.get(tier);
+        if (levelModifier == null) {
+            levelModifier = 0; // Default to easy
+        }
+        
+        if (levelModifier == 0) {
+            getLogger().fine("Tier '" + tier + "' has no level modifier, skipping spawner level update");
+            return; // Easy tier, no change needed
+        }
+        
+        getLogger().info("Setting spawner levels for challenge '" + cfg.id + "' to tier '" + tier + "' (+" + levelModifier + " levels)");
+        
+        // Check if MythicMobs is installed
+        if (Bukkit.getPluginManager().getPlugin("MythicMobs") == null) {
+            getLogger().warning("MythicMobs not installed, cannot set spawner levels");
+            return; // MythicMobs not installed
+        }
+        
+        // Check if regeneration area is set
+        if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) {
+            getLogger().warning("No regeneration area set for challenge '" + cfg.id + "', cannot set spawner levels");
+            return; // No regeneration area set
+        }
+        
+        World world = cfg.regenerationCorner1.getWorld();
+        if (world == null) {
+            getLogger().warning("World not loaded for challenge '" + cfg.id + "', cannot set spawner levels");
+            return; // World not loaded
+        }
+        
+        if (debugSpawnerLevels) {
+            getLogger().info("World: " + world.getName() + ", Regeneration area: " + cfg.regenerationCorner1 + " to " + cfg.regenerationCorner2);
+        }
+        
+        // Calculate regeneration area bounds
+        int minX = Math.min(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
+        int maxX = Math.max(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
+        int minY, maxY;
+        if (cfg.regenerationAutoExtendY) {
+            minY = world.getMinHeight();
+            maxY = world.getMaxHeight() - 1;
+        } else {
+            minY = Math.min(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
+            maxY = Math.max(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
+        }
+        int minZ = Math.min(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
+        int maxZ = Math.max(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
+        
+        String worldName = world.getName();
+        
+        // Initialize storage for original levels if needed
+        originalSpawnerLevels.putIfAbsent(cfg.id, new HashMap<>());
+        Map<Object, Integer> originalLevels = originalSpawnerLevels.get(cfg.id);
+        
+        try {
+            // Get MythicMobs API using reflection
+            Class<?> mythicAPI = Class.forName("io.lumine.mythic.bukkit.MythicBukkit");
+            Object mythicPlugin = mythicAPI.getMethod("inst").invoke(null);
+            Object spawnerManager = mythicAPI.getMethod("getSpawnerManager").invoke(mythicPlugin);
+            if (spawnerManager == null) {
+                return;
+            }
+            
+            // Get all spawners
+            Method getSpawnersMethod = spawnerManager.getClass().getMethod("getSpawners");
+            Object result = getSpawnersMethod.invoke(spawnerManager);
+            java.util.Collection<?> spawners = null;
+            if (result instanceof java.util.Map) {
+                spawners = ((java.util.Map<?, ?>) result).values();
+            } else if (result instanceof java.util.Collection) {
+                spawners = (java.util.Collection<?>) result;
+            }
+            
+            if (spawners == null || spawners.isEmpty()) {
+                getLogger().warning("No spawners found from SpawnerManager");
+                return;
+            }
+            
+            if (debugSpawnerLevels) {
+                getLogger().info("Found " + spawners.size() + " total spawners to check for level update");
+                getLogger().info("Regeneration area bounds: X[" + minX + "-" + maxX + "] Y[" + minY + "-" + maxY + "] Z[" + minZ + "-" + maxZ + "] in world '" + worldName + "'");
+            }
+            int updatedCount = 0;
+            int checkedCount = 0;
+            
+            // Find spawners in the regeneration area and set their levels
+            // Use the same location retrieval logic as resetMythicMobsSpawnersInArea
+            for (Object spawner : spawners) {
+                try {
+                    // Step 1: Get AbstractLocation and check world FIRST (cheap check) - same as reset method
+                    Object abstractLoc = null;
+                    String spawnerWorldName = null;
+                    World spawnerWorldObj = null;
+                    
+                    try {
+                        Method getLocationMethod = spawner.getClass().getMethod("getLocation");
+                        abstractLoc = getLocationMethod.invoke(spawner);
+                        if (abstractLoc != null) {
+                            // Extract world from AbstractLocation first (cheap check)
+                            try {
+                                Method getWorld = abstractLoc.getClass().getMethod("getWorld");
+                                Object worldObj = getWorld.invoke(abstractLoc);
+                                
+                                if (worldObj instanceof World) {
+                                    spawnerWorldObj = (World) worldObj;
+                                    spawnerWorldName = spawnerWorldObj.getName();
+                                } else if (worldObj instanceof String) {
+                                    spawnerWorldName = (String) worldObj;
+                                    spawnerWorldObj = Bukkit.getWorld(spawnerWorldName);
+                                }
+                            } catch (Exception e) {
+                                // Can't get world from AbstractLocation, will try other methods
+                            }
+                        }
+                    } catch (Exception e) {
+                        // getLocation() failed, will try other methods below
+                    }
+                    
+                    // Step 2: Skip spawners in wrong world immediately (FAST FILTER)
+                    if (spawnerWorldName != null && !spawnerWorldName.equals(worldName)) {
+                        continue; // Skip this spawner - wrong world
+                    }
+                    
+                    // Step 3: Only convert to full Location if world matches (or couldn't determine world)
+                    Location spawnerLoc = null;
+                    
+                    if (abstractLoc != null && (spawnerWorldName == null || spawnerWorldName.equals(worldName))) {
+                        // World matches (or unknown) - now get full location
+                        // Try BukkitAdapter.adapt() first (fastest)
+                        try {
+                            Class<?> bukkitAdapterClass = Class.forName("io.lumine.mythic.bukkit.utils.BukkitAdapter");
+                            Method adaptMethod = bukkitAdapterClass.getMethod("adapt", abstractLoc.getClass());
+                            spawnerLoc = (Location) adaptMethod.invoke(null, abstractLoc);
+                            if (spawnerLoc != null) {
+                                getLogger().fine("Got location via BukkitAdapter.adapt()");
+                            }
+                        } catch (Exception e) {
+                            // BukkitAdapter failed, extract coordinates directly
+                        }
+                        
+                        // If adapt failed, extract coordinates from AbstractLocation
+                        if (spawnerLoc == null) {
+                            try {
+                                Method getX = abstractLoc.getClass().getMethod("getX");
+                                Method getY = abstractLoc.getClass().getMethod("getY");
+                                Method getZ = abstractLoc.getClass().getMethod("getZ");
+                                double x = ((Number) getX.invoke(abstractLoc)).doubleValue();
+                                double y = ((Number) getY.invoke(abstractLoc)).doubleValue();
+                                double z = ((Number) getZ.invoke(abstractLoc)).doubleValue();
+                                
+                                // Use world we already got, or fallback
+                                World locWorld = spawnerWorldObj != null ? spawnerWorldObj : world;
+                                spawnerLoc = new Location(locWorld, x, y, z);
+                                getLogger().fine("Got location from AbstractLocation coordinates");
+                            } catch (Exception e) {
+                                getLogger().fine("Could not extract coordinates from AbstractLocation: " + e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // Fallback methods if AbstractLocation approach didn't work
+                    if (spawnerLoc == null) {
+                        // Try getBlockLocation() if getLocation() didn't work
+                        try {
+                            Method getBlockLocationMethod = spawner.getClass().getMethod("getBlockLocation");
+                            Location tempLoc = (Location) getBlockLocationMethod.invoke(spawner);
+                            if (tempLoc != null) {
+                                // Check world before using
+                                if (tempLoc.getWorld() != null && tempLoc.getWorld().getName().equals(worldName)) {
+                                    spawnerLoc = tempLoc;
+                                    if (debugSpawnerLevels) {
+                                        getLogger().fine("Got location via getBlockLocation()");
+                                    }
+                                } else {
+                                    continue; // Wrong world
+                                }
+                            }
+                        } catch (Exception e) {
+                            // Try getBlock() and get location from block
+                            try {
+                                Method getBlockMethod = spawner.getClass().getMethod("getBlock");
+                                Block block = (Block) getBlockMethod.invoke(spawner);
+                                if (block != null) {
+                                    Location tempLoc = block.getLocation();
+                                    // Check world before using
+                                    if (tempLoc.getWorld() != null && tempLoc.getWorld().getName().equals(worldName)) {
+                                        spawnerLoc = tempLoc;
+                                        if (debugSpawnerLevels) {
+                                            getLogger().fine("Got location via getBlock().getLocation()");
+                                        }
+                                    } else {
+                                        continue; // Wrong world
+                                    }
+                                }
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    }
+                    
+                    // Final check - if we still don't have a location, skip
+                    if (spawnerLoc == null) {
+                        continue;
+                    }
+                    
+                    // Verify world one more time (safety check)
+                    World spawnerWorld = spawnerLoc.getWorld();
+                    if (spawnerWorld == null || !spawnerWorld.getName().equals(worldName)) {
+                        continue; // Wrong world
+                    }
+                    
+                    // Check if spawner is in regeneration area
+                    int x = spawnerLoc.getBlockX();
+                    int y = spawnerLoc.getBlockY();
+                    int z = spawnerLoc.getBlockZ();
+                    
+                    if (x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ) {
+                        // Get original level and store it (if not already stored)
+                        if (!originalLevels.containsKey(spawner)) {
+                            Integer originalLevel = null;
+                            
+                            // Get spawner name first for better logging
+                            String spawnerName = null;
+                            try {
+                                Method getNameMethod = spawner.getClass().getMethod("getName");
+                                Object nameObj = getNameMethod.invoke(spawner);
+                                if (nameObj != null) {
+                                    spawnerName = nameObj.toString();
+                                }
+                            } catch (Exception ignored) {
+                            }
+                            
+                            // Try multiple methods to get the original level
+                            try {
+                                Method getMobLevelMethod = spawner.getClass().getMethod("getMobLevel");
+                                Object levelObj = getMobLevelMethod.invoke(spawner);
+                                if (levelObj instanceof Number) {
+                                    originalLevel = ((Number) levelObj).intValue();
+                                    if (debugSpawnerLevels) {
+                                        getLogger().info("Got original level " + originalLevel + " for spawner '" + (spawnerName != null ? spawnerName : "unknown") + "' at " + spawnerLoc + " via getMobLevel()");
+                                    }
+                                } else if (levelObj != null) {
+                                    try {
+                                        originalLevel = Integer.parseInt(levelObj.toString());
+                                        if (debugSpawnerLevels) {
+                                            getLogger().info("Got original level " + originalLevel + " for spawner '" + (spawnerName != null ? spawnerName : "unknown") + "' at " + spawnerLoc + " via getMobLevel() (parsed)");
+                                        }
+                                    } catch (NumberFormatException e) {
+                                        if (debugSpawnerLevels) {
+                                            getLogger().warning("Could not parse mob level as integer: " + levelObj + " for spawner '" + (spawnerName != null ? spawnerName : "unknown") + "'");
+                                        }
+                                    }
+                                } else {
+                                    if (debugSpawnerLevels) {
+                                        getLogger().warning("getMobLevel() returned null for spawner '" + (spawnerName != null ? spawnerName : "unknown") + "' at " + spawnerLoc);
+                                    }
+                                }
+                            } catch (NoSuchMethodException e) {
+                                // Try getLevel() as alternative
+                                try {
+                                    Method getLevelMethod = spawner.getClass().getMethod("getLevel");
+                                    Object levelObj = getLevelMethod.invoke(spawner);
+                                    if (levelObj instanceof Number) {
+                                        originalLevel = ((Number) levelObj).intValue();
+                                        if (debugSpawnerLevels) {
+                                            getLogger().info("Got original level " + originalLevel + " for spawner '" + (spawnerName != null ? spawnerName : "unknown") + "' at " + spawnerLoc + " via getLevel()");
+                                        }
+                                    }
+                                } catch (Exception e2) {
+                                    if (debugSpawnerLevels) {
+                                        getLogger().fine("Could not get level via getLevel(): " + e2.getMessage());
+                                    }
+                                }
+                            } catch (Exception e) {
+                                if (debugSpawnerLevels) {
+                                    getLogger().warning("Error getting original level via getMobLevel(): " + e.getMessage() + " for spawner '" + (spawnerName != null ? spawnerName : "unknown") + "'");
+                                }
+                            }
+                            
+                            // If we still don't have a level, default to 1 but warn
+                            if (originalLevel == null) {
+                                if (debugSpawnerLevels) {
+                                    getLogger().warning("Could not get original level for spawner '" + (spawnerName != null ? spawnerName : "unknown") + "' at " + spawnerLoc + " via API, defaulting to 1. Check spawner config - spawner may already be at level 1.");
+                                }
+                                originalLevel = 1; // Default fallback
+                            }
+                            
+                            originalLevels.put(spawner, originalLevel);
+                            if (debugSpawnerLevels) {
+                                getLogger().info("Stored original level " + originalLevel + " for spawner '" + (spawnerName != null ? spawnerName : "unknown") + "' at " + spawnerLoc);
+                            }
+                        }
+                        
+                        // Get original level and add modifier
+                        Integer originalLevel = originalLevels.get(spawner);
+                        int newLevel = originalLevel + levelModifier;
+                        
+                        if (debugSpawnerLevels) {
+                            getLogger().info("Setting spawner at " + spawnerLoc + " from level " + originalLevel + " to " + newLevel + " (tier: " + tier + ", modifier: +" + levelModifier + ")");
+                        }
+                        
+                        // Set the new level - MythicMobs 5.x+ uses setMobLevel(double) and needs resetTimer()
+                        boolean levelSet = false;
+                        try {
+                            // Try setMobLevel(double) first (correct for MythicMobs 5.x+)
+                            Method setMobLevelMethod = spawner.getClass().getMethod("setMobLevel", double.class);
+                            setMobLevelMethod.invoke(spawner, (double) newLevel);
+                            
+                            // Immediately reset timer to force the change (critical!)
+                            try {
+                                Method resetTimerMethod = spawner.getClass().getMethod("resetTimer");
+                                resetTimerMethod.invoke(spawner);
+                            } catch (Exception e) {
+                                // Try resetTimers() as fallback
+                                try {
+                                    Method resetTimersMethod = spawner.getClass().getMethod("resetTimers");
+                                    resetTimersMethod.invoke(spawner);
+                                } catch (Exception ignored) {
+                                }
+                            }
+                            
+                            levelSet = true;
+                            if (debugSpawnerLevels) {
+                                getLogger().info("Set spawner level at " + spawnerLoc + " from " + originalLevel + " to " + newLevel + " (tier: " + tier + ") using setMobLevel(double)");
+                            }
+                        } catch (NoSuchMethodException e) {
+                            // Try setMobLevel(int) as fallback
+                            try {
+                                Method setMobLevelMethod = spawner.getClass().getMethod("setMobLevel", int.class);
+                                setMobLevelMethod.invoke(spawner, newLevel);
+                                
+                                // Reset timer
+                                try {
+                                    Method resetTimerMethod = spawner.getClass().getMethod("resetTimer");
+                                    resetTimerMethod.invoke(spawner);
+                                } catch (Exception ignored) {
+                                }
+                                
+                                levelSet = true;
+                                if (debugSpawnerLevels) {
+                                    getLogger().info("Set spawner level at " + spawnerLoc + " from " + originalLevel + " to " + newLevel + " (tier: " + tier + ") using setMobLevel(int)");
+                                }
+                            } catch (NoSuchMethodException e2) {
+                                // Try accessing internal config as last resort
+                                try {
+                                    Method getInternalConfigMethod = spawner.getClass().getMethod("getInternalConfig");
+                                    Object config = getInternalConfigMethod.invoke(spawner);
+                                    if (config != null) {
+                                        Method setMethod = config.getClass().getMethod("set", String.class, Object.class);
+                                        setMethod.invoke(config, "MobLevel", (double) newLevel);
+                                        
+                                        // Reset timer
+                                        try {
+                                            Method resetTimerMethod = spawner.getClass().getMethod("resetTimer");
+                                            resetTimerMethod.invoke(spawner);
+                                        } catch (Exception ignored) {
+                                        }
+                                        
+                                        levelSet = true;
+                                        if (debugSpawnerLevels) {
+                                            getLogger().info("Set spawner level at " + spawnerLoc + " from " + originalLevel + " to " + newLevel + " (tier: " + tier + ") using internal config");
+                                        }
+                                    }
+                                } catch (Exception e3) {
+                                    // Final fallback: use console command
+                                    try {
+                                        // Get spawner name for command
+                                        String spawnerName = null;
+                                        try {
+                                            Method getNameMethod = spawner.getClass().getMethod("getName");
+                                            Object nameObj = getNameMethod.invoke(spawner);
+                                            if (nameObj != null) {
+                                                spawnerName = nameObj.toString();
+                                            }
+                                        } catch (Exception ignored) {
+                                        }
+                                        
+                                        if (spawnerName != null && !spawnerName.isEmpty()) {
+                                            final String finalSpawnerName = spawnerName;
+                                            Bukkit.getScheduler().runTask(ConradChallengesPlugin.this, () -> {
+                                                try {
+                                                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mm s set " + finalSpawnerName + " moblevel " + newLevel);
+                                                    if (debugSpawnerLevels) {
+                                                        getLogger().info("Set spawner level via command for " + finalSpawnerName + " to " + newLevel);
+                                                    }
+                                                } catch (Exception cmdEx) {
+                                                    getLogger().warning("Failed to set spawner level via command: " + cmdEx.getMessage());
+                                                }
+                                            });
+                                            levelSet = true;
+                                        } else {
+                                            getLogger().warning("Could not set spawner level - all methods failed and no spawner name available");
+                                        }
+                                    } catch (Exception e4) {
+                                        getLogger().warning("Could not set spawner level - all methods failed: " + e4.getMessage());
+                                    }
+                                }
+                            } catch (Exception e2) {
+                                getLogger().warning("Error calling setMobLevel(int): " + e2.getMessage());
+                            }
+                        } catch (Exception e) {
+                            getLogger().warning("Error calling setMobLevel(double): " + e.getMessage());
+                        }
+                        
+                        // Try to save/update the spawner after setting level
+                        if (levelSet) {
+                            try {
+                                // Try save() method
+                                try {
+                                    Method saveMethod = spawner.getClass().getMethod("save");
+                                    saveMethod.invoke(spawner);
+                                    getLogger().fine("Saved spawner after level update");
+                                } catch (NoSuchMethodException e) {
+                                    // Try update() method
+                                    try {
+                                        Method updateMethod = spawner.getClass().getMethod("update");
+                                        updateMethod.invoke(spawner);
+                                        getLogger().fine("Updated spawner after level update");
+                                    } catch (Exception e2) {
+                                        // Try reload() method
+                                        try {
+                                            Method reloadMethod = spawner.getClass().getMethod("reload");
+                                            reloadMethod.invoke(spawner);
+                                            getLogger().fine("Reloaded spawner after level update");
+                                        } catch (Exception e3) {
+                                            // No save/update method available, that's okay
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                getLogger().fine("Could not save/update spawner: " + e.getMessage());
+                            }
+                            
+                            updatedCount++;
+                        }
+                    }
+                } catch (Exception e) {
+                    getLogger().fine("Error processing spawner for level update: " + e.getMessage());
+                }
+            }
+            
+            if (updatedCount > 0) {
+                getLogger().info("Updated " + updatedCount + " spawner level(s) for challenge '" + cfg.id + "' to tier '" + tier + "'");
+            } else {
+                getLogger().warning("No spawners were updated! Checked " + checkedCount + " spawner(s) in regeneration area for challenge '" + cfg.id + "'");
+            }
+        } catch (Exception e) {
+            getLogger().warning("Error setting spawner levels: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    /**
+     * Reverts spawner levels back to their original values for a challenge.
+     * 
+     * @param cfg The challenge configuration
+     */
+    private void revertSpawnerLevelsForChallenge(ChallengeConfig cfg) {
+        Map<Object, Integer> originalLevels = originalSpawnerLevels.get(cfg.id);
+        if (originalLevels == null || originalLevels.isEmpty()) {
+            getLogger().fine("No spawner levels to revert for challenge '" + cfg.id + "'");
+            return; // No levels were changed
+        }
+        
+        if (debugSpawnerLevels) {
+            getLogger().info("Reverting spawner levels for challenge '" + cfg.id + "'");
+        }
+        
+        int revertedCount = 0;
+        
+        for (Map.Entry<Object, Integer> entry : originalLevels.entrySet()) {
+            Object spawner = entry.getKey();
+            Integer originalLevel = entry.getValue();
+            
+            try {
+                boolean reverted = false;
+                
+                // Try setMobLevel(double) first (MythicMobs 5.x+)
+                try {
+                    Method setMobLevelMethod = spawner.getClass().getMethod("setMobLevel", double.class);
+                    setMobLevelMethod.invoke(spawner, originalLevel.doubleValue());
+                    
+                    // Reset timer to force the change
+                    try {
+                        Method resetTimerMethod = spawner.getClass().getMethod("resetTimer");
+                        resetTimerMethod.invoke(spawner);
+                    } catch (Exception ignored) {
+                    }
+                    
+                                    reverted = true;
+                                    if (debugSpawnerLevels) {
+                                        getLogger().info("Reverted spawner level to " + originalLevel + " using setMobLevel(double)");
+                                    }
+                } catch (NoSuchMethodException e) {
+                    // Try setMobLevel(int) as fallback
+                    try {
+                        Method setMobLevelMethod = spawner.getClass().getMethod("setMobLevel", int.class);
+                        setMobLevelMethod.invoke(spawner, originalLevel);
+                        
+                        // Reset timer
+                        try {
+                            Method resetTimerMethod = spawner.getClass().getMethod("resetTimer");
+                            resetTimerMethod.invoke(spawner);
+                        } catch (Exception ignored) {
+                        }
+                        
+                        reverted = true;
+                        if (debugSpawnerLevels) {
+                            getLogger().info("Reverted spawner level to " + originalLevel + " using setMobLevel(int)");
+                        }
+                    } catch (NoSuchMethodException e2) {
+                        // Try internal config
+                        try {
+                            Method getInternalConfigMethod = spawner.getClass().getMethod("getInternalConfig");
+                            Object config = getInternalConfigMethod.invoke(spawner);
+                            if (config != null) {
+                                Method setMethod = config.getClass().getMethod("set", String.class, Object.class);
+                                setMethod.invoke(config, "MobLevel", originalLevel.doubleValue());
+                                
+                                // Reset timer
+                                try {
+                                    Method resetTimerMethod = spawner.getClass().getMethod("resetTimer");
+                                    resetTimerMethod.invoke(spawner);
+                                } catch (Exception ignored) {
+                                }
+                                
+                                reverted = true;
+                                if (debugSpawnerLevels) {
+                                    getLogger().info("Reverted spawner level to " + originalLevel + " using internal config");
+                                }
+                            }
+                        } catch (Exception e3) {
+                            // Final fallback: use console command
+                            try {
+                                // Get spawner name for command
+                                String spawnerName = null;
+                                try {
+                                    Method getNameMethod = spawner.getClass().getMethod("getName");
+                                    Object nameObj = getNameMethod.invoke(spawner);
+                                    if (nameObj != null) {
+                                        spawnerName = nameObj.toString();
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                                
+                                if (spawnerName != null && !spawnerName.isEmpty()) {
+                                    final String finalSpawnerName = spawnerName;
+                                    final int finalOriginalLevel = originalLevel;
+                                    Bukkit.getScheduler().runTask(ConradChallengesPlugin.this, () -> {
+                                        try {
+                                            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "mm s set " + finalSpawnerName + " moblevel " + finalOriginalLevel);
+                                            if (debugSpawnerLevels) {
+                                                getLogger().info("Reverted spawner level via command for " + finalSpawnerName + " to " + finalOriginalLevel);
+                                            }
+                                        } catch (Exception cmdEx) {
+                                            getLogger().warning("Failed to revert spawner level via command: " + cmdEx.getMessage());
+                                        }
+                                    });
+                                    reverted = true;
+                                } else {
+                                    getLogger().warning("Could not revert spawner level - all methods failed and no spawner name available");
+                                }
+                            } catch (Exception e4) {
+                                getLogger().warning("Could not revert spawner level - all methods failed: " + e4.getMessage());
+                            }
+                        }
+                    } catch (Exception e2) {
+                        getLogger().warning("Error calling setMobLevel(int): " + e2.getMessage());
+                    }
+                } catch (Exception e) {
+                    getLogger().warning("Error calling setMobLevel(double): " + e.getMessage());
+                }
+                
+                if (reverted) {
+                    revertedCount++;
+                }
+            } catch (Exception e) {
+                getLogger().fine("Error processing spawner for level revert: " + e.getMessage());
+            }
+        }
+        
+        // Clean up stored levels
+        originalSpawnerLevels.remove(cfg.id);
+        
+        if (revertedCount > 0) {
+            if (debugSpawnerLevels) {
+                getLogger().info("Reverted " + revertedCount + " spawner level(s) for challenge '" + cfg.id + "'");
+            }
+        } else {
+            getLogger().warning("No spawner levels were reverted for challenge '" + cfg.id + "' - check logs for errors");
+        }
+    }
+    
     /**
      * Exits edit mode for a player (cleanup helper).
      * 

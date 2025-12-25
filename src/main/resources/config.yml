@@ -40,6 +40,11 @@ lives-per-tier:
 # Players can use /buyback command to pay this fee and re-enter with lives reset
 buy-back-fee: 6000.0  # Default: $6000
 
+# Debug logging for spawner level management
+# When enabled, logs detailed information about spawner level changes (original levels, setting levels, reverting)
+# When disabled, only logs summary information (e.g., "Updated 8 spawner level(s)")
+debug-spawner-levels: false  # Default: false
+
 # GateKeeper NPC UUID list (set via /conradchallenges setnpc)
 npcs: []
 
