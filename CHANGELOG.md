@@ -1,5 +1,20 @@
 # Changelog
 
+## Version 3.0.7
+
+### Improvements
+- **Teleport into challenge**: Teleporting a player into a challenge area is now allowed when (1) the challenge is in edit mode, or (2) an admin is within 5 blocks of the destination (e.g. `/tp PlayerName Me` while you're in the challenge). This allows admins to bring players to them for testing without requiring the target to have admin.
+- **Easy mode keep inventory on death**: When players run out of lives on the Easy difficulty tier, they now keep their inventory and experience (no drop). Medium, Hard, and Extreme still drop on final death.
+- **Blockitem tab completion**: Tab completion for `/challenge blockitem <item>` now suggests material names (like `addtierreward item`), in both edit mode and when specifying a challenge ID.
+- **Tier reward chance display**: Reward chances in list tier rewards and add-reward success messages now display as OSRS-style fractions (e.g. `1/100`, `1/2`, `1/1`) instead of percentages.
+- **List tier rewards for non-admins**: Players with `conradchallenges.use` can run `/challenge listtierrewards [id] [tier]` to view tier rewards without admin. Usage when not in edit mode: `/challenge listtierrewards <challenge-id> [tier]`. Tab completion for listtierrewards and challenge IDs is available for these players.
+- **Same-challenge /tpa**: Players in the same challenge can use `/tpa` (or similar) to teleport to each other. The plugin explicitly allows teleporting to a teammate in the same challenge. Teleport into a challenge from outside (without a book) remains blocked for non-admins.
+
+### Technical Changes
+- Added `formatChanceAsFraction(double)` and `gcd(int, int)` for reward chance display.
+- Teleport event: allow when destination is within 2 blocks of another player in the same challenge.
+- `handleAdminChallengeCommands` and `/challenge` executor allow `listtierrewards` with `conradchallenges.use` only.
+
 ## Version 3.0.5
 
 ### Features

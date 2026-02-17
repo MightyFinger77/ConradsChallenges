@@ -1,5 +1,5 @@
 # Config version - do not modify
-config_version: 2
+config_version: 3
 
 # World players are sent to when using /challengecomplete or when time limit expires. (sends to world spawn)
 spawn-world: world
@@ -54,7 +54,13 @@ anti-forgery:
   fine-amount: 50.0        # amount to charge for a fake book
   drain-if-less: true      # if player has less than fine-amount, drain entire balance
   broadcast: true          # announce to the server when detected
-  required-author: ""      # books must be signed by this author name (leave empty to disable author check)
+  required-author: ""      # books must be signed by this author name (or one of the names in the list). Leave empty to disable author check.
+  # Either a single string or a YAML list of author names.
+  # Examples:
+  #   required-author: OfficerConradd
+  #   required-author:
+  #     - OfficerConradd
+  #     - SomeOtherAdmin
 
 anger:
   enabled: true

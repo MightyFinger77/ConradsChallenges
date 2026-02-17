@@ -1,5 +1,5 @@
 # Config version - do not modify
-messages_version: 4
+messages_version: 5
 
 # ConradChallenges Messages Configuration
 # Use & for color codes (e.g., &a for green, &c for red, &e for yellow)
@@ -24,6 +24,7 @@ messages_version: 4
 #   %name% - Name (boss name, etc.)
 #   %entity% - Entity type
 #   %material% - Material name
+#   %item% - Item display name (for blocked items)
 #   %consume% - Consume boolean
 #   %size% - Size/number
 #   %command% - Command string
@@ -173,6 +174,9 @@ entry:
   book-lost: "&cYou lost your Conrad Challenge Book! Keeping you here."
   book-required: "&7You must have the book in your inventory to enter the challenge."
   not-accepted: "&7You did not accept the party challenge. You will not be teleported."
+  blocked-item-moved: "&e%item%&c is blocked for this challenge, it has been moved to your ender chest!"
+  blocked-item-overflow-gatekeeper: "&eSome items could not fit in your ender chest. The GateKeeper will return them when you speak to them after the challenge."
+  blocked-items-returned: "&aThe GateKeeper has returned the items that could not fit in your ender chest."
 
 # Challenge completion
 completion:
@@ -357,6 +361,17 @@ admin:
   challenge-setautoregenerationy-invalid: "&cInvalid value '%value%'. Use true/false, on/off, enable/disable, or yes/no."
   challenge-setautoregenerationy-success: "&aAuto-extend Y range for challenge '%id%' is now %enabled%. Re-captured initial state."
   challenge-setautoregenerationy-failed: "&cFailed to re-capture initial state for challenge '%id%'."
+  challenge-blockitem-command: "&e/conradchallenges challenge blockitem [id] <itemid>"
+  challenge-blockitem-usage: "&eUsage: /conradchallenges challenge blockitem <itemid> &7(requires edit mode)"
+  challenge-blockitem-added: "&aBlocked item &e%item%&a for challenge '%id%'. Players cannot take it into the challenge."
+  challenge-blockitem-already: "&eItem &e%item%&e is already blocked for challenge '%id%'."
+  challenge-blockitem-invalid: "&cInvalid item '%item%'. Use a valid material name (e.g. DIAMOND_SWORD)."
+  challenge-blockitem-not-item: "&c'%item%' is not an item type and cannot be blocked."
+  challenge-unblockitem-command: "&e/conradchallenges challenge unblockitem [id] <itemid>"
+  challenge-unblockitem-usage: "&eUsage: /conradchallenges challenge unblockitem <itemid> &7(requires edit mode)"
+  challenge-unblockitem-removed: "&aUnblocked &e%item%&a for challenge '%id%'."
+  challenge-unblockitem-not-blocked: "&eItem &e%item%&e is not blocked for challenge '%id%'."
+  challenge-info-blocked-items: "&7Blocked items (moved to ender chest on entry): &f%list%"
   challenge-info-regeneration-area: "&7Regeneration Area: &fCorner 1: %x1%, %y1%, %z1% | Corner 2: %x2%, %y2%, %z2%"
   challenge-info-regeneration-auto-extend-y: "&7  Y Range: &aAuto-extend (Bedrock to Build Height: %min% to %max%)"
   challenge-info-regeneration-manual-y: "&7  Y Range: &eManual (%min% to %max%)"
