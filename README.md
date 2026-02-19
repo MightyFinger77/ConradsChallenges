@@ -3,6 +3,7 @@
 A comprehensive guide for setting up and managing challenges in ConradChallenges.
 
 ## Table of Contents
+- [Configuration files](#configuration-files)
 - [Prerequisites](#prerequisites)
 - [Creating a Challenge](#creating-a-challenge)
 - [Basic Challenge Setup](#basic-challenge-setup)
@@ -10,12 +11,26 @@ A comprehensive guide for setting up and managing challenges in ConradChallenges
 - [Rewards System](#rewards-system)
 - [Challenge Area System](#challenge-area-system)
 - [Regeneration System](#regeneration-system)
+- [Block breaking in challenges](#block-breaking-in-challenges)
 - [Edit Mode](#edit-mode)
 - [Difficulty Tiers](#difficulty-tiers)
 - [Configuration Options](#configuration-options)
+- [Loot table manager](#loot-table-manager)
 - [Challenge Management](#challenge-management)
 - [Player Guide - How to Do Challenges](#player-guide---how-to-do-challenges)
 - [Quick Reference](#quick-reference)
+
+---
+
+## Configuration files
+
+Before you start, it helps to know where settings are stored:
+
+- **`config.yml`** – General plugin settings: spawn world, party, difficulty tiers, lives, anti-forgery, edit mode, world/challenge aliases, and so on. Edit this file or use in-game commands where applicable.
+- **`challenges.yml`** – All challenge definitions (destination, completion type, rewards, areas, block break settings, etc.). This file is created automatically. Use the in-game challenge commands to create and edit challenges; the plugin writes to `challenges.yml` for you.
+- **`messages.yml`** – All player-facing messages. The plugin merges in new keys on version upgrade and backs up to `messages.yml.bak` before updating.
+
+If you are upgrading from an older version and your challenges were previously in `config.yml`, the plugin will migrate them into `challenges.yml` on first load and create a backup at `config.yml.old`. When config or messages are updated during migration, backups are also written to `config.yml.bak` and `messages.yml.bak` before the merge.
 
 ---
 
@@ -411,6 +426,50 @@ While in edit mode:
 
 ---
 
+## Block breaking in challenges
+
+You can control whether and what challengers are allowed to break inside a challenge.
+
+### Behavior
+
+- **Block break OFF** (default): Challengers can break any block in the challenge area (normal gameplay).
+- **Block break ON**: Challengers can only break:
+  - Blocks **they placed** during that run, or
+  - Blocks whose **material** is in the challenge’s **allow list** (e.g. `stone_slab`, `oak_planks`).
+- **Regeneration area**: Breaking blocks inside a challenge’s **regen area** is only allowed if you are in **edit mode** for that challenge. Anyone else (including admins not in edit mode) gets: *"Enter edit mode to make changes to this area."*
+- **Admins in edit mode**: Can always break blocks in that challenge’s area, regardless of the block-break setting.
+
+Placed blocks are tracked in memory only and are cleared when the challenge area is regenerated.
+
+### Commands (edit mode required)
+
+**Toggle block breaking for the challenge you’re editing:**
+```
+/challenge blockbreak
+```
+- **ON** = restriction enabled (challengers only break placed + allow list).
+- **OFF** = no restriction (challengers can break any block).
+
+**Allow a block type to be broken when block break is ON:**
+```
+/challenge allowbreak <material>
+```
+Example: `/challenge allowbreak stone_slab`  
+Only block materials are valid (e.g. `oak_planks`, `stone_slab`). Tab completion suggests block names.
+
+**Remove a material from the allow list:**
+```
+/challenge disallowbreak <material>
+```
+
+### Per-challenge config (challenges.yml)
+
+When block break is enabled, each challenge stores:
+- `block-break-enabled: true`
+- `break-allowed-blocks: [ stone_slab, oak_planks, ... ]`
+
+---
+
 ## Edit Mode
 
 Edit mode allows you to modify challenges while preventing player access. All changes are backed up and can be saved or cancelled.
@@ -542,7 +601,7 @@ Players receive a limited number of lives when entering a challenge, based on th
 
 ## Configuration Options
 
-All configuration options are in `config.yml`. Here's a complete reference:
+General plugin options are in **`config.yml`**. Challenge definitions (destination, completion, rewards, areas, block break, etc.) are in **`challenges.yml`**. The following covers both where relevant.
 
 ### Basic Settings
 
@@ -657,9 +716,10 @@ Add NPC UUIDs here. Players right-click these NPCs with challenge books to start
 
 ### Example Challenge Configuration
 
-Here's a complete example of a challenge configuration:
+Challenge data is stored in **`challenges.yml`**. Here's a complete example of one challenge's structure:
 
 ```yaml
+# In challenges.yml
 challenges:
   fear_hole:
     book-title: fear_hole
@@ -774,7 +834,25 @@ challenges:
       auto-extend-y: false        # true = regenerate from bedrock to build height
 ```
 
-**Note**: All fields are always saved, even if empty/unset, to maintain consistent structure. You don't need to manually edit this file - use the in-game commands instead.
+**Note**: All fields are always saved, even if empty/unset, to maintain consistent structure. You don't need to manually edit `challenges.yml` — use the in-game commands instead. Block break settings (`block-break-enabled`, `break-allowed-blocks`) are also stored per challenge when you use `/challenge blockbreak`, `allowbreak`, and `disallowbreak`.
+
+---
+
+## Loot table manager
+
+Admins can manage custom chest loot per challenge via **Loot table** in the challenge menu (`/conradchallenges` → Edit loottable).
+
+- **List GUI**: Shows all loot tables in a **54-slot** inventory. The **bottom row is a fixed nav bar**: Back (return to main menu), empty slot, **Previous page**, empty slot, **Next page**. Loot table icons appear only in the **top 45 slots** (5 rows); when there are more than 45 tables, use the arrows to change pages. Your current page is remembered when you open a loot table and then go Back.
+- **Options GUI**: For each loot table you can set size (single/double chest), edit contents, rename, assign to challenges, change icon (type name or use item in hand), **loot type** (Normal or Legendary), and delete. Icon options are in the second row (staggered slots).
+
+### Loot type and chest type
+
+Each loot table has a **loot type**: **Normal** or **Legendary** (default: Normal). When a chest is opened in a challenge, the plugin uses only loot tables whose type matches the chest’s type.
+
+- **Normal chests** use loot tables with type Normal (assigned to that challenge).
+- **Legendary chests** use loot tables with type Legendary (assigned to that challenge).
+
+All chests in a challenge are Normal by default. In **edit mode**, look at a chest in the regeneration area and run **`/challenge loottype`** to toggle that chest between Normal and Legendary. Use **`/challenge chestignore`** to exclude a chest from loot entirely (no table applied).
 
 ---
 
@@ -850,7 +928,7 @@ Completely disables a challenge. Players cannot start it or be queued.
 
 - **Teleportation**: You can teleport within the regeneration area, but cannot teleport outside of it. Non-admin players cannot teleport into challenge areas (must use challenge books at GateKeeper).
 - **Explosion Protection**: Blocks in the challenge area are protected from explosions (creepers, TNT, etc.)
-- **Block Breaking**: You can break blocks normally (no protection)
+- **Block Breaking**: Depends on the challenge’s block-break setting. If **off**, you can break any block. If **on**, you can only break blocks you placed or block types the admin added to the allow list (e.g. certain slabs or planks). Breaking inside the regen area is only allowed for admins in edit mode.
 - **Movement**: You cannot walk outside the regeneration area - movement is blocked and you'll be teleported back if you try to leave
 - **Lives System**: You have a limited number of lives based on difficulty tier:
   - **Easy**: 3 lives (default)
@@ -1032,6 +1110,11 @@ When in edit mode, omit the challenge ID:
 - `clearregenerationarea` - Clear regeneration area
 - `captureregeneration` - Manually capture regeneration state
 - `setautoregenerationy` - Toggle auto-extend Y range
+- `blockbreak` - Toggle block breaking (on = restricted to placed + allow list; off = break any block)
+- `allowbreak <material>` - Add a block type to the break allow list (e.g. `stone_slab`)
+- `disallowbreak <material>` - Remove a block type from the allow list
+- `blockitem <material>` - Block an item from being taken into the challenge (moved to ender chest on entry)
+- `unblockitem <material>` - Remove an item from the block list
 
 ---
 
@@ -1092,11 +1175,15 @@ When in edit mode, omit the challenge ID:
 - Challenge area is only captured when you set it, not on every save
 - Use `/challenge setchallengearea` in edit mode (with WorldEdit `//1` and `//2`)
 
+### Upgraded to 4.0 and challenges missing?
+- Challenge data is now in **`challenges.yml`**, not `config.yml`. On first load, the plugin migrates from `config.yml` and creates a backup at `config.yml.old`. If something went wrong, you can copy the `challenges` section from `config.yml.old` into a new `challenges.yml` (under a top-level `challenges:` key).
+
 ---
 
 For more information, see:
 - `PLACEHOLDERS.md` - PlaceholderAPI placeholders
 - `CHANGELOG.md` - Version history and changes
-- `config.yml` - Configuration options
+- `config.yml` - General configuration options
+- `challenges.yml` - Challenge definitions (created and migrated automatically)
 - `messages.yml` - Customizable messages
 

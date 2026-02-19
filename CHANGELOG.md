@@ -1,5 +1,52 @@
 # Changelog
 
+## Version 4.1.0
+
+### Features
+- **Function tool (script system)**: In edit mode, admins receive a **function tool** and can right-click blocks in the challenge to attach scripts. Scripts combine a **trigger** (when the script runs) with a **function** (what it does). Triggers: BLOCK_INTERACT, BLOCK_BREAK, BLOCK_PLACE, PLAYER_ENTER_AREA, MOB_DEATH, SIGNAL_RECEIVER, REDSTONE_RECEIVER, AND_GATE, OR_GATE. Functions: SEND_MESSAGE, BROADCAST_MESSAGE, PLAY_SOUND, RUN_COMMAND, TELEPORT_PLAYER, PASS_THROUGH (invisible wall), LEAVE_CHALLENGE, SIGNAL_SENDER, REMOVE_BLOCK_WHEN_ITEM_NEAR (key-item gate: right-click with required item on block or linked blocks to remove them and consume items). Scripts are saved per challenge in `challenges.yml`. Pass-through blocks become air when a challenger is near and restore when no one is near. Command: `/challenge functiontool` (edit mode) to get the tool; use it by right-clicking blocks in the regen/challenge area.
+- **Multiple challenge and regen areas**: Each challenge can have multiple challenge areas and multiple regeneration areas. Commands support a trailing number: `/challenge setchallengearea`, `setchallengearea2`, `setchallengearea3`, `setchallengearea4` (and same for `setregenerationarea`). No number means area 1. Area 1 can be set with two-click or WorldEdit; areas 2+ require WorldEdit selection (//1 and //2). Clear commands clear all areas. **areasync** now copies all challenge areas to regen areas (challenge area 1 → regen area 1, etc.). Capture and regeneration run over all regen areas (sequential capture, single combined state list; regen restores all in one pass). Enables smaller, separate regen boxes (e.g. main arena + boss room) for faster regen and selective placement rules.
+- **Teleport between areas**: Players in a challenge can now teleport (e.g. via script TELEPORT_PLAYER or commands) between different regen/challenge areas of the **same** challenge. Previously only the first regen area was considered; now any regen or challenge area of that challenge is allowed. Movement is also allowed into any of the challenge’s regen/challenge areas.
+
+### Improvements
+- **Block place in regen areas**: Block placement is restricted only inside **regeneration** areas (not the full challenge area). Only players in edit mode for that challenge or active challengers can place; others see "Enter edit mode to make changes to this area." **No admin bypass**—admins must enter edit mode to place in regen areas.
+- **Block place in edit mode**: Fixed block placement not working while in edit mode. The function-tool handler now only cancels the interact event when the player is actually using the function tool or a script GUI (e.g. key-item step); normal block placement is no longer blocked.
+- **Loot table list GUI**: Back button is now in the last slot (bottom-right). Previous/Next page arrows are always visible; they appear disabled (gray) when there is only one page or when already on first/last page so the layout stays consistent.
+- **Messages migration**: Messages are now merged key-by-key with the default file so new message keys from updates are always added without overwriting user customisations. Version key handling supports both `config_version` and `messages_version`. Missing-keys check for messages allows skipping migration when already up to date.
+- **Config/messages migration safety**: Before writing merged config or messages, the plugin creates a backup (`config.yml.bak`, `messages.yml.bak`). All migration reads and writes use UTF-8.
+
+### Commands
+- `/challenge functiontool` – In edit mode, receive the function tool to add or edit scripts on blocks.
+- `/challenge setchallengearea` / `setchallengearea2` / `setchallengearea3` / `setchallengearea4` – Set challenge area 1 (default) or areas 2–4 (WorldEdit required for 2+).
+- `/challenge setregenerationarea` / `setregenerationarea2` / … – Set regen area 1 or 2–4 (area 2+ require WorldEdit).
+
+### Technical
+- `mergeConfigs()` accepts a `preserveUserSectionContent` flag: `false` for messages (merge key-by-key), `true` for config (preserve whole sections from user when desired).
+- New handler `onBlockPlaceInChallengeRestrict` restricts block place only in regen areas (using `isLocationInRegenArea`); allows edit-mode and active-challenger.
+- Teleport and movement checks use `isLocationInRegenArea` / `isLocationInChallengeArea` so any of the challenge’s areas count (multi-area support).
+- Challenge config: `challengeAreas` and `regenerationAreas` lists (each element is a corner-pair); legacy `challengeCorner1/2` and `regenerationCorner1/2` kept in sync with first area. Config keys `challenge-areas` and `regeneration-areas` in YAML.
+- Loot table list constants: `LOOTTABLE_LIST_BACK_SLOT` set to 53 (last slot).
+- `ChallengeScriptManager`: function tool interact only cancels when opening script GUIs or setting key item; block placement with blocks no longer cancelled in edit mode.
+
+## Version 4.0.0
+
+### Features
+- **Challenges in separate file**: Challenge data is now stored in **`challenges.yml`** instead of `config.yml`. On first load, if `config.yml` contains a challenges section, it is migrated to `challenges.yml` and the existing config is backed up to `config.yml.old`. Default `config.yml` no longer includes a challenges section (`config_version: 4`).
+- **Block breaking in challenges**: New options per challenge: **blockbreak** on/off (restricts what challengers can break), **allowbreak** / **disallowbreak** material lists. When blockbreak is on, challengers can only break blocks they placed or materials in the allow list. In the regeneration area, only players in edit mode can break blocks; others get "Enter edit mode to make changes to this area." Commands: `/challenge blockbreak`, `/challenge allowbreak <material>`, `/challenge disallowbreak <material>` (edit mode or with challenge ID).
+- **Loot table manager**: Full in-game loot table system: create/edit loot tables, set size (single/double chest), edit contents, assign to challenges, rename, change icon, and set **loot type** (Normal or Legendary). List GUI with pagination; options GUI per table.
+- **Loot type and chest type**: Each loot table has a type **Normal** or **Legendary**. Chests in a challenge use Normal tables by default; in edit mode, use **`/challenge loottype`** while looking at a chest to toggle it to Legendary (uses legendary loot tables for that challenge). **`/challenge chestignore`** continues to exclude a chest from loot entirely.
+- **GateKeeper + book**: Using a challenge book on a GateKeeper now runs only the challenge logic; the book no longer opens (interact is cancelled so the book GUI does not open).
+
+### Improvements
+- **Messages in messages.yml**: Player-facing messages that were hardcoded have been moved to `messages.yml` (admin challenge help, block break/place, loot table GUI, regen area, rewards commands, etc.) so server owners can customize them.
+- Edit mode backup/restore now includes **legendary chest keys** (so cancelling edit mode correctly restores chest type toggles).
+
+### Commands
+- `/challenge loottype` – In edit mode, look at a chest in the regen area to toggle Normal / Legendary (which loot tables the chest uses).
+- `/challenge blockbreak`, `/challenge allowbreak <material>`, `/challenge disallowbreak <material>` – Configure block breaking rules per challenge.
+
+### Configuration
+- **`challenges.yml`** – New file for all challenge definitions; created and migrated automatically from `config.yml` when present.
+
 ## Version 3.0.7
 
 ### Improvements

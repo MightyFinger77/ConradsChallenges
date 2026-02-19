@@ -21,12 +21,15 @@ import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.block.BlockPhysicsEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
@@ -63,6 +66,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import com.gix.conradchallenges.ChallengeScriptTypes.ChallengeScriptNode;
+import com.gix.conradchallenges.ChallengeScriptTypes.ScriptFunctionType;
+import com.gix.conradchallenges.ChallengeScriptTypes.ScriptTrigger;
+
 // FancyNPCs API (optional soft dependency)
 // Note: Using try-catch for ClassNotFoundException since API may not be available at compile time
 
@@ -79,10 +86,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         "settimer", "setitem", "setspeed", "setcooldown", "settimelimit", 
         "setmaxparty", "addreward", "clearrewards", "addtierreward", "cleartierrewards", "listtierrewards", "removereward", "addtoptimereward",
         "list", "info",
-        "setregenerationarea", "clearregenerationarea", "captureregeneration", "setautoregenerationy",
-        "setchallengearea", "clearchallengearea", "areasync",
+        "setregenerationarea", "setregenerationarea2", "setregenerationarea3", "setregenerationarea4",
+        "clearregenerationarea", "captureregeneration", "setautoregenerationy",
+        "setchallengearea", "setchallengearea2", "setchallengearea3", "setchallengearea4",
+        "clearchallengearea", "areasync",
         "blockitem", "unblockitem",
-        "loottable", "chestignore",
+        "blockbreak", "allowbreak", "disallowbreak",
+        "loottable", "chestignore", "loottype",
+        "functiontool",
         "test",
         "edit", "save", "cancel", "lockdown", "unlockdown"
     );
@@ -161,7 +172,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private static class ChallengeConfig {
+    /** Package-visible for ChallengeScriptManager. */
+    static class ChallengeConfig {
         final String id;
         String bookTitle;
 
@@ -185,13 +197,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         int timeLimitSeconds;
         List<Integer> timeLimitWarnings;
 
-        // Regeneration area (two corners defining a bounding box)
+        // Regeneration areas (multiple boxes). Each element is length-2: [corner1, corner2]. Index 0 = area 1.
+        List<Location[]> regenerationAreas;
+        // Legacy single area (kept in sync with first element of regenerationAreas for backward compat)
         Location regenerationCorner1;
         Location regenerationCorner2;
         // If true, Y range extends from bedrock to build height (ignores corner Y values)
         boolean regenerationAutoExtendY;
 
-        // Challenge area (two corners defining the playable area - used for teleport, protection, etc.)
+        // Challenge areas (multiple boxes). Each element is length-2: [corner1, corner2]. Index 0 = area 1.
+        List<Location[]> challengeAreas;
+        // Legacy single area (kept in sync with first element of challengeAreas)
         Location challengeCorner1;
         Location challengeCorner2;
 
@@ -202,6 +218,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         Set<Material> blockedItems;
         // Chests that ignore loot tables: use normal regen (save/restore contents). Keys are "world:x,y,z" for each block (both halves for double chests).
         Set<String> ignoredChestKeys;
+        // Chests that use legendary loot tables (canonical keys). If not in this set, chest uses normal loot tables.
+        Set<String> legendaryChestKeys;
+
+        // Block breaking: when true, challengers are restricted (can only break blocks they placed or in break-allowed list); when false, challengers can break whatever
+        boolean blockBreakEnabled;
+        // Materials that challengers are allowed to break when blockBreakEnabled is true (in addition to blocks they placed)
+        Set<Material> breakAllowedMaterials;
+
+        // Script nodes (function tool): block/location + trigger + function + options
+        List<ChallengeScriptNode> scriptNodes;
+
+        // Pass-through (invisible wall): block keys "world:x,y,z" that players can walk through when near
+        Set<String> passThroughBlockKeys;
 
         ChallengeConfig(String id) {
             this.id = id;
@@ -218,6 +247,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             this.timeLimitWarnings = new ArrayList<>();
             this.blockedItems = new HashSet<>();
             this.ignoredChestKeys = new HashSet<>();
+            this.legendaryChestKeys = new HashSet<>();
+            this.blockBreakEnabled = false;
+            this.breakAllowedMaterials = new HashSet<>();
+            this.scriptNodes = new ArrayList<>();
+            this.passThroughBlockKeys = new HashSet<>();
+            this.regenerationAreas = new ArrayList<>();
+            this.challengeAreas = new ArrayList<>();
         }
     }
 
@@ -284,13 +320,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    /** Loot table: name, size (single/double chest), icon, contents, and which challenges it's assigned to. */
+    /** Loot table: name, size (single/double chest), icon, contents, type (normal/legendary), and which challenges it's assigned to. */
     private static class LootTableData {
         final String id;
         String name;
         LootTableSize size; // SINGLE = 27 slots, DOUBLE = 54
         Material iconMaterial; // icon used in the list GUI
         ItemStack[] contents; // length 27 or 54
+        LootTableType lootType; // NORMAL = used by normal chests, LEGENDARY = used by legendary chests
         final Set<String> assignedChallengeIds = new HashSet<>();
 
         LootTableData(String id) {
@@ -299,7 +336,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             this.size = LootTableSize.SINGLE;
             this.iconMaterial = Material.CHEST;
             this.contents = new ItemStack[27];
+            this.lootType = LootTableType.NORMAL;
         }
+    }
+
+    private enum LootTableType {
+        NORMAL,
+        LEGENDARY
     }
 
     private enum LootTableSize {
@@ -313,19 +356,35 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private static class LootTableGuiContext {
         final LootTableScreen screen;
         final String loottableId; // when screen is OPTIONS, DELETE_CONFIRM, ASSIGN, EDIT_CONTENTS, CHALLENGE_LIST
-        final List<String> listOrder; // when screen is LIST or ASSIGN: slot index -> id
+        final List<String> listOrder; // when screen is LIST or ASSIGN: ordered ids
+        final int listPage; // when screen is LIST: current page (0-based)
 
         LootTableGuiContext(LootTableScreen screen, String loottableId) {
             this.screen = screen;
             this.loottableId = loottableId;
             this.listOrder = null;
+            this.listPage = 0;
         }
         LootTableGuiContext(LootTableScreen screen, String loottableId, List<String> listOrder) {
             this.screen = screen;
             this.loottableId = loottableId;
             this.listOrder = listOrder;
+            this.listPage = 0;
+        }
+        LootTableGuiContext(LootTableScreen screen, String loottableId, List<String> listOrder, int listPage) {
+            this.screen = screen;
+            this.loottableId = loottableId;
+            this.listOrder = listOrder;
+            this.listPage = listPage;
         }
     }
+
+    private static final int LOOTTABLE_LIST_SLOTS = 54;
+    private static final int LOOTTABLE_LIST_CONTENT_PER_PAGE = 45; // 5 rows
+    private static final int LOOTTABLE_LIST_BACK_SLOT = 53;   // last slot (bottom-right)
+    private static final int LOOTTABLE_LIST_PREV_SLOT = 47;
+    private static final int LOOTTABLE_LIST_NEXT_SLOT = 49;
+    private final Map<UUID, Integer> lastLoottableListPage = new HashMap<>();
 
     private enum LootTableScreen {
         MAIN,           // add new / edit list
@@ -418,6 +477,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private int partyCountdownSeconds = 10;  // Default 10 seconds
     private String editModeDisconnectAction = "cancel";  // Default: cancel (restore from backup)
     private boolean barrierBoxingEnabled = false;  // Default: false (barrier boxing disabled)
+    private Material functionToolMaterial = Material.BLAZE_ROD;
+    private String functionToolDisplayName = "§6Challenge Function Tool";
     private final Map<UUID, BukkitTask> pendingChallengeTimeouts = new HashMap<>();
     
     // Track players who died in challenges and need to be teleported on respawn
@@ -457,8 +518,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private java.lang.reflect.Method loadMethod;
     private boolean nmsAvailable = false;
     
-    // Edit mode: Track which challenges are being edited (challenge ID -> editor UUID)
-    private final Map<String, UUID> challengeEditors = new HashMap<>();
+    // Edit mode: Track which challenges are being edited (challenge ID -> set of editor UUIDs; multiple admins can edit)
+    private final Map<String, Set<UUID>> challengeEditors = new HashMap<>();
     
     // World aliases for display names
     private final Map<String, String> worldAliases = new HashMap<>();
@@ -497,12 +558,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     // Track dead party members (player UUID -> challenge ID) - for giving rewards when party completes
     private final Map<UUID, String> deadPartyMembers = new HashMap<>();
 
+    // Challenges config (stored in challenges.yml, separate from config.yml)
+    private File challengesFile;
+    private FileConfiguration challengesConfig;
+
     // Loot tables: custom chest loot per challenge (id -> LootTable)
     private final Map<String, LootTableData> loottables = new HashMap<>();
     private File loottablesFile;
     private FileConfiguration loottablesConfig;
     // GUI context for loottable menus (player UUID -> context)
     private final Map<UUID, LootTableGuiContext> loottableGuiContext = new HashMap<>();
+    private ChallengeScriptManager scriptManager;
     // Pending rename: player who is typing a new loottable name (UUID -> loottable id)
     private final Map<UUID, String> loottableRenamePending = new HashMap<>();
     private final Map<UUID, String> loottableIconPending = new HashMap<>();
@@ -511,11 +577,31 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private final Map<String, Map<UUID, Map<String, ItemStack[]>>> instanceChestContents = new HashMap<>();
     // When a player has an instance chest open: playerUuid -> (challengeId, locationKey, size)
     private final Map<UUID, InstanceChestOpenContext> instanceChestOpen = new HashMap<>();
+    // Block breaking: challengeId -> (blockKey -> placer UUID) for "blocks they placed" when blockBreakEnabled
+    private final Map<String, Map<String, UUID>> challengePlacedBlocks = new HashMap<>();
+    // Pass-through blocks: "challengeId:world:x,y,z" -> saved BlockState (block is temporarily air while player near)
+    private final Map<String, BlockState> passThroughSavedStates = new HashMap<>();
+    // Script gates/signals: per challenge, which block triggers have fired this run (reset when no players)
+    private final Map<String, Set<String>> scriptFiredTriggers = new HashMap<>();
+    // Signals fired this run (challengeId -> set of signal names)
+    private final Map<String, Set<String>> scriptSignalsFired = new HashMap<>();
+    // Redstone receiver cooldown: "challengeId:blockKey" -> last run ms (1s cooldown)
+    private final Map<String, Long> scriptRedstoneCooldowns = new HashMap<>();
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
         this.challengeKey = new NamespacedKey(this, "conrad_challenge_id");
+
+        // Init challenges file (separate from config.yml)
+        challengesFile = new File(getDataFolder(), "challenges.yml");
+        if (!challengesFile.exists()) {
+            saveResource("challenges.yml", false);
+        }
+        challengesConfig = YamlConfiguration.loadConfiguration(challengesFile);
+
+        // Migrate challenges from config.yml to challenges.yml if present (one-time)
+        migrateChallengesFromConfig();
 
         // Migrate config to add any missing new options
         migrateConfig();
@@ -536,12 +622,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         loadData();
 
         getServer().getPluginManager().registerEvents(this, this);
+        scriptManager = new ChallengeScriptManager(this);
+        getServer().getScheduler().runTaskTimer(this, this::updatePassThroughBlocks, 20L, 5L);
         registerCommands();
         setupPlaceholderAPI();
         setupMythicMobsListener();
         
         // Initialize NMS reflection for container NBT handling (WorldEdit-style)
         initializeNMS();
+
+        // Pass-through blocks: every 5 ticks, set to air when player near, restore when not
+        getServer().getScheduler().runTaskTimer(this, this::updatePassThroughBlocks, 20L, 5L);
+        // Script function tool: particles on looked-at block and blocks with functions (every 20 ticks)
+        getServer().getScheduler().runTaskTimer(this, this::updateScriptParticles, 40L, 20L);
 
         getLogger().info("ConradChallenges v" + getDescription().getVersion() + " enabled.");
     }
@@ -970,7 +1063,23 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         // Load barrier boxing setting
         barrierBoxingEnabled = config.getBoolean("challenge-area.barrier-boxing", false);
         getLogger().info("Barrier boxing for challenge areas: " + (barrierBoxingEnabled ? "enabled" : "disabled"));
+        
+        // Load function tool (script editor) material and display name
+        String toolMatStr = config.getString("function-tool.material", "BLAZE_ROD");
+        Material mat = Material.matchMaterial(toolMatStr != null ? toolMatStr : "BLAZE_ROD");
+        if (mat != null && mat.isItem()) {
+            functionToolMaterial = mat;
+        } else {
+            functionToolMaterial = Material.BLAZE_ROD;
+            if (mat == null || !mat.isItem()) getLogger().warning("Invalid function-tool.material '" + toolMatStr + "', using BLAZE_ROD");
+        }
+        String toolName = config.getString("function-tool.display-name", "§6Challenge Function Tool");
+        functionToolDisplayName = (toolName != null && !toolName.isEmpty())
+            ? ChatColor.translateAlternateColorCodes('&', toolName) : "§6Challenge Function Tool";
     }
+    
+    Material getFunctionToolMaterial() { return functionToolMaterial; }
+    String getFunctionToolDisplayName() { return functionToolDisplayName; }
     
     private void loadWorldAliases() {
         FileConfiguration config = getConfig();
@@ -1087,46 +1196,58 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return;
             }
             
-            // Read default messages as text to preserve formatting
-            List<String> currentLines = new ArrayList<>(java.nio.file.Files.readAllLines(messagesFile.toPath()));
+            // Read current and default as text (UTF-8) to preserve formatting
+            List<String> currentLines = java.nio.file.Files.readAllLines(messagesFile.toPath(), StandardCharsets.UTF_8);
             List<String> defaultLines = new ArrayList<>();
-            try (java.io.BufferedReader reader = new java.io.BufferedReader(new InputStreamReader(defaultMessagesTextStream))) {
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new InputStreamReader(defaultMessagesTextStream, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     defaultLines.add(line);
                 }
             }
             
-            // Also load as YAML to check what's missing
+            // Also load as YAML to check version and missing keys
             InputStream defaultMessagesYamlStream = getResource("messages.yml");
             YamlConfiguration defaultMessages = YamlConfiguration.loadConfiguration(
-                new InputStreamReader(defaultMessagesYamlStream));
+                new InputStreamReader(defaultMessagesYamlStream, StandardCharsets.UTF_8));
             YamlConfiguration currentMessages = YamlConfiguration.loadConfiguration(messagesFile);
             
-            // Check messages version
             int defaultVersion = defaultMessages.getInt("messages_version", 1);
-            int currentVersion = currentMessages.getInt("messages_version", 0); // 0 means old messages without version
+            int currentVersion = currentMessages.getInt("messages_version", 0);
             
-            // If versions match and messages has version field, no migration needed
-            if (currentVersion == defaultVersion && currentMessages.contains("messages_version")) {
-                return; // Messages are up to date
+            // Check for missing keys (same logic as config)
+            boolean hasMissingMessageKeys = false;
+            List<String> missingMessageKeys = new ArrayList<>();
+            for (String key : defaultMessages.getKeys(true)) {
+                if (key.equals("messages_version")) continue;
+                if (!currentMessages.contains(key)) {
+                    hasMissingMessageKeys = true;
+                    missingMessageKeys.add(key);
+                }
+            }
+            if (!missingMessageKeys.isEmpty()) {
+                getLogger().info("Found missing message keys: " + String.join(", ", missingMessageKeys));
             }
             
-            // Merge messages: Use default structure/comments, replace values with user's where they exist
-            List<String> mergedLines = mergeConfigs(defaultLines, currentMessages, defaultMessages, currentLines);
+            // Skip migration only if version matches, version key present, and no missing keys
+            if (currentVersion == defaultVersion && currentMessages.contains("messages_version") && !hasMissingMessageKeys) {
+                return;
+            }
             
-            // Check for and log deprecated keys that were removed
+            // Merge messages key-by-key so new keys from default are always added (preserveUserSectionContent=false)
+            List<String> mergedLines = mergeConfigs(defaultLines, currentMessages, defaultMessages, currentLines, false);
+            
             Set<String> deprecatedKeys = findDeprecatedKeys(currentMessages, defaultMessages);
             if (!deprecatedKeys.isEmpty()) {
                 getLogger().info("Removed deprecated message keys: " + String.join(", ", deprecatedKeys));
             }
             
-            // Update messages version
             updateConfigVersion(mergedLines, defaultVersion, defaultLines, "messages_version");
             
-            // Write merged messages
-            java.nio.file.Files.write(messagesFile.toPath(), mergedLines, 
-                java.nio.charset.StandardCharsets.UTF_8);
+            // Backup then write merged messages (UTF-8)
+            File backupFile = new File(getDataFolder(), "messages.yml.bak");
+            java.nio.file.Files.copy(messagesFile.toPath(), backupFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            java.nio.file.Files.write(messagesFile.toPath(), mergedLines, StandardCharsets.UTF_8);
             
             getLogger().info("Messages migration completed - merged with default messages, preserving user values and all comments");
             
@@ -1298,6 +1419,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             } else {
                 table.iconMaterial = Material.CHEST;
             }
+            String typeStr = sec.getString("loot-type", "NORMAL");
+            try {
+                table.lootType = LootTableType.valueOf(typeStr.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                table.lootType = LootTableType.NORMAL;
+            }
             int slots = table.size.slots;
             table.contents = new ItemStack[slots];
             List<?> contentsList = sec.getList("contents");
@@ -1333,6 +1460,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             root.set(path + ".name", t.name);
             root.set(path + ".size", t.size.name());
             root.set(path + ".icon", (t.iconMaterial != null ? t.iconMaterial.name() : Material.CHEST.name()));
+            root.set(path + ".loot-type", (t.lootType != null ? t.lootType : LootTableType.NORMAL).name());
             List<Map<String, Object>> contentsList = new ArrayList<>();
             for (ItemStack stack : t.contents) {
                 if (stack != null && !stack.getType().isAir()) {
@@ -1379,16 +1507,27 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     private void openLoottableListGui(Player player) {
+        int page = lastLoottableListPage.getOrDefault(player.getUniqueId(), 0);
+        openLoottableListGui(player, page);
+    }
+
+    private void openLoottableListGui(Player player, int page) {
         List<LootTableData> list = new ArrayList<>(loottables.values());
         List<String> ids = new ArrayList<>();
         for (LootTableData t : list) ids.add(t.id);
-        // At least 4 rows, at most 6; keep one slot at the very end for the Back button.
-        int rows = Math.min(6, Math.max(4, (list.size() + 8) / 9));
-        int size = rows * 9;
-        Inventory inv = Bukkit.createInventory(null, size, LOOTTABLE_GUI_TITLE_PREFIX + "List");
-        int backSlot = size - 1;
-        for (int i = 0; i < list.size() && i < backSlot; i++) {
-            LootTableData t = list.get(i);
+        int totalPages = Math.max(1, (ids.size() + LOOTTABLE_LIST_CONTENT_PER_PAGE - 1) / LOOTTABLE_LIST_CONTENT_PER_PAGE);
+        if (page < 0) page = 0;
+        if (page >= totalPages) page = totalPages - 1;
+        lastLoottableListPage.put(player.getUniqueId(), page);
+
+        Inventory inv = Bukkit.createInventory(null, LOOTTABLE_LIST_SLOTS, LOOTTABLE_GUI_TITLE_PREFIX + "List");
+        int start = page * LOOTTABLE_LIST_CONTENT_PER_PAGE;
+        // Content only in slots 0-44; bottom row (45-53) is nav bar only — never put loot table icons there
+        for (int i = 0; i < LOOTTABLE_LIST_CONTENT_PER_PAGE; i++) {
+            int idx = start + i;
+            if (idx >= ids.size()) break;
+            LootTableData t = loottables.get(ids.get(idx));
+            if (t == null) continue;
             Material iconMat = (t.iconMaterial != null ? t.iconMaterial : Material.CHEST);
             ItemStack icon = new ItemStack(iconMat);
             org.bukkit.inventory.meta.ItemMeta meta = icon.getItemMeta();
@@ -1403,9 +1542,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             inv.setItem(i, icon);
         }
-        // Back button (return to main menu)
-        inv.setItem(backSlot, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to menu"));
-        loottableGuiContext.put(player.getUniqueId(), new LootTableGuiContext(LootTableScreen.LIST, null, ids));
+        // Bottom row: empty, empty, prev, empty, next, empty, empty, empty, back (last slot)
+        inv.setItem(LOOTTABLE_LIST_BACK_SLOT, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to menu"));
+        // Always show Prev/Next so layout is consistent; disable when not applicable
+        if (page > 0) {
+            inv.setItem(LOOTTABLE_LIST_PREV_SLOT, makeLoottableGuiItem(Material.ARROW, ChatColor.GOLD + "Previous page", ChatColor.GRAY + "Page " + page));
+        } else {
+            inv.setItem(LOOTTABLE_LIST_PREV_SLOT, makeLoottableGuiItem(Material.ARROW, ChatColor.GRAY + "Previous page", ChatColor.DARK_GRAY + (totalPages <= 1 ? "Only one page" : "Already on first page")));
+        }
+        if (page < totalPages - 1) {
+            inv.setItem(LOOTTABLE_LIST_NEXT_SLOT, makeLoottableGuiItem(Material.ARROW, ChatColor.GOLD + "Next page", ChatColor.GRAY + "Page " + (page + 2)));
+        } else {
+            inv.setItem(LOOTTABLE_LIST_NEXT_SLOT, makeLoottableGuiItem(Material.ARROW, ChatColor.GRAY + "Next page", ChatColor.DARK_GRAY + (totalPages <= 1 ? "Only one page" : "Already on last page")));
+        }
+        loottableGuiContext.put(player.getUniqueId(), new LootTableGuiContext(LootTableScreen.LIST, null, ids, page));
         player.openInventory(inv);
     }
 
@@ -1422,9 +1572,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         inv.setItem(4, makeLoottableGuiItem(Material.NAME_TAG, ChatColor.WHITE + "Rename", "Type new name in chat"));
         inv.setItem(6, makeLoottableGuiItem(Material.LIME_CONCRETE, ChatColor.GREEN + "Assign to challenge(s)", "Choose which challenges use this table"));
         inv.setItem(8, makeLoottableGuiItem(Material.RED_CONCRETE, ChatColor.RED + "Delete", "Remove this loot table"));
-        // Second row: icon options, staggered for readability
-        inv.setItem(11, makeLoottableGuiItem(Material.ITEM_FRAME, ChatColor.GOLD + "Change icon", "Type the item name in chat", "(e.g. ender_pearl, diamond)"));
-        inv.setItem(13, makeLoottableGuiItem(Material.CRAFTING_TABLE, ChatColor.GOLD + "Change icon (hand)", "Use the item in your main hand", "as the list icon for this loottable."));
+        // Second row: icon options, staggered (slots 10, 12)
+        inv.setItem(10, makeLoottableGuiItem(Material.ITEM_FRAME, ChatColor.GOLD + "Change icon", "Type the item name in chat", "(e.g. ender_pearl, diamond)"));
+        inv.setItem(12, makeLoottableGuiItem(Material.CRAFTING_TABLE, ChatColor.GOLD + "Change icon (hand)", "Use the item in your main hand", "as the list icon for this loottable."));
+        // Loot type: Normal (used by normal chests) or Legendary (used by legendary chests)
+        LootTableType currentType = t.lootType != null ? t.lootType : LootTableType.NORMAL;
+        Material typeIcon = currentType == LootTableType.LEGENDARY ? Material.GOLD_INGOT : Material.IRON_INGOT;
+        inv.setItem(14, makeLoottableGuiItem(typeIcon, ChatColor.AQUA + "Loot type: " + currentType.name(), "Current: " + currentType.name(), "Normal = used by default chests", "Legendary = used by chests toggled with /challenge loottype", "Click to toggle"));
         // Back button (return to list)
         inv.setItem(35, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to list"));
         loottableGuiContext.put(player.getUniqueId(), new LootTableGuiContext(LootTableScreen.OPTIONS, loottableId));
@@ -1518,14 +1672,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         loottableRenamePending.put(player.getUniqueId(), loottableId);
         loottableGuiContext.remove(player.getUniqueId());
         player.closeInventory();
-        player.sendMessage(ChatColor.YELLOW + "Type the new name in chat (or 'cancel' to cancel):");
+        player.sendMessage(getMessage("loottable.prompt-name"));
     }
 
     private void startLoottableIconChange(Player player, String loottableId) {
         loottableIconPending.put(player.getUniqueId(), loottableId);
         loottableGuiContext.remove(player.getUniqueId());
         player.closeInventory();
-        player.sendMessage(ChatColor.YELLOW + "Type the item name in chat (e.g. ender_pearl, diamond) or 'cancel' to cancel:");
+        player.sendMessage(getMessage("loottable.prompt-icon"));
     }
 
     /** Resolve user input to a valid Material for display (items/blocks). Returns null if not found. */
@@ -1551,30 +1705,44 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         return loc.getWorld().getName() + ":" + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ();
     }
 
-    /** Returns the canonical key for this chest (one key per inventory; for double chests both halves share the same key). */
-    private static String getCanonicalChestKey(Block block) {
-        if (block == null || (!block.getType().equals(Material.CHEST) && !block.getType().equals(Material.TRAPPED_CHEST))) return null;
+    /**
+     * Gets the other half of a double chest, or null if single chest.
+     * Uses Bukkit's DoubleChest inventory holder (same approach as Locktight) so both halves are always treated together.
+     */
+    private static Block getDoubleChestPartner(Block block) {
+        if (block == null || (block.getType() != Material.CHEST && block.getType() != Material.TRAPPED_CHEST)) return null;
         BlockState state = block.getState();
-        if (!(state instanceof Chest)) return chestLocationKey(block.getLocation());
-        org.bukkit.block.data.type.Chest chestData = (org.bukkit.block.data.type.Chest) block.getBlockData();
-        if (chestData.getType() == org.bukkit.block.data.type.Chest.Type.RIGHT) {
-            org.bukkit.block.BlockFace facing = chestData.getFacing();
-            Block left = block.getRelative(facing.getOppositeFace());
-            return chestLocationKey(left.getLocation());
+        if (!(state instanceof Chest chestState)) return null;
+        org.bukkit.inventory.InventoryHolder holder = chestState.getInventory().getHolder();
+        if (!(holder instanceof DoubleChest doubleChest)) return null;
+        org.bukkit.inventory.InventoryHolder leftHolder = doubleChest.getLeftSide();
+        org.bukkit.inventory.InventoryHolder rightHolder = doubleChest.getRightSide();
+        Location ourLoc = block.getLocation();
+        if (leftHolder instanceof Chest leftChest && !leftChest.getLocation().equals(ourLoc)) return leftChest.getBlock();
+        if (rightHolder instanceof Chest rightChest && !rightChest.getLocation().equals(ourLoc)) return rightChest.getBlock();
+        return null;
+    }
+
+    /** Returns the canonical key for this chest (one key per inventory; for double chests both halves share the same key). Uses left side for consistency. */
+    private static String getCanonicalChestKey(Block block) {
+        if (block == null || (block.getType() != Material.CHEST && block.getType() != Material.TRAPPED_CHEST)) return null;
+        BlockState state = block.getState();
+        if (!(state instanceof Chest chestState)) return chestLocationKey(block.getLocation());
+        org.bukkit.inventory.InventoryHolder holder = chestState.getInventory().getHolder();
+        if (holder instanceof DoubleChest doubleChest) {
+            org.bukkit.inventory.InventoryHolder leftHolder = doubleChest.getLeftSide();
+            if (leftHolder instanceof Chest leftChest) return chestLocationKey(leftChest.getLocation());
         }
         return chestLocationKey(block.getLocation());
     }
 
-    /** Returns both blocks if double chest (for adding to ignored set), else singleton list. */
+    /** Returns both blocks if double chest (for ignored set), else singleton list. Uses DoubleChest API so both halves are always included. */
     private static List<Block> getChestBlocksForIgnore(Block block) {
         List<Block> out = new ArrayList<>();
-        if (block == null || (!block.getType().equals(Material.CHEST) && !block.getType().equals(Material.TRAPPED_CHEST))) return out;
+        if (block == null || (block.getType() != Material.CHEST && block.getType() != Material.TRAPPED_CHEST)) return out;
         out.add(block);
-        BlockState state = block.getState();
-        if (!(state instanceof Chest)) return out;
-        org.bukkit.block.data.type.Chest chestData = (org.bukkit.block.data.type.Chest) block.getBlockData();
-        Block other = block.getRelative(chestData.getType() == org.bukkit.block.data.type.Chest.Type.RIGHT ? chestData.getFacing().getOppositeFace() : chestData.getFacing());
-        if (other.getType() == block.getType()) out.add(other);
+        Block partner = getDoubleChestPartner(block);
+        if (partner != null) out.add(partner);
         return out;
     }
 
@@ -1582,18 +1750,22 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (loc == null || loc.getWorld() == null) return null;
         for (Map.Entry<String, ChallengeConfig> e : challenges.entrySet()) {
             ChallengeConfig cfg = e.getValue();
-            if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) continue;
-            if (isLocationInRegenerationArea(cfg, loc)) return e.getKey();
+            if (!isLocationInRegenArea(cfg, loc)) continue;
+            return e.getKey();
         }
         return null;
     }
 
+    /** True if this chest (or its double-chest partner) is in the ignored set. Either half being ignored means the whole double chest is ignored. */
     private boolean isChestIgnored(ChallengeConfig cfg, Block block) {
         if (cfg == null || cfg.ignoredChestKeys == null) return false;
-        for (Block b : getChestBlocksForIgnore(block)) {
-            if (cfg.ignoredChestKeys.contains(chestLocationKey(b.getLocation()))) return true;
-        }
-        return false;
+        if (cfg.ignoredChestKeys.contains(chestLocationKey(block.getLocation()))) return true;
+        Block partner = getDoubleChestPartner(block);
+        return partner != null && cfg.ignoredChestKeys.contains(chestLocationKey(partner.getLocation()));
+    }
+
+    private boolean isChestLegendary(ChallengeConfig cfg, String canonicalChestKey) {
+        return cfg != null && cfg.legendaryChestKeys != null && canonicalChestKey != null && cfg.legendaryChestKeys.contains(canonicalChestKey);
     }
 
     private void clearInstanceChestDataForPlayer(UUID playerUuid, String challengeId) {
@@ -1644,10 +1816,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         challenges.clear();
         bookTitleToChallengeId.clear();
 
-        FileConfiguration config = getConfig();
-        ConfigurationSection root = config.getConfigurationSection("challenges");
+        // Reload challenges file from disk (e.g. on /reload)
+        if (challengesFile != null && challengesFile.exists()) {
+            challengesConfig = YamlConfiguration.loadConfiguration(challengesFile);
+        }
+        ConfigurationSection root = challengesConfig != null ? challengesConfig.getConfigurationSection("challenges") : null;
         if (root == null) {
-            getLogger().warning("No 'challenges' section in config.yml");
             return;
         }
 
@@ -1910,66 +2084,98 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
 
-            // Load regeneration area
-            ConfigurationSection regenSec = cs.getConfigurationSection("regeneration");
-            if (regenSec != null) {
-                String regenWorldName = regenSec.getString("world");
-                if (regenWorldName != null) {
-                    World regenWorld = Bukkit.getWorld(regenWorldName);
-                    if (regenWorld != null) {
-                        ConfigurationSection corner1Sec = regenSec.getConfigurationSection("corner1");
-                        ConfigurationSection corner2Sec = regenSec.getConfigurationSection("corner2");
-                        if (corner1Sec != null && corner2Sec != null) {
-                            double x1 = corner1Sec.getDouble("x");
-                            double y1 = corner1Sec.getDouble("y");
-                            double z1 = corner1Sec.getDouble("z");
-                            double x2 = corner2Sec.getDouble("x");
-                            double y2 = corner2Sec.getDouble("y");
-                            double z2 = corner2Sec.getDouble("z");
-                            cfg.regenerationCorner1 = new Location(regenWorld, x1, y1, z1);
-                            cfg.regenerationCorner2 = new Location(regenWorld, x2, y2, z2);
+            // Load regeneration areas (multiple boxes). New format: regeneration-areas list; fallback: regeneration (singular)
+            List<?> regenAreasList = cs.getList("regeneration-areas");
+            if (regenAreasList != null && !regenAreasList.isEmpty()) {
+                cfg.regenerationAreas.clear();
+                for (Object item : regenAreasList) {
+                    if (!(item instanceof Map)) continue;
+                    @SuppressWarnings("unchecked") Map<?, ?> map = (Map<?, ?>) item;
+                    String wName = map.get("world") != null ? String.valueOf(map.get("world")) : null;
+                    if (wName == null) continue;
+                    World w = Bukkit.getWorld(wName);
+                    if (w == null) continue;
+                    Object c1 = map.get("corner1");
+                    Object c2 = map.get("corner2");
+                    if (c1 instanceof Map && c2 instanceof Map) {
+                        Map<?, ?> m1 = (Map<?, ?>) c1, m2 = (Map<?, ?>) c2;
+                        double x1 = getDouble(m1, "x"), y1 = getDouble(m1, "y"), z1 = getDouble(m1, "z");
+                        double x2 = getDouble(m2, "x"), y2 = getDouble(m2, "y"), z2 = getDouble(m2, "z");
+                        cfg.regenerationAreas.add(new Location[]{ new Location(w, x1, y1, z1), new Location(w, x2, y2, z2) });
+                    }
+                }
+                syncRegenLegacyFromList(cfg);
+                ConfigurationSection regenSec = cs.getConfigurationSection("regeneration");
+                if (regenSec != null) cfg.regenerationAutoExtendY = regenSec.getBoolean("auto-extend-y", false);
+            } else {
+                ConfigurationSection regenSec = cs.getConfigurationSection("regeneration");
+                if (regenSec != null) {
+                    String regenWorldName = regenSec.getString("world");
+                    if (regenWorldName != null) {
+                        World regenWorld = Bukkit.getWorld(regenWorldName);
+                        if (regenWorld != null) {
+                            ConfigurationSection corner1Sec = regenSec.getConfigurationSection("corner1");
+                            ConfigurationSection corner2Sec = regenSec.getConfigurationSection("corner2");
+                            if (corner1Sec != null && corner2Sec != null) {
+                                double x1 = corner1Sec.getDouble("x"), y1 = corner1Sec.getDouble("y"), z1 = corner1Sec.getDouble("z");
+                                double x2 = corner2Sec.getDouble("x"), y2 = corner2Sec.getDouble("y"), z2 = corner2Sec.getDouble("z");
+                                cfg.regenerationCorner1 = new Location(regenWorld, x1, y1, z1);
+                                cfg.regenerationCorner2 = new Location(regenWorld, x2, y2, z2);
+                                cfg.regenerationAreas.add(new Location[]{ cfg.regenerationCorner1, cfg.regenerationCorner2 });
+                            }
+                            cfg.regenerationAutoExtendY = regenSec.getBoolean("auto-extend-y", false);
+                            if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null && !challengeInitialStates.containsKey(id)) {
+                                captureInitialState(cfg, success -> {
+                                    if (success) getLogger().info("Captured initial state for challenge '" + id + "' during config load");
+                                    else getLogger().warning("Failed to capture initial state for challenge '" + id + "' during config load");
+                                });
+                            }
+                        } else {
+                            getLogger().warning("Challenge '" + id + "' has invalid regeneration world: " + regenWorldName);
                         }
-                        // Load auto-extend Y option (defaults to false if not set)
-                        cfg.regenerationAutoExtendY = regenSec.getBoolean("auto-extend-y", false);
-                        // Try to capture initial state if not already captured
-                        if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null && 
-                            !challengeInitialStates.containsKey(id)) {
-                            // Capture initial state asynchronously during config load
-                            captureInitialState(cfg, success -> {
-                                if (success) {
-                                    getLogger().info("Captured initial state for challenge '" + id + "' during config load");
-                                } else {
-                                    getLogger().warning("Failed to capture initial state for challenge '" + id + "' during config load");
-                                }
-                            });
-                        }
-                    } else {
-                        getLogger().warning("Challenge '" + id + "' has invalid regeneration world: " + regenWorldName);
                     }
                 }
             }
 
-            // Load challenge area
-            ConfigurationSection challengeAreaSec = cs.getConfigurationSection("challenge-area");
-            if (challengeAreaSec != null) {
-                String challengeWorldName = challengeAreaSec.getString("world");
-                if (challengeWorldName != null) {
-                    World challengeWorld = Bukkit.getWorld(challengeWorldName);
-                    if (challengeWorld != null) {
-                        ConfigurationSection corner1Sec = challengeAreaSec.getConfigurationSection("corner1");
-                        ConfigurationSection corner2Sec = challengeAreaSec.getConfigurationSection("corner2");
-                        if (corner1Sec != null && corner2Sec != null) {
-                            double x1 = corner1Sec.getDouble("x");
-                            double y1 = corner1Sec.getDouble("y");
-                            double z1 = corner1Sec.getDouble("z");
-                            double x2 = corner2Sec.getDouble("x");
-                            double y2 = corner2Sec.getDouble("y");
-                            double z2 = corner2Sec.getDouble("z");
-                            cfg.challengeCorner1 = new Location(challengeWorld, x1, y1, z1);
-                            cfg.challengeCorner2 = new Location(challengeWorld, x2, y2, z2);
+            // Load challenge areas (multiple boxes). New format: challenge-areas list; fallback: challenge-area (singular)
+            List<?> challengeAreasList = cs.getList("challenge-areas");
+            if (challengeAreasList != null && !challengeAreasList.isEmpty()) {
+                cfg.challengeAreas.clear();
+                for (Object item : challengeAreasList) {
+                    if (!(item instanceof Map)) continue;
+                    @SuppressWarnings("unchecked") Map<?, ?> map = (Map<?, ?>) item;
+                    String wName = map.get("world") != null ? String.valueOf(map.get("world")) : null;
+                    if (wName == null) continue;
+                    World w = Bukkit.getWorld(wName);
+                    if (w == null) continue;
+                    Object c1 = map.get("corner1"), c2 = map.get("corner2");
+                    if (c1 instanceof Map && c2 instanceof Map) {
+                        Map<?, ?> m1 = (Map<?, ?>) c1, m2 = (Map<?, ?>) c2;
+                        double x1 = getDouble(m1, "x"), y1 = getDouble(m1, "y"), z1 = getDouble(m1, "z");
+                        double x2 = getDouble(m2, "x"), y2 = getDouble(m2, "y"), z2 = getDouble(m2, "z");
+                        cfg.challengeAreas.add(new Location[]{ new Location(w, x1, y1, z1), new Location(w, x2, y2, z2) });
+                    }
+                }
+                syncChallengeLegacyFromList(cfg);
+            } else {
+                ConfigurationSection challengeAreaSec = cs.getConfigurationSection("challenge-area");
+                if (challengeAreaSec != null) {
+                    String challengeWorldName = challengeAreaSec.getString("world");
+                    if (challengeWorldName != null) {
+                        World challengeWorld = Bukkit.getWorld(challengeWorldName);
+                        if (challengeWorld != null) {
+                            ConfigurationSection corner1Sec = challengeAreaSec.getConfigurationSection("corner1");
+                            ConfigurationSection corner2Sec = challengeAreaSec.getConfigurationSection("corner2");
+                            if (corner1Sec != null && corner2Sec != null) {
+                                double x1 = corner1Sec.getDouble("x"), y1 = corner1Sec.getDouble("y"), z1 = corner1Sec.getDouble("z");
+                                double x2 = corner2Sec.getDouble("x"), y2 = corner2Sec.getDouble("y"), z2 = corner2Sec.getDouble("z");
+                                cfg.challengeCorner1 = new Location(challengeWorld, x1, y1, z1);
+                                cfg.challengeCorner2 = new Location(challengeWorld, x2, y2, z2);
+                                cfg.challengeAreas.add(new Location[]{ cfg.challengeCorner1, cfg.challengeCorner2 });
+                            }
+                        } else {
+                            getLogger().warning("Challenge '" + id + "' has invalid challenge area world: " + challengeWorldName);
                         }
-                    } else {
-                        getLogger().warning("Challenge '" + id + "' has invalid challenge area world: " + challengeWorldName);
                     }
                 }
             }
@@ -1996,6 +2202,69 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 cfg.ignoredChestKeys.clear();
                 cfg.ignoredChestKeys.addAll(ignoredKeys);
             }
+            cfg.legendaryChestKeys.clear();
+            List<String> legendaryKeys = cs.getStringList("legendary-chests");
+            if (legendaryKeys != null && !legendaryKeys.isEmpty()) {
+                cfg.legendaryChestKeys.addAll(legendaryKeys);
+            }
+
+            // Load block break settings: blockBreakEnabled = restriction on (only placed + allow list); false = challengers can break whatever
+            cfg.blockBreakEnabled = cs.getBoolean("block-break-enabled", false);
+            cfg.breakAllowedMaterials.clear();
+            List<String> allowBreakNames = cs.getStringList("break-allowed-blocks");
+            if (allowBreakNames != null) {
+                for (String name : allowBreakNames) {
+                    try {
+                        Material mat = Material.valueOf(name.toUpperCase(Locale.ROOT));
+                        if (mat != null && mat.isBlock()) {
+                            cfg.breakAllowedMaterials.add(mat);
+                        }
+                    } catch (IllegalArgumentException ignored) {
+                        getLogger().warning("Challenge '" + id + "' has invalid break-allowed block: " + name);
+                    }
+                }
+            }
+
+            // Load script nodes (function tool)
+            cfg.scriptNodes.clear();
+            List<?> scriptList = cs.getList("scripts");
+            if (scriptList != null) {
+                for (Object raw : scriptList) {
+                    if (!(raw instanceof Map)) continue;
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> map = (Map<String, Object>) raw;
+                    String w = String.valueOf(map.get("world"));
+                    Object ox = map.get("x"), oy = map.get("y"), oz = map.get("z");
+                    if (w == null || w.isEmpty() || ox == null || oy == null || oz == null) continue;
+                    int x = ((Number) ox).intValue(), y = ((Number) oy).intValue(), z = ((Number) oz).intValue();
+                    ChallengeScriptNode node = new ChallengeScriptNode(w, x, y, z);
+                    String triggerStr = String.valueOf(map.get("trigger")).toUpperCase(Locale.ROOT);
+                    try { node.trigger = ScriptTrigger.valueOf(triggerStr); } catch (IllegalArgumentException ignored) { }
+                    String funcStr = String.valueOf(map.get("function")).toUpperCase(Locale.ROOT);
+                    try { node.functionType = ScriptFunctionType.valueOf(funcStr); } catch (IllegalArgumentException ignored) { }
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> fd = (Map<String, Object>) map.get("function-data");
+                    if (fd != null) node.functionData.putAll(fd);
+                    List<?> condList = (List<?>) map.get("conditions");
+                    if (condList != null) {
+                        for (Object c : condList) {
+                            if (c instanceof Map) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> cm = new HashMap<>((Map<String, Object>) c);
+                                node.conditions.add(cm);
+                            }
+                        }
+                    }
+                    cfg.scriptNodes.add(node);
+                }
+            }
+
+            // Load pass-through blocks (invisible walls)
+            cfg.passThroughBlockKeys.clear();
+            List<String> passThroughKeys = cs.getStringList("pass-through-blocks");
+            if (passThroughKeys != null && !passThroughKeys.isEmpty()) {
+                cfg.passThroughBlockKeys.addAll(passThroughKeys);
+            }
 
             challenges.put(id, cfg);
             if (cfg.bookTitle != null) {
@@ -2007,6 +2276,31 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     // ====== CONFIG MIGRATION ======
+
+    /**
+     * One-time migration: copy challenges from config.yml to challenges.yml if present.
+     * Allows existing servers to keep all challenge data when upgrading to the split config.
+     */
+    private void migrateChallengesFromConfig() {
+        try {
+            ConfigurationSection from = getConfig().getConfigurationSection("challenges");
+            if (from == null || from.getKeys(false).isEmpty()) {
+                return;
+            }
+            // One-time migration: backup current config, then move challenges to challenges.yml
+            File configFile = new File(getDataFolder(), "config.yml");
+            File backupFile = new File(getDataFolder(), "config.yml.old");
+            java.nio.file.Files.copy(configFile.toPath(), backupFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            getLogger().info("Backed up config to config.yml.old before challenges migration");
+
+            // Copy entire challenges section to challenges.yml
+            challengesConfig.set("challenges", from.getValues(true));
+            challengesConfig.save(challengesFile);
+            getLogger().info("Migrated challenges from config.yml to challenges.yml (" + from.getKeys(false).size() + " challenge(s))");
+        } catch (Exception e) {
+            getLogger().warning("Failed to migrate challenges to challenges.yml: " + e.getMessage());
+        }
+    }
 
     /**
      * Migrate config.yml to add missing options from newer versions
@@ -2028,20 +2322,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return;
             }
             
-            // Read default config as text to preserve formatting
-            List<String> currentLines = new ArrayList<>(java.nio.file.Files.readAllLines(configFile.toPath()));
+            // Read current and default config as text (UTF-8) to preserve formatting
+            List<String> currentLines = java.nio.file.Files.readAllLines(configFile.toPath(), StandardCharsets.UTF_8);
             List<String> defaultLines = new ArrayList<>();
-            try (java.io.BufferedReader reader = new java.io.BufferedReader(new InputStreamReader(defaultConfigTextStream))) {
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new InputStreamReader(defaultConfigTextStream, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     defaultLines.add(line);
                 }
             }
             
-            // Also load as YAML to check what's missing (get resource again - getResource returns new stream)
             InputStream defaultConfigYamlStream = getResource("config.yml");
             YamlConfiguration defaultConfig = YamlConfiguration.loadConfiguration(
-                new InputStreamReader(defaultConfigYamlStream));
+                new InputStreamReader(defaultConfigYamlStream, StandardCharsets.UTF_8));
             YamlConfiguration currentConfig = YamlConfiguration.loadConfiguration(configFile);
             
             // Check config version
@@ -2054,8 +2347,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             boolean hasMissingKeys = false;
             List<String> missingKeys = new ArrayList<>();
             for (String key : defaultConfig.getKeys(true)) {
-                // Skip version key and challenges section (challenges is preserved separately)
-                if (key.equals("config_version") || key.equals("challenges") || key.startsWith("challenges.")) {
+                // Skip version key
+                if (key.equals("config_version")) {
                     continue;
                 }
                 if (!currentConfig.contains(key)) {
@@ -2080,21 +2373,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // This preserves all comments and formatting from default, while keeping user's custom values
             // Deprecated keys (in user config but not in default) are automatically removed
             // The 'challenges' section is completely ignored during migration - preserved as-is from original
-            List<String> mergedLines = mergeConfigs(defaultLines, currentConfig, defaultConfig, currentLines);
-            
-            // Safety check: if challenges section was lost, abort migration
-            YamlConfiguration mergedConfig = YamlConfiguration.loadConfiguration(
-                new java.io.StringReader(String.join("\n", mergedLines)));
-            if (currentConfig.contains("challenges") && currentConfig.getConfigurationSection("challenges") != null) {
-                ConfigurationSection originalChallenges = currentConfig.getConfigurationSection("challenges");
-                ConfigurationSection mergedChallenges = mergedConfig.getConfigurationSection("challenges");
-                if (mergedChallenges == null || mergedChallenges.getKeys(false).isEmpty()) {
-                    // Challenges were lost! Abort migration and keep original
-                    getLogger().severe("Config migration would have wiped challenges section! Aborting migration to preserve data.");
-                    getLogger().severe("Please report this issue. Your config has been preserved.");
-                    return; // Don't write the migrated config
-                }
-            }
+            List<String> mergedLines = mergeConfigs(defaultLines, currentConfig, defaultConfig, currentLines, true);
             
             // Check for and log deprecated keys that were removed
             Set<String> deprecatedKeys = findDeprecatedKeys(currentConfig, defaultConfig);
@@ -2102,12 +2381,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 getLogger().info("Removed deprecated config keys: " + String.join(", ", deprecatedKeys));
             }
             
-            // Update config version
             updateConfigVersion(mergedLines, defaultVersion, defaultLines, "config_version");
             
-            // Write merged config
-            java.nio.file.Files.write(configFile.toPath(), mergedLines, 
-                java.nio.charset.StandardCharsets.UTF_8);
+            // Backup then write merged config (UTF-8)
+            File configBackupFile = new File(getDataFolder(), "config.yml.bak");
+            java.nio.file.Files.copy(configFile.toPath(), configBackupFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            java.nio.file.Files.write(configFile.toPath(), mergedLines, StandardCharsets.UTF_8);
             
             getLogger().info("Config migration completed - merged with default config, preserving user values and all comments");
             
@@ -2125,10 +2404,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
      * Simple approach: Use default structure/comments, replace values with user's where they exist
      */
     private List<String> mergeConfigs(List<String> defaultLines, YamlConfiguration userConfig, YamlConfiguration defaultConfig) {
-        return mergeConfigs(defaultLines, userConfig, defaultConfig, new ArrayList<>());
+        return mergeConfigs(defaultLines, userConfig, defaultConfig, new ArrayList<>(), true);
     }
     
-    private List<String> mergeConfigs(List<String> defaultLines, YamlConfiguration userConfig, YamlConfiguration defaultConfig, List<String> originalUserLines) {
+    /**
+     * @param preserveUserSectionContent if true (config), whole sections can be taken from user file when present;
+     *        if false (messages), always walk default line-by-line so new keys from default are added
+     */
+    private List<String> mergeConfigs(List<String> defaultLines, YamlConfiguration userConfig, YamlConfiguration defaultConfig, List<String> originalUserLines, boolean preserveUserSectionContent) {
         List<String> merged = new ArrayList<>();
         
         // Track current path for nested keys - store both name and indent level
@@ -2205,42 +2488,6 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
                 
                 if (isSection) {
-                    // Special handling: Skip challenges section entirely - preserve it from original
-                    if (fullPath.equals("challenges")) {
-                        // Extract challenges section from original user config
-                        List<String> userSectionLines = extractSectionFromOriginalLines(originalUserLines, fullPath, currentIndent);
-                        
-                        if (!userSectionLines.isEmpty()) {
-                            // Add section header (with default's comment if any)
-                            merged.add(line);
-                            // Add user's challenges section content (preserving their formatting)
-                            merged.addAll(userSectionLines);
-                            
-                            // Skip the default section content
-                            int sectionStartIndent = currentIndent;
-                            while (i + 1 < defaultLines.size()) {
-                                String nextLine = defaultLines.get(i + 1);
-                                String nextTrimmed = nextLine.trim();
-                                if (nextTrimmed.isEmpty() || nextLine.startsWith("#")) {
-                                    int nextIndent = nextLine.length() - nextTrimmed.length();
-                                    if (nextIndent <= sectionStartIndent) {
-                                        break; // Comment at section level or above - end of section
-                                    }
-                                    i++; // Skip comment/blank within section
-                                } else {
-                                    int nextIndent = nextLine.length() - nextTrimmed.length();
-                                    if (nextIndent <= sectionStartIndent) {
-                                        break; // End of section
-                                    }
-                                    i++; // Skip this line (it's part of default section)
-                                }
-                            }
-                            
-                            pathStack.push(new Pair<>(keyPart, currentIndent));
-                            continue;
-                        }
-                    }
-                    
                     // This is a section - check if user has values for it
                     if (userConfig.contains(fullPath)) {
                         Object userValue = userConfig.get(fullPath);
@@ -2281,53 +2528,40 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             }
                             pathStack.push(new Pair<>(keyPart, currentIndent));
                             continue;
-                        } else if (userValue instanceof ConfigurationSection) {
-                            // Complex nested section (like challenges) - extract from original user file
-                            // Preserve any comment on the section header line from default
+                        } else if (userValue instanceof ConfigurationSection && preserveUserSectionContent) {
+                            // Config only: complex nested section (e.g. challenges) - extract from original user file
+                            // So we preserve exact user formatting. For messages we use preserveUserSectionContent=false
+                            // so we walk default line-by-line and add any new keys.
                             String sectionHeader = line;
-                            
-                            // Extract this section from the original user config file
                             List<String> userSectionLines = extractSectionFromOriginalLines(originalUserLines, fullPath, currentIndent);
-                            
                             if (!userSectionLines.isEmpty()) {
-                                // Successfully extracted - use user's section
-                                // Add section header (with default's comment if any)
                                 merged.add(sectionHeader);
-                                // Add user's section content (preserving their formatting)
                                 merged.addAll(userSectionLines);
-                                
-                                // Skip the default section content
                                 int sectionStartIndent = currentIndent;
                                 while (i + 1 < defaultLines.size()) {
                                     String nextLine = defaultLines.get(i + 1);
                                     String nextTrimmed = nextLine.trim();
                                     if (nextTrimmed.isEmpty() || nextLine.startsWith("#")) {
-                                        // Keep comments/blank lines that are at section level (for spacing)
                                         int nextIndent = nextLine.length() - nextTrimmed.length();
-                                        if (nextIndent <= sectionStartIndent) {
-                                            break; // Comment at section level or above - end of section
-                                        }
-                                        i++; // Skip comment/blank within section
+                                        if (nextIndent <= sectionStartIndent) break;
+                                        i++;
                                     } else {
                                         int nextIndent = nextLine.length() - nextTrimmed.length();
-                                        if (nextIndent <= sectionStartIndent) {
-                                            break; // End of section
-                                        }
-                                        i++; // Skip this line (it's part of default section)
+                                        if (nextIndent <= sectionStartIndent) break;
+                                        i++;
                                     }
                                 }
-                                
                                 pathStack.push(new Pair<>(keyPart, currentIndent));
                                 continue;
                             } else {
-                                // Couldn't extract from original - this is dangerous!
-                                // For safety, preserve the original section by not migrating it
-                                // Log a warning and use default (which might be empty, but won't wipe user data)
                                 getLogger().warning("Could not extract section '" + fullPath + "' from original config during migration. Using default structure.");
-                                // Use default but this might lose user data - better than crashing
                                 merged.add(line);
                                 pathStack.push(new Pair<>(keyPart, currentIndent));
                             }
+                        } else if (userValue instanceof ConfigurationSection && !preserveUserSectionContent) {
+                            // Messages: do not replace whole section; add header and continue so default's keys (including new ones) are merged
+                            merged.add(line);
+                            pathStack.push(new Pair<>(keyPart, currentIndent));
                         } else {
                             // Regular section - add it and push to path stack
                             merged.add(line);
@@ -2341,7 +2575,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 } else {
                     // This is a key=value line
                     // Skip version keys - they're handled separately by updateConfigVersion
-                    if (keyPart.equals("config_version")) {
+                    if (keyPart.equals("config_version") || keyPart.equals("messages_version")) {
                         // Use default version line - it will be updated by updateConfigVersion
                         merged.add(line);
                     } else if (userConfig.contains(fullPath)) {
@@ -2505,7 +2739,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             String fullPath = basePath.isEmpty() ? key : basePath + "." + key;
             
             // Skip version keys - they're handled separately
-            if (key.equals("config_version")) {
+            if (key.equals("config_version") || key.equals("messages_version")) {
                 continue;
             }
             
@@ -2534,7 +2768,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             String fullPath = basePath.isEmpty() ? key : basePath + "." + key;
             
             // Skip version keys - they're handled separately
-            if (key.equals("config_version")) {
+            if (key.equals("config_version") || key.equals("messages_version")) {
                 continue;
             }
             
@@ -2603,6 +2837,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 sb.append(formatYamlValue(list.get(i)));
             }
             sb.append("]");
+            return sb.toString();
+        } else if (value instanceof ConfigurationSection) {
+            // Bukkit returns ConfigurationSection for nested keys (e.g. world-aliases: {}); never serialize as toString()
+            ConfigurationSection sec = (ConfigurationSection) value;
+            java.util.Map<String, Object> map = sec.getValues(false);
+            if (map.isEmpty()) {
+                return "{}";
+            }
+            StringBuilder sb = new StringBuilder("{");
+            for (java.util.Map.Entry<String, Object> e : map.entrySet()) {
+                if (sb.length() > 1) sb.append(", ");
+                sb.append(e.getKey()).append(": ").append(formatYamlValue(e.getValue()));
+            }
+            sb.append("}");
             return sb.toString();
         } else {
             return value.toString();
@@ -2682,8 +2930,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private void saveChallengeToConfig(ChallengeConfig cfg) {
-        FileConfiguration config = getConfig();
+    void saveChallengeToConfig(ChallengeConfig cfg) {
+        if (challengesConfig == null || challengesFile == null) {
+            getLogger().warning("Cannot save challenge '" + cfg.id + "': challenges config not loaded");
+            return;
+        }
+        FileConfiguration config = challengesConfig;
         String path = "challenges." + cfg.id;
 
         // Always save all fields with their current values (or defaults if null) to maintain consistent structure
@@ -2840,30 +3092,56 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
 
-        // Save regeneration area
-        if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
-            config.set(path + ".regeneration.world", cfg.regenerationCorner1.getWorld().getName());
-            config.set(path + ".regeneration.corner1.x", cfg.regenerationCorner1.getX());
-            config.set(path + ".regeneration.corner1.y", cfg.regenerationCorner1.getY());
-            config.set(path + ".regeneration.corner1.z", cfg.regenerationCorner1.getZ());
-            config.set(path + ".regeneration.corner2.x", cfg.regenerationCorner2.getX());
-            config.set(path + ".regeneration.corner2.y", cfg.regenerationCorner2.getY());
-            config.set(path + ".regeneration.corner2.z", cfg.regenerationCorner2.getZ());
+        // Save regeneration areas (list format; also keep regeneration for backward compat from first area)
+        if (cfg.regenerationAreas != null && !cfg.regenerationAreas.isEmpty()) {
+            List<Map<String, Object>> regenList = new ArrayList<>();
+            for (Location[] corners : cfg.regenerationAreas) {
+                if (corners == null || corners.length < 2) continue;
+                Map<String, Object> entry = new HashMap<>();
+                entry.put("world", corners[0].getWorld() != null ? corners[0].getWorld().getName() : "world");
+                entry.put("corner1", cornerMap(corners[0]));
+                entry.put("corner2", cornerMap(corners[1]));
+                regenList.add(entry);
+            }
+            config.set(path + ".regeneration-areas", regenList);
+            if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
+                config.set(path + ".regeneration.world", cfg.regenerationCorner1.getWorld().getName());
+                config.set(path + ".regeneration.corner1.x", cfg.regenerationCorner1.getX());
+                config.set(path + ".regeneration.corner1.y", cfg.regenerationCorner1.getY());
+                config.set(path + ".regeneration.corner1.z", cfg.regenerationCorner1.getZ());
+                config.set(path + ".regeneration.corner2.x", cfg.regenerationCorner2.getX());
+                config.set(path + ".regeneration.corner2.y", cfg.regenerationCorner2.getY());
+                config.set(path + ".regeneration.corner2.z", cfg.regenerationCorner2.getZ());
+            }
             config.set(path + ".regeneration.auto-extend-y", cfg.regenerationAutoExtendY);
         } else {
+            config.set(path + ".regeneration-areas", null);
             config.set(path + ".regeneration", null);
         }
 
-        // Save challenge area
-        if (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null) {
-            config.set(path + ".challenge-area.world", cfg.challengeCorner1.getWorld().getName());
-            config.set(path + ".challenge-area.corner1.x", cfg.challengeCorner1.getX());
-            config.set(path + ".challenge-area.corner1.y", cfg.challengeCorner1.getY());
-            config.set(path + ".challenge-area.corner1.z", cfg.challengeCorner1.getZ());
-            config.set(path + ".challenge-area.corner2.x", cfg.challengeCorner2.getX());
-            config.set(path + ".challenge-area.corner2.y", cfg.challengeCorner2.getY());
-            config.set(path + ".challenge-area.corner2.z", cfg.challengeCorner2.getZ());
+        // Save challenge areas (list format; also keep challenge-area for backward compat from first area)
+        if (cfg.challengeAreas != null && !cfg.challengeAreas.isEmpty()) {
+            List<Map<String, Object>> challengeList = new ArrayList<>();
+            for (Location[] corners : cfg.challengeAreas) {
+                if (corners == null || corners.length < 2) continue;
+                Map<String, Object> entry = new HashMap<>();
+                entry.put("world", corners[0].getWorld() != null ? corners[0].getWorld().getName() : "world");
+                entry.put("corner1", cornerMap(corners[0]));
+                entry.put("corner2", cornerMap(corners[1]));
+                challengeList.add(entry);
+            }
+            config.set(path + ".challenge-areas", challengeList);
+            if (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null) {
+                config.set(path + ".challenge-area.world", cfg.challengeCorner1.getWorld().getName());
+                config.set(path + ".challenge-area.corner1.x", cfg.challengeCorner1.getX());
+                config.set(path + ".challenge-area.corner1.y", cfg.challengeCorner1.getY());
+                config.set(path + ".challenge-area.corner1.z", cfg.challengeCorner1.getZ());
+                config.set(path + ".challenge-area.corner2.x", cfg.challengeCorner2.getX());
+                config.set(path + ".challenge-area.corner2.y", cfg.challengeCorner2.getY());
+                config.set(path + ".challenge-area.corner2.z", cfg.challengeCorner2.getZ());
+            }
         } else {
+            config.set(path + ".challenge-areas", null);
             config.set(path + ".challenge-area", null);
         }
 
@@ -2880,8 +3158,46 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
         // Save ignored chest keys
         config.set(path + ".ignored-chests", cfg.ignoredChestKeys != null ? new ArrayList<>(cfg.ignoredChestKeys) : new ArrayList<>());
+        config.set(path + ".legendary-chests", cfg.legendaryChestKeys != null ? new ArrayList<>(cfg.legendaryChestKeys) : new ArrayList<>());
 
-        saveConfig();
+        // Save block break settings
+        config.set(path + ".block-break-enabled", cfg.blockBreakEnabled);
+        List<String> allowBreakNames = new ArrayList<>();
+        if (cfg.breakAllowedMaterials != null) {
+            for (Material m : cfg.breakAllowedMaterials) {
+                allowBreakNames.add(m.name());
+            }
+        }
+        config.set(path + ".break-allowed-blocks", allowBreakNames);
+
+        // Save script nodes
+        List<Map<String, Object>> scriptsList = new ArrayList<>();
+        if (cfg.scriptNodes != null) {
+            for (ChallengeScriptNode node : cfg.scriptNodes) {
+                Map<String, Object> m = new HashMap<>();
+                m.put("world", node.worldName);
+                m.put("x", node.blockX);
+                m.put("y", node.blockY);
+                m.put("z", node.blockZ);
+                m.put("trigger", node.trigger.name());
+                m.put("function", node.functionType.name());
+                m.put("function-data", new HashMap<>(node.functionData));
+                List<Map<String, Object>> condCopy = new ArrayList<>();
+                for (Map<String, Object> c : node.conditions) {
+                    condCopy.add(new HashMap<>(c));
+                }
+                m.put("conditions", condCopy);
+                scriptsList.add(m);
+            }
+        }
+        config.set(path + ".scripts", scriptsList);
+        config.set(path + ".pass-through-blocks", cfg.passThroughBlockKeys != null ? new ArrayList<>(cfg.passThroughBlockKeys) : new ArrayList<>());
+
+        try {
+            challengesConfig.save(challengesFile);
+        } catch (java.io.IOException e) {
+            getLogger().warning("Failed to save challenges.yml: " + e.getMessage());
+        }
 
         // rebuild lookup
         bookTitleToChallengeId.clear();
@@ -2987,13 +3303,29 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             case "clearbook":
             case "setdestination":
             case "setregenerationarea":
+            case "setregenerationarea2":
+            case "setregenerationarea3":
+            case "setregenerationarea4":
             case "clearregenerationarea":
             case "captureregeneration":
             case "setchallengearea":
+            case "setchallengearea2":
+            case "setchallengearea3":
+            case "setchallengearea4":
             case "clearchallengearea":
             case "areasync":
             case "blockitem":
             case "unblockitem":
+                // Handled in onTabComplete with material completion
+                return Collections.emptyList();
+            case "blockbreak":
+                return Collections.emptyList();
+            case "allowbreak":
+            case "disallowbreak":
+                for (Material mat : Material.values()) {
+                    if (mat.isBlock()) completions.add(mat.name());
+                }
+                return filterCompletions(completions, partial);
             case "info":
             case "edit":
                 // These commands need challenge ID (handled elsewhere)
@@ -3006,20 +3338,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
     
     private boolean isChallengeBeingEdited(String challengeId) {
-        return challengeId != null && challengeEditors.containsKey(challengeId);
+        if (challengeId == null) return false;
+        Set<UUID> editors = challengeEditors.get(challengeId);
+        return editors != null && !editors.isEmpty();
     }
     
+    /** Returns any one editor for the challenge (e.g. for messaging); null if none. */
     private UUID getChallengeEditor(String challengeId) {
-        return challengeEditors.get(challengeId);
+        Set<UUID> editors = challengeEditors.get(challengeId);
+        return (editors != null && !editors.isEmpty()) ? editors.iterator().next() : null;
     }
     
+    /** Package-visible for ChallengeScriptManager. */
+    Map<String, ChallengeConfig> getChallenges() { return challenges; }
+    Map<UUID, String> getActiveChallenges() { return activeChallenges; }
+
     /**
      * Gets the challenge ID that a player is currently editing, or null if not in edit mode.
      */
-    private String getPlayerEditingChallenge(Player player) {
+    String getPlayerEditingChallenge(Player player) {
         UUID uuid = player.getUniqueId();
-        for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
-            if (entry.getValue().equals(uuid)) {
+        for (Map.Entry<String, Set<UUID>> entry : challengeEditors.entrySet()) {
+            if (entry.getValue() != null && entry.getValue().contains(uuid)) {
                 return entry.getKey();
             }
         }
@@ -3595,9 +3935,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         // For blockitem in edit mode, complete material names (like addtierreward item)
                         if (second.equals("blockitem") && args.length == 3) {
                             for (Material mat : Material.values()) {
-                                if (mat.isItem()) {
-                                    completions.add(mat.name());
-                                }
+                                if (mat.isItem()) completions.add(mat.name());
+                            }
+                            return filterCompletions(completions, args[2]);
+                        }
+                        if ((second.equals("allowbreak") || second.equals("disallowbreak")) && args.length == 3) {
+                            for (Material mat : Material.values()) {
+                                if (mat.isBlock()) completions.add(mat.name());
                             }
                             return filterCompletions(completions, args[2]);
                         }
@@ -3646,6 +3990,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 if (first.equals("challenge") && player.hasPermission("conradchallenges.admin")) {
                     String second = args[1].toLowerCase(Locale.ROOT);
                     boolean inEditMode = isPlayerInEditMode(player);
+                    
+                    // /challenge test <id> <tier> - complete difficulty tier
+                    if (second.equals("test")) {
+                        List<String> tiers = Arrays.asList("easy", "medium", "hard", "extreme");
+                        return filterCompletions(tiers, args[3]);
+                    }
                     
                     // Not in edit mode: args are [challenge, id, subcommand, param] - complete blockitem <item> like addtierreward item
                     if (!inEditMode && args[2].equalsIgnoreCase("blockitem")) {
@@ -3996,6 +4346,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                     return filterCompletions(completions, args[itemArgIndex]);
                                 }
                             }
+                        }
+                    }
+                    // Tab completion for allowbreak <material> / disallowbreak <material>
+                    if (second.equals("allowbreak") || second.equals("disallowbreak")) {
+                        int matArgIndex = inEditMode ? 2 : 3;
+                        if (args.length == matArgIndex + 1) {
+                            if (second.equals("disallowbreak")) {
+                                String editId = getChallengeIdForCommand(player, args, 1);
+                                if (editId != null) {
+                                    ChallengeConfig editCfg = challenges.get(editId);
+                                    if (editCfg != null && editCfg.breakAllowedMaterials != null && !editCfg.breakAllowedMaterials.isEmpty()) {
+                                        for (Material mat : editCfg.breakAllowedMaterials) {
+                                            completions.add(mat.name());
+                                        }
+                                        return filterCompletions(completions, args[matArgIndex]);
+                                    }
+                                }
+                            }
+                            for (Material mat : Material.values()) {
+                                if (mat.isBlock()) completions.add(mat.name());
+                            }
+                            return filterCompletions(completions, args[matArgIndex]);
                         }
                     }
                     
@@ -4991,7 +5363,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.teleport(challengeDest);
                 player.sendMessage(getMessage("buyback.success", "fee", String.format("%.2f", buyBackFee), "lives", String.valueOf(lives)));
             } else {
-                player.sendMessage(ChatColor.RED + "Error: No teleport location set for challenge!");
+                player.sendMessage(getMessage("admin.challenge-no-teleport-location"));
             }
             
             return true;
@@ -5003,13 +5375,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 sender.sendMessage(getMessage("general.players-only"));
                 return true;
             }
-            UUID uuid = player.getUniqueId();
-            String challengeId = activeChallenges.get(uuid);
-            if (challengeId == null) {
+            if (activeChallenges.get(player.getUniqueId()) == null) {
                 player.sendMessage(getMessage("challenge.no-active"));
                 return true;
             }
-            ChallengeConfig cfg = challenges.get(challengeId);
+            ChallengeConfig cfg = challenges.get(activeChallenges.get(player.getUniqueId()));
             if (cfg == null) {
                 player.sendMessage(getMessage("challenge.config-invalid"));
                 return true;
@@ -5018,43 +5388,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("challenge.spawn-not-configured"));
                 return true;
             }
-
-            // Clear challenge state (no completion, no rewards)
-            String exitedChallengeId = activeChallenges.remove(uuid);
-            completedChallenges.remove(uuid);
-            challengeStartTimes.remove(uuid);
-            playerLives.remove(uuid);
-            deadPartyMembers.remove(uuid);
-            clearInstanceChestDataForPlayer(uuid, exitedChallengeId);
-            
-            // Clean up difficulty tier if no players are active in this challenge
-            if (exitedChallengeId != null) {
-                cleanupChallengeDifficultyIfEmpty(exitedChallengeId);
-                
-                // Revert spawner levels back to original before resetting cooldowns
-                revertSpawnerLevelsForChallenge(cfg);
-                
-                // Reset MythicMobs spawner cooldowns in the challenge area
-                resetMythicMobsSpawnersInArea(cfg);
-            }
-            
-            // Check if challenge is now available and process queue
-            if (exitedChallengeId != null && !isChallengeLocked(exitedChallengeId)) {
-                processQueue(exitedChallengeId);
-            }
-
-            // Teleport back
-            Location testReturn = testOriginalLocations.remove(uuid);
-            if (testReturn != null) {
-                // Tester: return to their original location before /challenge test
-                player.teleport(testReturn);
-            } else {
-                // Normal challengers: return to configured spawn
-                player.teleport(spawnLocation);
-            }
-            giveBackBlockedItemOverflow(player, exitedChallengeId);
-            player.sendMessage(getMessage("exit.exited-returned"));
-            player.sendMessage(getMessage("exit.exited-no-rewards"));
+            exitPlayerFromChallenge(player);
             return true;
         });
 
@@ -5323,6 +5657,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         return args[argIndex];
     }
 
+    /** Parse area number from subcommand e.g. setregenerationarea2 -> 2, setregenerationarea -> 1. */
+    private int parseAreaNumber(String subcommand, String prefix) {
+        if (subcommand == null || !subcommand.startsWith(prefix)) return 1;
+        String suffix = subcommand.substring(prefix.length());
+        if (suffix.isEmpty()) return 1;
+        try {
+            int n = Integer.parseInt(suffix);
+            return n >= 1 ? n : 1;
+        } catch (NumberFormatException e) {
+            return 1;
+        }
+    }
+
     private boolean handleAdminChallengeCommands(Player player, String[] args) {
         // listtierrewards is view-only: allow with conradchallenges.use; all other subcommands require admin
         boolean isListTierRewards = args.length > 0 && "listtierrewards".equalsIgnoreCase(args[0]);
@@ -5359,8 +5706,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             player.sendMessage(getMessage("admin.challenge-setautoregenerationy-command"));
             player.sendMessage(getMessage("admin.challenge-blockitem-command"));
             player.sendMessage(getMessage("admin.challenge-unblockitem-command"));
-            player.sendMessage(ChatColor.GRAY + "/challenge loottable " + ChatColor.WHITE + "- Open loot table manager (add/edit chest loot)");
-            player.sendMessage(ChatColor.GRAY + "/challenge chestignore " + ChatColor.WHITE + "- Look at a chest to make it ignore loot tables (saves/regens normally)");
+            player.sendMessage(getMessage("admin.challenge-help-loottable"));
+            player.sendMessage(getMessage("admin.challenge-help-chestignore"));
+            player.sendMessage(getMessage("admin.challenge-help-loottype"));
             player.sendMessage(getMessage("admin.challenge-areasync-command"));
             player.sendMessage(getMessage("admin.challenge-edit-command"));
             player.sendMessage(getMessage("admin.challenge-save-command"));
@@ -5414,10 +5762,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 bookTitleToChallengeId.remove(cfg.bookTitle);
             }
             
-            // Remove from config file
-            FileConfiguration config = getConfig();
-            config.set("challenges." + id, null);
-            saveConfig();
+            // Remove from challenges file
+            if (challengesConfig != null && challengesFile != null) {
+                challengesConfig.set("challenges." + id, null);
+                try {
+                    challengesConfig.save(challengesFile);
+                } catch (java.io.IOException e) {
+                    getLogger().warning("Failed to save challenges.yml: " + e.getMessage());
+                }
+            }
             
             // Clean up data (optional - you might want to keep historical data)
             // bestTimes.remove(id);
@@ -5791,9 +6144,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             int argStartIndex = isPlayerInEditMode(player) ? 1 : 2;
             if (args.length <= argStartIndex) {
-                player.sendMessage("Usage: /challenge addreward [id] <hand|item|command> [args] [chance]");
-                player.sendMessage("Types: hand (uses item in hand), item <material> [amount], command <command>");
-                player.sendMessage("Chance: 0.0-1.0 (default: 1.0 = 100%)");
+                player.sendMessage(getMessage("rewards-cmd.addreward-usage"));
+                player.sendMessage(getMessage("rewards-cmd.addreward-types"));
+                player.sendMessage(getMessage("rewards-cmd.addreward-chance"));
                 return true;
             }
             
@@ -5802,7 +6155,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             try {
                 type = TierReward.Type.valueOf(typeStr.toUpperCase());
             } catch (IllegalArgumentException e) {
-                player.sendMessage("Invalid type. Must be: hand, item, or command");
+                player.sendMessage(getMessage("rewards-cmd.addreward-invalid-type"));
                 return true;
             }
             
@@ -5812,7 +6165,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             switch (type) {
                 case HAND -> {
                     if (args.length < argStartIndex + 1) {
-                        player.sendMessage("Usage: /challenge addreward [id] hand [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addreward-hand-usage"));
                         return true;
                     }
                     // Parse chance (last argument if it's a number between 0.0 and 1.0)
@@ -5829,14 +6182,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     reward = new TierReward(type, chance);
                     ItemStack handItem = player.getInventory().getItemInMainHand();
                     if (handItem == null || handItem.getType().isAir()) {
-                        player.sendMessage("You must be holding an item in your hand!");
+                        player.sendMessage(getMessage("rewards-cmd.addreward-hold-item"));
                         return true;
                     }
                     reward.itemStack = handItem.clone();
                 }
                 case ITEM -> {
                     if (args.length < argStartIndex + 2) {
-                        player.sendMessage("Usage: /challenge addreward [id] item <material> [amount] [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addreward-item-usage"));
                         return true;
                     }
                     try {
@@ -5867,13 +6220,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         }
                         // chance is already set in constructor
                     } catch (IllegalArgumentException e) {
-                        player.sendMessage("Invalid material: " + args[argStartIndex + 1]);
+                        player.sendMessage(getMessage("rewards-cmd.addreward-invalid-material", "material", args[argStartIndex + 1]));
                         return true;
                     }
                 }
                 case COMMAND -> {
                     if (args.length < argStartIndex + 2) {
-                        player.sendMessage("Usage: /challenge addreward [id] command <command> [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addreward-command-usage"));
                         return true;
                     }
                     // Parse chance (last argument if it's a number between 0.0 and 1.0)
@@ -5895,7 +6248,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             
             if (reward == null) {
-                player.sendMessage("Error: Failed to create reward. Please check your command syntax.");
+                player.sendMessage(getMessage("rewards-cmd.addreward-create-failed"));
                 return true;
             }
             
@@ -5906,7 +6259,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     if (reward.itemStack != null) {
                         cmd = "give %player% " + reward.itemStack.getType().name() + " " + reward.itemStack.getAmount();
                     } else {
-                        player.sendMessage("Error: No item in hand");
+                        player.sendMessage(getMessage("rewards-cmd.addreward-no-item"));
                         return true;
                     }
                 }
@@ -5919,7 +6272,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             
             if (cmd == null) {
-                player.sendMessage("Error: Failed to create command from reward");
+                player.sendMessage(getMessage("rewards-cmd.addreward-command-failed"));
                 return true;
             }
             
@@ -5961,16 +6314,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             int argStartIndex = isPlayerInEditMode(player) ? 1 : 2;
             if (args.length <= argStartIndex + 1) {
-                player.sendMessage("Usage: /challenge addtierreward [id] <tier> <hand|item|command> [args] [chance]");
-                player.sendMessage("Tiers: easy, medium, hard, extreme");
-                player.sendMessage("Types: hand (uses item in hand), item <material> [amount], command <command>");
-                player.sendMessage("Chance: 0.0-1.0 (default: 1.0 = 100%)");
+                player.sendMessage(getMessage("rewards-cmd.addtierreward-usage"));
+                player.sendMessage(getMessage("rewards-cmd.addtierreward-tiers"));
+                player.sendMessage(getMessage("rewards-cmd.addreward-types"));
+                player.sendMessage(getMessage("rewards-cmd.addreward-chance"));
                 return true;
             }
             
             String tier = args[argStartIndex].toLowerCase();
             if (!Arrays.asList("easy", "medium", "hard", "extreme").contains(tier)) {
-                player.sendMessage("Invalid tier. Must be: easy, medium, hard, or extreme");
+                player.sendMessage(getMessage("rewards-cmd.addtierreward-invalid-tier"));
                 return true;
             }
             
@@ -5979,7 +6332,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             try {
                 type = TierReward.Type.valueOf(typeStr.toUpperCase());
             } catch (IllegalArgumentException e) {
-                player.sendMessage("Invalid type. Must be: hand, item, or command");
+                player.sendMessage(getMessage("rewards-cmd.addreward-invalid-type"));
                 return true;
             }
             
@@ -5989,7 +6342,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             switch (type) {
                 case HAND -> {
                     if (args.length < argStartIndex + 2) {
-                        player.sendMessage("Usage: /challenge addtierreward [id] <tier> hand [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addtierreward-hand-usage"));
                         return true;
                     }
                     // Parse chance (last argument if it's a number between 0.0 and 1.0)
@@ -6006,14 +6359,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     reward = new TierReward(type, chance);
                     ItemStack handItem = player.getInventory().getItemInMainHand();
                     if (handItem == null || handItem.getType().isAir()) {
-                        player.sendMessage("You must be holding an item in your hand!");
+                        player.sendMessage(getMessage("rewards-cmd.addreward-hold-item"));
                         return true;
                     }
                     reward.itemStack = handItem.clone();
                 }
                 case ITEM -> {
                     if (args.length < argStartIndex + 3) {
-                        player.sendMessage("Usage: /challenge addtierreward [id] <tier> item <material> [amount] [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addtierreward-item-usage"));
                         return true;
                     }
                     try {
@@ -6038,7 +6391,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                         try {
                                             amount = Integer.parseInt(args[argStartIndex + 3]);
                                         } catch (NumberFormatException e) {
-                                            player.sendMessage("Invalid amount. Must be a number.");
+                                            player.sendMessage(getMessage("rewards-cmd.addtierreward-invalid-amount"));
                                             return true;
                                         }
                                     } else {
@@ -6056,7 +6409,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                     amount = Integer.parseInt(args[argStartIndex + 3]);
                                     itemChance = 1.0;
                                 } catch (NumberFormatException e2) {
-                                    player.sendMessage("Invalid amount. Must be a number.");
+                                    player.sendMessage(getMessage("rewards-cmd.addtierreward-invalid-amount"));
                                     return true;
                                 }
                             }
@@ -6070,13 +6423,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         reward.material = material;
                         reward.amount = amount;
                     } catch (IllegalArgumentException e) {
-                        player.sendMessage("Invalid material: " + args[argStartIndex + 2]);
+                        player.sendMessage(getMessage("rewards-cmd.addreward-invalid-material", "material", args[argStartIndex + 2]));
                         return true;
                     }
                 }
                 case COMMAND -> {
                     if (args.length < argStartIndex + 3) {
-                        player.sendMessage("Usage: /challenge addtierreward [id] <tier> command <command> [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addtierreward-command-usage"));
                         return true;
                     }
                     // Parse chance (last argument if it's a number between 0.0 and 1.0)
@@ -6098,14 +6451,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             
             if (reward == null) {
-                player.sendMessage("Error: Failed to create reward. Please check your command syntax.");
+                player.sendMessage(getMessage("rewards-cmd.addreward-create-failed"));
                 return true;
             }
             
             cfg.difficultyTierRewards.computeIfAbsent(tier, k -> new ArrayList<>()).add(reward);
             saveChallengeToConfig(cfg);
             String chanceStr = formatChanceAsFraction(reward.chance);
-            player.sendMessage("Added " + typeStr + " reward to " + tier + " tier (chance: " + chanceStr + ")");
+            player.sendMessage(getMessage("rewards-cmd.addtierreward-added", "type", typeStr, "tier", tier, "chance", chanceStr));
             return true;
         }
 
@@ -6122,18 +6475,18 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             int argIndex = isPlayerInEditMode(player) ? 1 : 2;
             if (args.length <= argIndex) {
-                player.sendMessage("Usage: /challenge cleartierrewards [id] <tier>");
-                player.sendMessage("Tiers: easy, medium, hard, extreme");
+                player.sendMessage(getMessage("rewards-cmd.cleartierrewards-usage"));
+                player.sendMessage(getMessage("rewards-cmd.addtierreward-tiers"));
                 return true;
             }
             String tier = args[argIndex].toLowerCase();
             if (!Arrays.asList("easy", "medium", "hard", "extreme").contains(tier)) {
-                player.sendMessage("Invalid tier. Must be: easy, medium, hard, or extreme");
+                player.sendMessage(getMessage("rewards-cmd.addtierreward-invalid-tier"));
                 return true;
             }
             List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
             if (rewards == null || rewards.isEmpty()) {
-                player.sendMessage("No rewards found for " + tier + " tier");
+                player.sendMessage(getMessage("rewards-cmd.cleartierrewards-no-rewards", "tier", tier));
                 return true;
             }
             rewards.clear();
@@ -6141,7 +6494,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 cfg.difficultyTierRewards.remove(tier);
             }
             saveChallengeToConfig(cfg);
-            player.sendMessage("Cleared all rewards for " + tier + " tier");
+            player.sendMessage(getMessage("rewards-cmd.cleartierrewards-cleared", "tier", tier));
             return true;
         }
 
@@ -6151,8 +6504,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 if (isPlayerInEditMode(player)) {
                     player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
                 } else {
-                    player.sendMessage("Usage: /challenge listtierrewards <id> [tier]");
-                    player.sendMessage("Tiers: easy, medium, hard, extreme");
+                    player.sendMessage(getMessage("rewards-cmd.listtierrewards-usage"));
+                    player.sendMessage(getMessage("rewards-cmd.addtierreward-tiers"));
                 }
                 return true;
             }
@@ -6166,7 +6519,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             if (args.length > argIndex) {
                 filterTier = args[argIndex].toLowerCase().trim();
                 if (!Arrays.asList("easy", "medium", "hard", "extreme").contains(filterTier)) {
-                    player.sendMessage("Invalid tier. Must be: easy, medium, hard, or extreme");
+                    player.sendMessage(getMessage("rewards-cmd.addtierreward-invalid-tier"));
                     return true;
                 }
             }
@@ -6177,7 +6530,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
                 if (rewards != null && !rewards.isEmpty()) {
                     foundAny = true;
-                    player.sendMessage("§6" + tier.toUpperCase() + " Tier Rewards (" + rewards.size() + "):");
+                    player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("rewards-cmd.listtierrewards-header", "tier", tier.toUpperCase(), "count", String.valueOf(rewards.size()))));
                     for (int i = 0; i < rewards.size(); i++) {
                         TierReward reward = rewards.get(i);
                         String chanceStr = formatChanceAsFraction(reward.chance);
@@ -6186,21 +6539,21 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                 if (reward.itemStack != null) {
                                     String itemName = getItemDisplayName(reward.itemStack);
                                     String itemInfo = itemName + " x" + reward.itemStack.getAmount();
-                                    player.sendMessage("  " + (i + 1) + ". HAND: " + itemInfo + " (chance: " + chanceStr + ")");
+                                    player.sendMessage(getMessage("rewards-cmd.listtierrewards-hand", "num", String.valueOf(i + 1), "info", itemInfo, "chance", chanceStr));
                                 }
                             }
                             case ITEM -> {
-                                player.sendMessage("  " + (i + 1) + ". ITEM: " + reward.material.name() + " x" + reward.amount + " (chance: " + chanceStr + ")");
+                                player.sendMessage(getMessage("rewards-cmd.listtierrewards-item", "num", String.valueOf(i + 1), "material", reward.material.name(), "amount", String.valueOf(reward.amount), "chance", chanceStr));
                             }
                             case COMMAND -> {
-                                player.sendMessage("  " + (i + 1) + ". COMMAND: " + reward.command + " (chance: " + chanceStr + ")");
+                                player.sendMessage(getMessage("rewards-cmd.listtierrewards-command", "num", String.valueOf(i + 1), "command", reward.command, "chance", chanceStr));
                             }
                         }
                     }
                 }
             }
             if (!foundAny) {
-                player.sendMessage("No tier rewards found" + (filterTier != null ? " for " + filterTier + " tier" : ""));
+                player.sendMessage(getMessage("rewards-cmd.listtierrewards-empty", "filter", filterTier != null ? getMessage("rewards-cmd.listtierrewards-filter", "tier", filterTier) : ""));
             }
             return true;
         }
@@ -6218,28 +6571,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             int argStartIndex = isPlayerInEditMode(player) ? 1 : 2;
             if (args.length <= argStartIndex + 1) {
-                player.sendMessage("Usage: /challenge removereward [id] <tier> <reward number>");
-                player.sendMessage("Tiers: easy, medium, hard, extreme");
-                player.sendMessage("Use /challenge listtierrewards [id] [tier] to see reward numbers");
+                player.sendMessage(getMessage("rewards-cmd.removereward-usage"));
+                player.sendMessage(getMessage("rewards-cmd.addtierreward-tiers"));
+                player.sendMessage(getMessage("rewards-cmd.removereward-use-list"));
                 return true;
             }
             
             String tier = args[argStartIndex].toLowerCase();
             if (!Arrays.asList("easy", "medium", "hard", "extreme").contains(tier)) {
-                player.sendMessage("Invalid tier. Must be: easy, medium, hard, or extreme");
+                player.sendMessage(getMessage("rewards-cmd.addtierreward-invalid-tier"));
                 return true;
             }
             
             List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
             if (rewards == null || rewards.isEmpty()) {
-                player.sendMessage("No rewards found for " + tier + " tier");
+                player.sendMessage(getMessage("rewards-cmd.cleartierrewards-no-rewards", "tier", tier));
                 return true;
             }
             
             try {
                 int rewardNumber = Integer.parseInt(args[argStartIndex + 1]);
                 if (rewardNumber < 1 || rewardNumber > rewards.size()) {
-                    player.sendMessage("Invalid reward number. Must be between 1 and " + rewards.size());
+                    player.sendMessage(getMessage("rewards-cmd.removereward-invalid-number", "max", String.valueOf(rewards.size())));
                     return true;
                 }
                 
@@ -6254,10 +6607,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 saveChallengeToConfig(cfg);
                 
                 String rewardType = removed.type.name();
-                player.sendMessage("Removed reward #" + rewardNumber + " from " + tier + " tier (" + rewardType + ")");
+                player.sendMessage(getMessage("rewards-cmd.removereward-removed", "num", String.valueOf(rewardNumber), "tier", tier, "type", rewardType));
             } catch (NumberFormatException e) {
-                player.sendMessage("Invalid reward number: " + args[argStartIndex + 1]);
-                player.sendMessage("Use /challenge listtierrewards [id] " + tier + " to see reward numbers");
+                player.sendMessage(getMessage("rewards-cmd.removereward-invalid-arg", "arg", args[argStartIndex + 1]));
+                player.sendMessage(getMessage("rewards-cmd.removereward-see-list", "tier", tier));
                 return true;
             }
             return true;
@@ -6276,10 +6629,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             int argStartIndex = isPlayerInEditMode(player) ? 1 : 2;
             if (args.length <= argStartIndex + 1) {
-                player.sendMessage("Usage: /challenge addtoptimereward [id] <hand|item|command> [args] [chance]");
-                player.sendMessage("Types: hand (uses item in hand), item <material> [amount], command <command>");
-                player.sendMessage("Chance: 0.0-1.0 (default: 1.0 = 100%)");
-                player.sendMessage("Note: These rewards are only given when a player sets a new top time");
+                player.sendMessage(getMessage("rewards-cmd.addtoptimereward-usage"));
+                player.sendMessage(getMessage("rewards-cmd.addreward-types"));
+                player.sendMessage(getMessage("rewards-cmd.addreward-chance"));
+                player.sendMessage(getMessage("rewards-cmd.addtoptimereward-note"));
                 return true;
             }
             
@@ -6288,7 +6641,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             try {
                 type = TierReward.Type.valueOf(typeStr.toUpperCase());
             } catch (IllegalArgumentException e) {
-                player.sendMessage("Invalid type. Must be: hand, item, or command");
+                player.sendMessage(getMessage("rewards-cmd.addreward-invalid-type"));
                 return true;
             }
             
@@ -6312,19 +6665,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             switch (type) {
                 case HAND -> {
                     if (args.length < argStartIndex + 1) {
-                        player.sendMessage("Usage: /challenge addtoptimereward [id] hand [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addtoptimereward-hand-usage"));
                         return true;
                     }
                     ItemStack handItem = player.getInventory().getItemInMainHand();
                     if (handItem == null || handItem.getType().isAir()) {
-                        player.sendMessage("You must be holding an item in your hand!");
+                        player.sendMessage(getMessage("rewards-cmd.addreward-hold-item"));
                         return true;
                     }
                     reward.itemStack = handItem.clone();
                 }
                 case ITEM -> {
                     if (args.length < argStartIndex + 2) {
-                        player.sendMessage("Usage: /challenge addtoptimereward [id] item <material> [amount] [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addtoptimereward-item-usage"));
                         return true;
                     }
                     try {
@@ -6345,13 +6698,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             reward.amount = 1;
                         }
                     } catch (IllegalArgumentException e) {
-                        player.sendMessage("Invalid material: " + args[argStartIndex + 1]);
+                        player.sendMessage(getMessage("rewards-cmd.addreward-invalid-material", "material", args[argStartIndex + 1]));
                         return true;
                     }
                 }
                 case COMMAND -> {
                     if (args.length < argStartIndex + 2) {
-                        player.sendMessage("Usage: /challenge addtoptimereward [id] command <command> [chance]");
+                        player.sendMessage(getMessage("rewards-cmd.addtoptimereward-command-usage"));
                         return true;
                     }
                     reward.command = String.join(" ", Arrays.copyOfRange(args, argStartIndex + 1, argEndIndex));
@@ -6361,12 +6714,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             cfg.topTimeRewards.add(reward);
             saveChallengeToConfig(cfg);
             String chanceStr = formatChanceAsFraction(chance);
-            player.sendMessage("Added " + typeStr + " reward to top time rewards (chance: " + chanceStr + ")");
+            player.sendMessage(getMessage("rewards-cmd.addtoptimereward-added", "type", typeStr, "chance", chanceStr));
             return true;
         }
 
-        if (sub.equals("setregenerationarea")) {
-            // Require edit mode
+        if (sub.startsWith("setregenerationarea") && (sub.length() == 20 || sub.substring(20).matches("\\d+"))) {
+            int areaNumber = parseAreaNumber(sub, "setregenerationarea");
             if (!isPlayerInEditMode(player)) {
                 player.sendMessage(getMessage("admin.challenge-setregenerationarea-usage"));
                 player.sendMessage(getMessage("admin.challenge-edit-mode-required"));
@@ -6383,117 +6736,82 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("challenge.unknown-id", "id", id));
                 return true;
             }
-            
-            // Clear any old initial states when setting a new regeneration area
             challengeInitialStates.remove(id);
-            challengeContainerInventories.remove(id); // Also clear stored container inventories
-            challengeContainerNBT.remove(id); // Also clear stored container NBT data
+            challengeContainerInventories.remove(id);
+            challengeContainerNBT.remove(id);
             challengeRegenerationStatus.remove(id);
-            
-            // Try to get WorldEdit selection first
             Location[] weSelection = getWorldEditSelection(player);
-            Location corner1Loc = null;
-            Location corner2Loc = null;
-            
             if (weSelection != null && weSelection.length == 2) {
-                // WorldEdit selection found - use both corners at once
-                corner1Loc = weSelection[0];
-                corner2Loc = weSelection[1];
-                
-                // Check for overlaps with other challenges
+                Location corner1Loc = weSelection[0];
+                Location corner2Loc = weSelection[1];
                 String overlappingChallenge = checkAreaOverlap(corner1Loc, corner2Loc, id, true, true);
                 if (overlappingChallenge != null) {
-                    player.sendMessage(ChatColor.RED + "Error: Regeneration area overlaps with challenge/regeneration area of challenge '" + overlappingChallenge + "'!");
+                    player.sendMessage(getMessage("admin.challenge-regen-overlap", "id", overlappingChallenge));
                     return true;
                 }
-                
-                cfg.regenerationCorner1 = corner1Loc;
-                cfg.regenerationCorner2 = corner2Loc;
-                
-                player.sendMessage(getMessage("admin.challenge-setregenerationarea-we-corner1", "id", id, 
-                    "x", String.valueOf(corner1Loc.getBlockX()), 
-                    "y", String.valueOf(corner1Loc.getBlockY()), 
-                    "z", String.valueOf(corner1Loc.getBlockZ())));
-                player.sendMessage(getMessage("admin.challenge-setregenerationarea-we-corner2", "id", id, 
-                    "x", String.valueOf(corner2Loc.getBlockX()), 
-                    "y", String.valueOf(corner2Loc.getBlockY()), 
-                    "z", String.valueOf(corner2Loc.getBlockZ())));
-                
-                // Automatically capture initial state (async)
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state... This may take a moment for large areas."));
-                final Player finalPlayer = player; // Capture player reference for callback
+                while (cfg.regenerationAreas.size() < areaNumber) cfg.regenerationAreas.add(null);
+                cfg.regenerationAreas.set(areaNumber - 1, new Location[]{ corner1Loc, corner2Loc });
+                syncRegenLegacyFromList(cfg);
+                player.sendMessage(getMessage("admin.challenge-setregenerationarea-we-corner1", "id", id,
+                    "x", String.valueOf(corner1Loc.getBlockX()), "y", String.valueOf(corner1Loc.getBlockY()), "z", String.valueOf(corner1Loc.getBlockZ())));
+                player.sendMessage(getMessage("admin.challenge-setregenerationarea-we-corner2", "id", id,
+                    "x", String.valueOf(corner2Loc.getBlockX()), "y", String.valueOf(corner2Loc.getBlockY()), "z", String.valueOf(corner2Loc.getBlockZ())));
+                if (areaNumber > 1) player.sendMessage(ChatColor.GREEN + "Regeneration area " + areaNumber + " set.");
+                player.sendMessage(getMessage("admin.challenge-capturing-initial-state"));
+                final Player finalPlayer = player;
                 captureInitialState(cfg, success -> {
-                    // Callback runs on main thread, so we can safely access player
                     if (finalPlayer != null && finalPlayer.isOnline()) {
-                        if (success) {
-                            finalPlayer.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
-                        } else {
-                            finalPlayer.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
-                        }
+                        if (success) finalPlayer.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
+                        else finalPlayer.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
                     }
                 });
+            } else if (areaNumber > 1) {
+                player.sendMessage(ChatColor.YELLOW + "For regeneration area " + areaNumber + " and above, use WorldEdit selection (//1 and //2).");
+                return true;
             } else {
-                // No WorldEdit selection - fall back to player location method
                 Location currentLoc = player.getLocation();
                 if (cfg.regenerationCorner1 == null) {
                     cfg.regenerationCorner1 = currentLoc;
-                    player.sendMessage(getMessage("admin.challenge-setregenerationarea-corner1", "id", id, 
-                        "x", String.valueOf(currentLoc.getBlockX()), 
-                        "y", String.valueOf(currentLoc.getBlockY()), 
-                        "z", String.valueOf(currentLoc.getBlockZ())));
+                    if (cfg.regenerationAreas.isEmpty()) cfg.regenerationAreas.add(null);
+                    player.sendMessage(getMessage("admin.challenge-setregenerationarea-corner1", "id", id,
+                        "x", String.valueOf(currentLoc.getBlockX()), "y", String.valueOf(currentLoc.getBlockY()), "z", String.valueOf(currentLoc.getBlockZ())));
                     player.sendMessage(getMessage("admin.challenge-setregenerationarea-hint"));
                     player.sendMessage(getMessage("admin.challenge-setregenerationarea-we-hint"));
                 } else if (cfg.regenerationCorner2 == null) {
-                    // Both corners now set - check for overlaps with other challenges
                     String overlappingChallenge = checkAreaOverlap(cfg.regenerationCorner1, currentLoc, id, true, true);
                     if (overlappingChallenge != null) {
-                        player.sendMessage(ChatColor.RED + "Error: Regeneration area overlaps with challenge/regeneration area of challenge '" + overlappingChallenge + "'!");
+                        player.sendMessage(getMessage("admin.challenge-regen-overlap", "id", overlappingChallenge));
                         return true;
                     }
-                    
                     cfg.regenerationCorner2 = currentLoc;
-                    player.sendMessage(getMessage("admin.challenge-setregenerationarea-corner2", "id", id, 
-                        "x", String.valueOf(currentLoc.getBlockX()), 
-                        "y", String.valueOf(currentLoc.getBlockY()), 
-                        "z", String.valueOf(currentLoc.getBlockZ())));
-                    // Automatically capture initial state when both corners are set (async)
-                    player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state... This may take a moment for large areas."));
-                    final Player finalPlayer2 = player; // Capture player reference for callback
+                    if (cfg.regenerationAreas.isEmpty()) cfg.regenerationAreas.add(new Location[]{ cfg.regenerationCorner1, cfg.regenerationCorner2 });
+                    else cfg.regenerationAreas.set(0, new Location[]{ cfg.regenerationCorner1, cfg.regenerationCorner2 });
+                    player.sendMessage(getMessage("admin.challenge-setregenerationarea-corner2", "id", id,
+                        "x", String.valueOf(currentLoc.getBlockX()), "y", String.valueOf(currentLoc.getBlockY()), "z", String.valueOf(currentLoc.getBlockZ())));
+                    player.sendMessage(getMessage("admin.challenge-capturing-initial-state"));
+                    final Player fp2 = player;
                     captureInitialState(cfg, success -> {
-                        // Callback runs on main thread, so we can safely access player
-                        if (finalPlayer2 != null && finalPlayer2.isOnline()) {
-                            if (success) {
-                                finalPlayer2.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
-                            } else {
-                                finalPlayer2.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
-                            }
+                        if (fp2 != null && fp2.isOnline()) {
+                            if (success) fp2.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
+                            else fp2.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
                         }
                     });
                 } else {
-                    // Both corners already set, replace corner2 - check for overlaps with other challenges
                     String overlappingChallenge = checkAreaOverlap(cfg.regenerationCorner1, currentLoc, id, true, true);
                     if (overlappingChallenge != null) {
-                        player.sendMessage(ChatColor.RED + "Error: Regeneration area overlaps with challenge/regeneration area of challenge '" + overlappingChallenge + "'!");
+                        player.sendMessage(getMessage("admin.challenge-regen-overlap", "id", overlappingChallenge));
                         return true;
                     }
-                    
-                    // Both corners already set, replace corner2
                     cfg.regenerationCorner2 = currentLoc;
-                    player.sendMessage(getMessage("admin.challenge-setregenerationarea-corner2-updated", "id", id, 
-                        "x", String.valueOf(currentLoc.getBlockX()), 
-                        "y", String.valueOf(currentLoc.getBlockY()), 
-                        "z", String.valueOf(currentLoc.getBlockZ())));
-                    // Re-capture initial state (async)
-                    player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state... This may take a moment for large areas."));
-                    final Player finalPlayer3 = player; // Capture player reference for callback
+                    if (!cfg.regenerationAreas.isEmpty()) cfg.regenerationAreas.set(0, new Location[]{ cfg.regenerationCorner1, cfg.regenerationCorner2 });
+                    player.sendMessage(getMessage("admin.challenge-setregenerationarea-corner2-updated", "id", id,
+                        "x", String.valueOf(currentLoc.getBlockX()), "y", String.valueOf(currentLoc.getBlockY()), "z", String.valueOf(currentLoc.getBlockZ())));
+                    player.sendMessage(getMessage("admin.challenge-capturing-initial-state"));
+                    final Player fp3 = player;
                     captureInitialState(cfg, success -> {
-                        // Callback runs on main thread, so we can safely access player
-                        if (finalPlayer3 != null && finalPlayer3.isOnline()) {
-                            if (success) {
-                                finalPlayer3.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
-                            } else {
-                                finalPlayer3.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
-                            }
+                        if (fp3 != null && fp3.isOnline()) {
+                            if (success) fp3.sendMessage(getMessage("admin.challenge-setregenerationarea-captured"));
+                            else fp3.sendMessage(getMessage("admin.challenge-setregenerationarea-capture-failed"));
                         }
                     });
                 }
@@ -6520,9 +6838,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("challenge.unknown-id", "id", id));
                 return true;
             }
+            cfg.regenerationAreas.clear();
             cfg.regenerationCorner1 = null;
             cfg.regenerationCorner2 = null;
-            cfg.regenerationAutoExtendY = false; // Reset auto-extend Y as well
+            cfg.regenerationAutoExtendY = false;
             challengeInitialStates.remove(id);
             challengeContainerInventories.remove(id); // Also clear stored container inventories
             challengeContainerNBT.remove(id); // Also clear stored container NBT data // Clear initial states from memory
@@ -6532,17 +6851,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return true;
         }
 
-        if (sub.equals("setchallengearea")) {
-            // Require edit mode
+        if (sub.startsWith("setchallengearea") && (sub.length() == 16 || sub.substring(16).matches("\\d+"))) {
+            int areaNumber = parseAreaNumber(sub, "setchallengearea");
             if (!isPlayerInEditMode(player)) {
-                player.sendMessage(ChatColor.RED + "Usage: /conradchallenges challenge setchallengearea <id>");
-                player.sendMessage(ChatColor.RED + "You must be in edit mode to set challenge areas.");
+                player.sendMessage(getMessage("admin.challenge-setchallengearea-usage"));
+                player.sendMessage(getMessage("admin.challenge-setchallengearea-edit-mode"));
                 return true;
             }
             String id = getChallengeIdForCommand(player, args, 1);
             if (id == null) {
-                player.sendMessage(ChatColor.RED + "Usage: /conradchallenges challenge setchallengearea <id>");
-                player.sendMessage(ChatColor.RED + "You must be in edit mode to set challenge areas.");
+                player.sendMessage(getMessage("admin.challenge-setchallengearea-usage"));
+                player.sendMessage(getMessage("admin.challenge-setchallengearea-edit-mode"));
                 return true;
             }
             ChallengeConfig cfg = challenges.get(id);
@@ -6550,56 +6869,40 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("challenge.unknown-id", "id", id));
                 return true;
             }
-            
-            // Try to get WorldEdit selection first (//1 and //2)
             Location[] weSelection = getWorldEditSelection(player);
-            Location corner1Loc = null;
-            Location corner2Loc = null;
-            
-            if (weSelection != null && weSelection.length == 2) {
-                // WorldEdit selection found - use both corners at once
-                corner1Loc = weSelection[0];
-                corner2Loc = weSelection[1];
-                
-                // Check for overlaps with other challenges
-                String overlappingChallenge = checkAreaOverlap(corner1Loc, corner2Loc, id, true, true);
-                if (overlappingChallenge != null) {
-                    player.sendMessage(ChatColor.RED + "Error: Challenge area overlaps with challenge/regeneration area of challenge '" + overlappingChallenge + "'!");
-                    return true;
-                }
-                
-                cfg.challengeCorner1 = corner1Loc;
-                cfg.challengeCorner2 = corner2Loc;
-                
-                player.sendMessage(ChatColor.GREEN + "Challenge area set for '" + id + "' using WorldEdit selection:");
-                player.sendMessage(ChatColor.GRAY + "  Corner 1: " + corner1Loc.getBlockX() + ", " + corner1Loc.getBlockY() + ", " + corner1Loc.getBlockZ());
-                player.sendMessage(ChatColor.GRAY + "  Corner 2: " + corner2Loc.getBlockX() + ", " + corner2Loc.getBlockY() + ", " + corner2Loc.getBlockZ());
-                
-                // Capture challenge area state when it's set (only time it should be captured)
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing challenge area state... This may take a moment for large areas."));
-                final Player finalPlayer = player; // Capture player reference for callback
-                captureChallengeAreaState(cfg, success -> {
-                    // Callback runs on main thread, so we can safely access player
-                    if (finalPlayer != null && finalPlayer.isOnline()) {
-                        if (success) {
-                            finalPlayer.sendMessage(ChatColor.GREEN + "Challenge area state captured successfully!");
-                        } else {
-                            finalPlayer.sendMessage(ChatColor.RED + "Failed to capture challenge area state!");
-                        }
-                    }
-                });
-                
-                // Apply barrier boxing if enabled
-                if (barrierBoxingEnabled) {
-                    player.sendMessage(ChatColor.YELLOW + "Creating barrier box around challenge area...");
-                    createBarrierBox(cfg, player);
-                }
-            } else {
-                player.sendMessage(ChatColor.RED + "No WorldEdit selection found! Use //1 and //2 to select the challenge area first.");
-                player.sendMessage(ChatColor.GRAY + "Tip: Stand at one corner, use //1, then stand at the opposite corner and use //2");
+            if (weSelection == null || weSelection.length != 2) {
+                player.sendMessage(getMessage("admin.challenge-no-worldedit-selection"));
+                player.sendMessage(getMessage("admin.challenge-worldedit-selection-tip"));
                 return true;
             }
-            
+            Location corner1Loc = weSelection[0];
+            Location corner2Loc = weSelection[1];
+            String overlappingChallenge = checkAreaOverlap(corner1Loc, corner2Loc, id, true, true);
+            if (overlappingChallenge != null) {
+                player.sendMessage(getMessage("admin.challenge-area-overlap", "id", overlappingChallenge));
+                return true;
+            }
+            while (cfg.challengeAreas.size() < areaNumber) cfg.challengeAreas.add(null);
+            cfg.challengeAreas.set(areaNumber - 1, new Location[]{ corner1Loc, corner2Loc });
+            syncChallengeLegacyFromList(cfg);
+            player.sendMessage(getMessage("admin.challenge-setchallengearea-success", "id", id));
+            player.sendMessage(getMessage("admin.challenge-setchallengearea-corner1", "x", String.valueOf(corner1Loc.getBlockX()), "y", String.valueOf(corner1Loc.getBlockY()), "z", String.valueOf(corner1Loc.getBlockZ())));
+            player.sendMessage(getMessage("admin.challenge-setchallengearea-corner2", "x", String.valueOf(corner2Loc.getBlockX()), "y", String.valueOf(corner2Loc.getBlockY()), "z", String.valueOf(corner2Loc.getBlockZ())));
+            if (areaNumber > 1) player.sendMessage(ChatColor.GREEN + "Challenge area " + areaNumber + " set.");
+            if (areaNumber == 1) {
+                player.sendMessage(getMessage("admin.challenge-capturing-challenge-state"));
+                final Player finalPlayer = player;
+                captureChallengeAreaState(cfg, success -> {
+                    if (finalPlayer != null && finalPlayer.isOnline()) {
+                        if (success) finalPlayer.sendMessage(getMessage("admin.challenge-state-captured-success"));
+                        else finalPlayer.sendMessage(getMessage("admin.challenge-state-capture-failed"));
+                    }
+                });
+                if (barrierBoxingEnabled) {
+                    player.sendMessage(getMessage("admin.challenge-creating-barrier"));
+                    createBarrierBox(cfg, player);
+                }
+            }
             saveChallengeToConfig(cfg);
             return true;
         }
@@ -6607,14 +6910,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (sub.equals("clearchallengearea")) {
             // Require edit mode
             if (!isPlayerInEditMode(player)) {
-                player.sendMessage(ChatColor.RED + "Usage: /conradchallenges challenge clearchallengearea <id>");
-                player.sendMessage(ChatColor.RED + "You must be in edit mode to clear challenge areas.");
+                player.sendMessage(getMessage("admin.challenge-clearchallengearea-usage"));
+                player.sendMessage(getMessage("admin.challenge-clearchallengearea-edit-mode"));
                 return true;
             }
             String id = getChallengeIdForCommand(player, args, 1);
             if (id == null) {
-                player.sendMessage(ChatColor.RED + "Usage: /conradchallenges challenge clearchallengearea <id>");
-                player.sendMessage(ChatColor.RED + "You must be in edit mode to clear challenge areas.");
+                player.sendMessage(getMessage("admin.challenge-clearchallengearea-usage"));
+                player.sendMessage(getMessage("admin.challenge-clearchallengearea-edit-mode"));
                 return true;
             }
             ChallengeConfig cfg = challenges.get(id);
@@ -6623,19 +6926,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
-            // Remove barrier box if it exists
             if (barrierBoxingEnabled && cfg.challengeCorner1 != null && cfg.challengeCorner2 != null) {
                 removeBarrierBox(cfg, player);
             }
-            
-            // Clear challenge area state (it will need to be recaptured when area is set again)
-            // Note: We don't clear challengeInitialStates here because it's also used for regeneration area
-            // The challenge area state will be overwritten when setchallengearea is called again
-            
+            cfg.challengeAreas.clear();
             cfg.challengeCorner1 = null;
             cfg.challengeCorner2 = null;
             saveChallengeToConfig(cfg);
-            player.sendMessage(ChatColor.GREEN + "Challenge area cleared for '" + id + "'");
+            player.sendMessage(getMessage("admin.challenge-clearchallengearea-cleared", "id", id));
             return true;
         }
 
@@ -6664,10 +6962,18 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
-            // Copy challenge area corners to regeneration area
-            cfg.regenerationCorner1 = cfg.challengeCorner1.clone();
-            cfg.regenerationCorner2 = cfg.challengeCorner2.clone();
-            
+            // Copy all challenge areas to regeneration areas
+            cfg.regenerationAreas.clear();
+            if (cfg.challengeAreas != null) {
+                for (Location[] c : cfg.challengeAreas) {
+                    if (c != null && c.length >= 2) cfg.regenerationAreas.add(new Location[]{ c[0].clone(), c[1].clone() });
+                }
+            }
+            syncRegenLegacyFromList(cfg);
+            if (cfg.regenerationCorner1 == null) {
+                player.sendMessage(getMessage("admin.challenge-areasync-no-challenge-area", "id", id));
+                return true;
+            }
             // Clear any old initial states when setting a new regeneration area
             challengeInitialStates.remove(id);
             challengeContainerInventories.remove(id); // Also clear stored container inventories
@@ -6683,7 +6989,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 "z2", String.valueOf(cfg.regenerationCorner2.getBlockZ())));
             
             // Re-capture initial state (async)
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state... This may take a moment for large areas."));
+            player.sendMessage(getMessage("admin.challenge-capturing-initial-state"));
             final Player finalPlayer = player; // Capture player reference for callback
             captureInitialState(cfg, success -> {
                 // Callback runs on main thread, so we can safely access player
@@ -6738,7 +7044,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             saveChallengeToConfig(cfg);
             // Re-capture initial state with new Y range (async)
-            player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Capturing initial state with new Y range... This may take a moment for large areas."));
+            player.sendMessage(getMessage("admin.challenge-capturing-initial-state-new-y"));
             captureInitialState(cfg, success -> {
                 if (success) {
                     player.sendMessage(getMessage("admin.challenge-setautoregenerationy-success", 
@@ -6832,12 +7138,111 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return true;
         }
 
+        if (sub.equals("blockbreak")) {
+            if (!isPlayerInEditMode(player)) {
+                player.sendMessage(getMessage("admin.challenge-blockbreak-edit-mode"));
+                return true;
+            }
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-blockbreak-hint"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            cfg.blockBreakEnabled = !cfg.blockBreakEnabled;
+            saveChallengeToConfig(cfg);
+            player.sendMessage(getMessage("admin.challenge-blockbreak-toggled", "id", id, "status", cfg.blockBreakEnabled ? getMessage("admin.challenge-blockbreak-toggled-restricted") : getMessage("admin.challenge-blockbreak-toggled-off")));
+            return true;
+        }
+
+        if (sub.equals("allowbreak")) {
+            if (!isPlayerInEditMode(player)) {
+                player.sendMessage(getMessage("admin.challenge-blockbreak-edit-mode"));
+                return true;
+            }
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-allowbreak-hint"));
+                return true;
+            }
+            int argIdx = isPlayerInEditMode(player) ? 1 : 2;
+            if (args.length <= argIdx) {
+                player.sendMessage(getMessage("admin.challenge-allowbreak-usage"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            String matName = args[argIdx].toUpperCase(Locale.ROOT);
+            Material mat;
+            try {
+                mat = Material.valueOf(matName);
+            } catch (IllegalArgumentException e) {
+                player.sendMessage(getMessage("admin.challenge-allowbreak-unknown-material", "material", args[argIdx]));
+                return true;
+            }
+            if (!mat.isBlock()) {
+                player.sendMessage(getMessage("admin.challenge-allowbreak-not-a-block", "material", mat.name()));
+                return true;
+            }
+            if (cfg.breakAllowedMaterials.add(mat)) {
+                saveChallengeToConfig(cfg);
+                player.sendMessage(getMessage("admin.challenge-allowbreak-added", "material", mat.name(), "id", id));
+            } else {
+                player.sendMessage(getMessage("admin.challenge-allowbreak-already", "material", mat.name()));
+            }
+            return true;
+        }
+
+        if (sub.equals("disallowbreak")) {
+            if (!isPlayerInEditMode(player)) {
+                player.sendMessage(getMessage("admin.challenge-blockbreak-edit-mode"));
+                return true;
+            }
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(getMessage("admin.challenge-disallowbreak-hint"));
+                return true;
+            }
+            int argIdx = isPlayerInEditMode(player) ? 1 : 2;
+            if (args.length <= argIdx) {
+                player.sendMessage(getMessage("admin.challenge-disallowbreak-usage"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                return true;
+            }
+            String matName = args[argIdx].toUpperCase(Locale.ROOT);
+            Material mat;
+            try {
+                mat = Material.valueOf(matName);
+            } catch (IllegalArgumentException e) {
+                player.sendMessage(getMessage("admin.challenge-allowbreak-unknown-material", "material", args[argIdx]));
+                return true;
+            }
+            if (cfg.breakAllowedMaterials.remove(mat)) {
+                saveChallengeToConfig(cfg);
+                player.sendMessage(getMessage("admin.challenge-disallowbreak-removed", "material", mat.name(), "id", id));
+            } else {
+                player.sendMessage(getMessage("admin.challenge-disallowbreak-not-in-list", "material", mat.name()));
+            }
+            return true;
+        }
+
         if (sub.equals("captureregeneration")) {
             // With edit mode: optional <id> (defaults to challenge being edited). Without edit mode: require <id>.
             String id = getChallengeIdForCommand(player, args, 1);
             if (id == null) {
                 player.sendMessage(getMessage("admin.challenge-captureregeneration-usage"));
-                player.sendMessage(ChatColor.GRAY + "Provide a challenge ID, or enter edit mode to use the current challenge.");
+                player.sendMessage(getMessage("admin.challenge-provide-id-or-edit"));
                 return true;
             }
             ChallengeConfig cfg = challenges.get(id);
@@ -6849,7 +7254,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("admin.challenge-captureregeneration-no-area"));
                 return true;
             }
-            player.sendMessage("&7Capturing initial state... This may take a moment for large areas.");
+            player.sendMessage(getMessage("admin.challenge-capturing-initial-state"));
             captureInitialState(cfg, success -> {
                 if (success) {
                     player.sendMessage(getMessage("admin.challenge-captureregeneration-success", "id", id));
@@ -6876,7 +7281,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             Block target = player.getTargetBlockExact(6);
             if (target == null || (!target.getType().equals(Material.CHEST) && !target.getType().equals(Material.TRAPPED_CHEST))) {
-                player.sendMessage(ChatColor.RED + "Look at a chest to mark it as ignore (no loot table roll; saves/regens normally).");
+                player.sendMessage(getMessage("admin.challenge-chestignore-look"));
                 return true;
             }
             String challengeId = getPlayerEditingChallenge(player);
@@ -6884,7 +7289,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 challengeId = getChallengeIdForChestLocation(target.getLocation());
             }
             if (challengeId == null) {
-                player.sendMessage(ChatColor.RED + "This chest is not in any challenge regen area. Enter edit mode for a challenge or look at a chest inside a challenge.");
+                player.sendMessage(getMessage("admin.challenge-chestignore-not-in-regen"));
                 return true;
             }
             ChallengeConfig cfg = challenges.get(challengeId);
@@ -6892,14 +7297,85 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("challenge.unknown-id", "id", challengeId));
                 return true;
             }
-            List<Block> toIgnore = getChestBlocksForIgnore(target);
-            int added = 0;
-            for (Block b : toIgnore) {
-                String key = chestLocationKey(b.getLocation());
-                if (cfg.ignoredChestKeys.add(key)) added++;
+            List<Block> toToggle = getChestBlocksForIgnore(target);
+            if (cfg.ignoredChestKeys == null) cfg.ignoredChestKeys = new HashSet<>();
+            boolean anyIgnored = false;
+            for (Block b : toToggle) {
+                if (cfg.ignoredChestKeys.contains(chestLocationKey(b.getLocation()))) {
+                    anyIgnored = true;
+                    break;
+                }
+            }
+            if (anyIgnored) {
+                for (Block b : toToggle) {
+                    cfg.ignoredChestKeys.remove(chestLocationKey(b.getLocation()));
+                }
+                saveChallengeToConfig(cfg);
+                player.sendMessage(getMessage("admin.challenge-chestignore-unignored", "id", challengeId));
+            } else {
+                int added = 0;
+                for (Block b : toToggle) {
+                    String key = chestLocationKey(b.getLocation());
+                    if (cfg.ignoredChestKeys.add(key)) added++;
+                }
+                saveChallengeToConfig(cfg);
+                player.sendMessage(getMessage("admin.challenge-chestignore-ignored", "id", challengeId, "detail", toToggle.size() > 1 ? getMessage("admin.challenge-chestignore-detail-double") : getMessage("admin.challenge-chestignore-detail-single")));
+            }
+            return true;
+        }
+
+        if (sub.equals("loottype")) {
+            if (!player.hasPermission("conradchallenges.admin")) {
+                player.sendMessage(getMessage("general.no-permission"));
+                return true;
+            }
+            String challengeId = getPlayerEditingChallenge(player);
+            if (challengeId == null) {
+                player.sendMessage(getMessage("admin.challenge-blockbreak-edit-mode"));
+                player.sendMessage(getMessage("admin.challenge-loottype-look-hint"));
+                return true;
+            }
+            Block target = player.getTargetBlockExact(6);
+            if (target == null || (!target.getType().equals(Material.CHEST) && !target.getType().equals(Material.TRAPPED_CHEST))) {
+                player.sendMessage(getMessage("admin.challenge-loottype-look"));
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(challengeId);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", challengeId));
+                return true;
+            }
+            if (!isLocationInRegenArea(cfg, target.getLocation())) {
+                player.sendMessage(getMessage("admin.challenge-loottype-not-in-regen"));
+                return true;
+            }
+            if (isChestIgnored(cfg, target)) {
+                player.sendMessage(getMessage("admin.challenge-loottype-ignored-unignore-first"));
+                return true;
+            }
+            String key = getCanonicalChestKey(target);
+            if (key == null) return true;
+            if (cfg.legendaryChestKeys == null) cfg.legendaryChestKeys = new HashSet<>();
+            boolean nowLegendary;
+            if (cfg.legendaryChestKeys.contains(key)) {
+                cfg.legendaryChestKeys.remove(key);
+                nowLegendary = false;
+            } else {
+                cfg.legendaryChestKeys.add(key);
+                nowLegendary = true;
             }
             saveChallengeToConfig(cfg);
-            player.sendMessage(ChatColor.GREEN + "Chest marked as ignore for challenge '" + challengeId + "' (no loot table; " + (toIgnore.size() > 1 ? "double chest, both halves" : "single chest") + ").");
+            player.sendMessage(getMessage("admin.challenge-loottype-toggled", "type", nowLegendary ? getMessage("admin.challenge-loottype-legendary") : getMessage("admin.challenge-loottype-normal"), "pool", nowLegendary ? getMessage("admin.challenge-loottype-pool-legendary") : getMessage("admin.challenge-loottype-pool-normal")));
+            return true;
+        }
+
+        if (sub.equals("functiontool")) {
+            if (!player.hasPermission("conradchallenges.admin")) {
+                player.sendMessage(getMessage("general.no-permission"));
+                return true;
+            }
+            scriptManager.giveFunctionTool(player);
+            player.sendMessage(ChatColor.GREEN + "Function tool added. Use it in edit mode by right-clicking a block.");
             return true;
         }
 
@@ -6909,7 +7385,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             if (args.length < 2) {
-                player.sendMessage(ChatColor.YELLOW + "Usage: /challenge test <id>");
+                player.sendMessage(getMessage("admin.challenge-test-usage"));
                 return true;
             }
             String id = args[1];
@@ -6925,13 +7401,25 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             UUID uuid = player.getUniqueId();
             // Do not allow test if challenge is currently being edited by anyone.
             if (isChallengeBeingEdited(id)) {
-                player.sendMessage(ChatColor.RED + "This challenge is currently being edited. Finish or cancel edit mode before using /challenge test.");
+                player.sendMessage(getMessage("admin.challenge-test-being-edited"));
                 return true;
             }
             // Do not allow test if any player is currently running this challenge.
             for (Map.Entry<UUID, String> entry : activeChallenges.entrySet()) {
                 if (id.equals(entry.getValue())) {
-                    player.sendMessage(ChatColor.RED + "This challenge is currently active for another player or party. Wait until it is free before using /challenge test.");
+                    player.sendMessage(getMessage("admin.challenge-test-active"));
+                    return true;
+                }
+            }
+            // Optional difficulty tier: /challenge test <id> [easy|medium|hard|extreme]
+            String tierArg = args.length > 2 ? args[2].toLowerCase(Locale.ROOT) : null;
+            String selectedTier = "easy";
+            if (tierArg != null) {
+                if (tierArg.equals("easy") || tierArg.equals("medium") || tierArg.equals("hard") || tierArg.equals("extreme")) {
+                    selectedTier = tierArg;
+                } else {
+                    player.sendMessage(getMessage("accept.invalid-tier", "tier", tierArg));
+                    player.sendMessage(getMessage("accept.valid-tiers"));
                     return true;
                 }
             }
@@ -6945,16 +7433,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             } else {
                 challengeRegenerationStatus.put(cfg.id, true);
             }
-            // Mark as active challenge for this player with default easy tier if not already set.
             activeChallenges.put(uuid, cfg.id);
-            activeChallengeDifficulties.putIfAbsent(cfg.id, "easy");
+            activeChallengeDifficulties.put(cfg.id, selectedTier);
             challengeStartTimes.put(uuid, System.currentTimeMillis());
-            // Teleport immediately to challenge destination.
             Location teleportLoc = getTeleportLocation(cfg);
             if (teleportLoc != null) {
                 player.teleport(teleportLoc);
             }
-            player.sendMessage(ChatColor.GREEN + "Test mode: entered challenge '" + displayName(cfg) + "' without countdown or book.");
+            player.sendMessage(getMessage("admin.challenge-test-entered", "challenge", displayName(cfg), "tier", selectedTier));
             return true;
         }
 
@@ -6970,21 +7456,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
-            // Note: Admins can enter edit mode even if challenge is locked down
-            // (lockdown only prevents players from entering challenges, not admins from editing)
-            
-            // Check if challenge is already being edited
-            UUID currentEditor = challengeEditors.get(id);
-            if (currentEditor != null && !currentEditor.equals(player.getUniqueId())) {
-                Player currentEditorPlayer = Bukkit.getPlayer(currentEditor);
-                String editorName = currentEditorPlayer != null && currentEditorPlayer.isOnline() ? currentEditorPlayer.getName() : "an admin";
-                player.sendMessage(getMessage("admin.challenge-edit-already-editing", "id", id, "admin", editorName));
+            // If already in edit mode for this challenge, do not re-enter or teleport
+            Set<UUID> currentEditors = challengeEditors.get(id);
+            if (currentEditors != null && currentEditors.contains(player.getUniqueId())) {
+                player.sendMessage(getMessage("admin.challenge-edit-already-in-edit-mode"));
                 return true;
             }
             
+            // Note: Admins can enter edit mode even if challenge is locked down
+            // Multiple admins can edit the same challenge at once.
+            
             // Check if player is already editing another challenge
-            for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
-                if (entry.getValue().equals(player.getUniqueId()) && !entry.getKey().equals(id)) {
+            for (Map.Entry<String, Set<UUID>> entry : challengeEditors.entrySet()) {
+                if (entry.getValue() != null && entry.getValue().contains(player.getUniqueId()) && !entry.getKey().equals(id)) {
                     player.sendMessage(getMessage("admin.challenge-edit-already-editing-another", "id", entry.getKey()));
                     player.sendMessage(getMessage("admin.challenge-edit-cancel-hint"));
                     return true;
@@ -6996,33 +7480,33 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
-            // Save original location
+            // Get or create editor set for this challenge
+            Set<UUID> editors = challengeEditors.computeIfAbsent(id, k -> new HashSet<>());
+            boolean firstEditor = editors.isEmpty();
+            editors.add(player.getUniqueId());
+            
+            // Save original location for this editor
             editorOriginalLocations.put(player.getUniqueId(), player.getLocation());
             
-            // Create backup of challenge config
-            ChallengeConfig backup = cloneChallengeConfig(cfg);
-            challengeEditBackups.put(id, backup);
-            
-            // Create backup of block states if regeneration area exists
-            if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
-                List<BlockState> stateBackup = challengeInitialStates.get(id);
-                if (stateBackup != null) {
-                    // Deep copy the block states
-                    List<BlockState> backupStates = new ArrayList<>();
-                    for (BlockState state : stateBackup) {
-                        backupStates.add(state);
+            // Only create backup and regenerate when the first editor enters
+            if (firstEditor) {
+                ChallengeConfig backup = cloneChallengeConfig(cfg);
+                challengeEditBackups.put(id, backup);
+                if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
+                    List<BlockState> stateBackup = challengeInitialStates.get(id);
+                    if (stateBackup != null) {
+                        List<BlockState> backupStates = new ArrayList<>();
+                        for (BlockState state : stateBackup) {
+                            backupStates.add(state);
+                        }
+                        challengeEditStateBackups.put(id, backupStates);
                     }
-                    challengeEditStateBackups.put(id, backupStates);
                 }
             }
             
-            // Mark challenge as being edited
-            challengeEditors.put(id, player.getUniqueId());
-            
-            // Regenerate the area to clean state
-            if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
+            // Regenerate the area only for the first editor (clean state); then teleport
+            if (firstEditor && cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
                 regenerateChallengeArea(cfg);
-                // Wait a moment for regeneration to complete, then teleport
                 new BukkitRunnable() {
                     @Override
                     public void run() {
@@ -7032,20 +7516,22 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             player.sendMessage(getMessage("admin.challenge-edit-entered", "id", id));
                             player.sendMessage(getMessage("admin.challenge-edit-instructions"));
                         } else {
-                            player.sendMessage(ChatColor.RED + "Error: No teleport location set for challenge!");
+                            player.sendMessage(getMessage("admin.challenge-no-teleport-location"));
                         }
+                        scriptManager.giveFunctionTool(player);
                     }
                 }.runTaskLater(this, 20L); // 1 second delay
             } else {
-                // No regeneration area, teleport immediately
+                // Not first editor, or no regen area: teleport immediately
                 Location teleportLoc = getTeleportLocation(cfg);
                 if (teleportLoc != null) {
                     player.teleport(teleportLoc);
                     player.sendMessage(getMessage("admin.challenge-edit-entered", "id", id));
                     player.sendMessage(getMessage("admin.challenge-edit-instructions"));
                 } else {
-                    player.sendMessage(ChatColor.RED + "Error: No teleport location set for challenge!");
+                    player.sendMessage(getMessage("admin.challenge-no-teleport-location"));
                 }
+                scriptManager.giveFunctionTool(player);
             }
             
             return true;
@@ -7054,8 +7540,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (sub.equals("save")) {
             // Find which challenge this player is editing
             String editingChallengeId = null;
-            for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
-                if (entry.getValue().equals(player.getUniqueId())) {
+            for (Map.Entry<String, Set<UUID>> entry : challengeEditors.entrySet()) {
+                if (entry.getValue() != null && entry.getValue().contains(player.getUniqueId())) {
                     editingChallengeId = entry.getKey();
                     break;
                 }
@@ -7069,28 +7555,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             ChallengeConfig cfg = challenges.get(editingChallengeId);
             if (cfg == null) {
                 player.sendMessage(getMessage("challenge.unknown-id", "id", editingChallengeId));
-                exitEditMode(player, editingChallengeId, false);
+                removeEditorFromChallenge(player, editingChallengeId);
                 return true;
             }
             
             // Check if challenge area is set - required for saving
             if (cfg.challengeCorner1 == null || cfg.challengeCorner2 == null) {
-                player.sendMessage(ChatColor.RED + "You must set a challenge area before saving!");
-                player.sendMessage(ChatColor.YELLOW + "Use " + ChatColor.WHITE + "/challenge setchallengearea " + editingChallengeId + ChatColor.YELLOW + " after selecting an area with WorldEdit (//1 and //2)");
+                player.sendMessage(getMessage("admin.challenge-save-no-area"));
+                player.sendMessage(getMessage("admin.challenge-save-use-setcommand", "id", editingChallengeId));
                 return true;
             }
             
             // Recapture regeneration area state (not challenge area - that's only captured when set)
             if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
-                player.sendMessage(ChatColor.translateAlternateColorCodes('&', "&7Recapturing regeneration area state... This may take a moment for large areas."));
+                player.sendMessage(getMessage("admin.challenge-recapturing-state"));
                 final Player finalPlayer = player; // Capture player reference for callback
                 captureInitialState(cfg, success -> {
                     // Callback runs on main thread, so we can safely access player
                     if (finalPlayer != null && finalPlayer.isOnline()) {
                         if (success) {
-                            finalPlayer.sendMessage(ChatColor.GREEN + "Regeneration area state recaptured successfully!");
+                            finalPlayer.sendMessage(getMessage("admin.challenge-state-recaptured-success"));
                         } else {
-                            finalPlayer.sendMessage(ChatColor.RED + "Failed to recapture regeneration area state!");
+                            finalPlayer.sendMessage(getMessage("admin.challenge-state-recapture-failed"));
                         }
                     }
                 });
@@ -7099,12 +7585,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Save challenge config
             saveChallengeToConfig(cfg);
             
-            // Exit edit mode and clear any per-player instance chest data for this challenge
+            // Exit edit mode for this player only; if last editor, clear backups
             UUID editorUuid = player.getUniqueId();
             Location originalLoc = editorOriginalLocations.remove(editorUuid);
-            challengeEditors.remove(editingChallengeId);
-            challengeEditBackups.remove(editingChallengeId);
-            challengeEditStateBackups.remove(editingChallengeId);
+            removeEditorFromChallenge(player, editingChallengeId);
             clearInstanceChestDataForPlayer(editorUuid, editingChallengeId);
             
             // Teleport back
@@ -7114,8 +7598,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             
             player.sendMessage(getMessage("admin.challenge-save-success", "id", editingChallengeId));
             
-            // Process queue if there are players waiting
-            if (!isChallengeLocked(editingChallengeId)) {
+            if (!isChallengeBeingEdited(editingChallengeId) && !isChallengeLocked(editingChallengeId)) {
                 processQueue(editingChallengeId);
             }
             
@@ -7123,10 +7606,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
 
         if (sub.equals("cancel")) {
-            // Find which challenge this player is editing
             String editingChallengeId = null;
-            for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
-                if (entry.getValue().equals(player.getUniqueId())) {
+            for (Map.Entry<String, Set<UUID>> entry : challengeEditors.entrySet()) {
+                if (entry.getValue() != null && entry.getValue().contains(player.getUniqueId())) {
                     editingChallengeId = entry.getKey();
                     break;
                 }
@@ -7158,23 +7640,18 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("admin.challenge-cancel-no-backup", "id", editingChallengeId));
             }
             
-            // Exit edit mode and clear any per-player instance chest data for this challenge
             UUID editorUuid = player.getUniqueId();
             Location originalLoc = editorOriginalLocations.remove(editorUuid);
-            challengeEditors.remove(editingChallengeId);
-            challengeEditBackups.remove(editingChallengeId);
-            challengeEditStateBackups.remove(editingChallengeId);
+            removeEditorFromChallenge(player, editingChallengeId);
             clearInstanceChestDataForPlayer(editorUuid, editingChallengeId);
             
-            // Teleport back
             if (originalLoc != null) {
                 player.teleport(originalLoc);
             }
             
             player.sendMessage(getMessage("admin.challenge-cancel-success", "id", editingChallengeId));
             
-            // Process queue if there are players waiting
-            if (!isChallengeLocked(editingChallengeId)) {
+            if (!isChallengeBeingEdited(editingChallengeId) && !isChallengeLocked(editingChallengeId)) {
                 processQueue(editingChallengeId);
             }
             
@@ -7341,11 +7818,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Show tier rewards if any exist
             boolean hasTierRewards = cfg.difficultyTierRewards != null && !cfg.difficultyTierRewards.isEmpty();
             if (hasTierRewards) {
-                player.sendMessage("§6Difficulty Tier Rewards:");
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("rewards-cmd.difficulty-tier-rewards-header")));
                 for (String tier : Arrays.asList("easy", "medium", "hard", "extreme")) {
                     List<TierReward> rewards = cfg.difficultyTierRewards.get(tier);
                     if (rewards != null && !rewards.isEmpty()) {
-                        player.sendMessage("  §e" + tier.toUpperCase() + ": §f" + rewards.size() + " reward(s)");
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("rewards-cmd.difficulty-tier-line", "tier", tier.toUpperCase(), "count", String.valueOf(rewards.size()))));
                     }
                 }
             }
@@ -7976,7 +8453,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             // Move any blocked items to ender chest and notify
                             moveBlockedItemsToEnderChest(p, cfg);
                         } else {
-                            p.sendMessage(ChatColor.RED + "Error: No teleport location set for challenge!");
+                            p.sendMessage(getMessage("admin.challenge-no-teleport-location"));
                             return;
                         }
 
@@ -8195,8 +8672,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         // Check if player is in edit mode
         String editingChallengeId = null;
-        for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
-            if (entry.getValue().equals(uuid)) {
+        for (Map.Entry<String, Set<UUID>> entry : challengeEditors.entrySet()) {
+            if (entry.getValue() != null && entry.getValue().contains(uuid)) {
                 editingChallengeId = entry.getKey();
                 break;
             }
@@ -8311,38 +8788,30 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
         
-        // Only allow teleports within the regeneration area (both to and from must be in regeneration area)
-        // This prevents players from teleporting outside the regeneration area where they could mess things up
+        // Only allow teleports within this challenge's regen/challenge areas (any area - e.g. area 1 to boss room in area 2)
         if (cfg != null && to != null && from != null) {
-            // Check if regeneration area is set
-            boolean hasRegenerationArea = (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
-            
-            if (hasRegenerationArea) {
-                // Regeneration area is set - check if both locations are within it
-                boolean toInRegenArea = isLocationInRegenerationArea(cfg, to);
-                boolean fromInRegenArea = isLocationInRegenerationArea(cfg, from);
-                
+            boolean hasRegenArea = (cfg.regenerationAreas != null && !cfg.regenerationAreas.isEmpty()) || (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
+            if (hasRegenArea) {
+                // Check if both locations are within any of this challenge's regen areas (allows teleport between area 1 and area 2, etc.)
+                boolean toInRegenArea = isLocationInRegenArea(cfg, to);
+                boolean fromInRegenArea = isLocationInRegenArea(cfg, from);
                 if (toInRegenArea && fromInRegenArea) {
-                    // Both locations are within regeneration area, allow teleport
                     return;
-                } else if (!toInRegenArea) {
-                    // Player is trying to teleport OUT of regeneration area - block it
+                }
+                if (!toInRegenArea) {
                     event.setCancelled(true);
                     player.sendMessage(getMessage("challenge.teleport-blocked-regen"));
                     return;
                 }
             } else {
-                // No regeneration area set - fall back to challenge area or destination world
-                boolean hasChallengeArea = (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null);
-                
+                boolean hasChallengeArea = (cfg.challengeAreas != null && !cfg.challengeAreas.isEmpty()) || (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null);
                 if (hasChallengeArea) {
-                    // Use challenge area as fallback
                     boolean toInArea = isLocationInChallengeArea(cfg, to);
                     boolean fromInArea = isLocationInChallengeArea(cfg, from);
-                    
                     if (toInArea && fromInArea) {
                         return;
-                    } else if (!toInArea) {
+                    }
+                    if (!toInArea) {
                         event.setCancelled(true);
                         player.sendMessage(getMessage("challenge.teleport-blocked"));
                         return;
@@ -8384,8 +8853,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         // Check if player is in edit mode (admins can move freely in edit mode)
         String editingChallengeId = null;
-        for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
-            if (entry.getValue().equals(uuid)) {
+        for (Map.Entry<String, Set<UUID>> entry : challengeEditors.entrySet()) {
+            if (entry.getValue() != null && entry.getValue().contains(uuid)) {
                 editingChallengeId = entry.getKey();
                 break;
             }
@@ -8411,28 +8880,18 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return;
         }
         
-        // Check if regeneration area is set
-        boolean hasRegenerationArea = (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
-        
-        if (hasRegenerationArea) {
-            // Regeneration area is set - check if destination is within it
-            if (to != null && !isLocationInRegenerationArea(cfg, to)) {
-                // Player is trying to move OUT of regeneration area - block it
+        boolean hasRegenArea = (cfg.regenerationAreas != null && !cfg.regenerationAreas.isEmpty()) || (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null);
+        if (hasRegenArea) {
+            if (to != null && !isLocationInRegenArea(cfg, to)) {
                 event.setCancelled(true);
-                // Teleport them back slightly to prevent them from getting stuck
                 Location safeLocation = from.clone();
-                if (safeLocation.getWorld() != null) {
-                    player.teleport(safeLocation);
-                }
+                if (safeLocation.getWorld() != null) player.teleport(safeLocation);
                 player.sendMessage(getMessage("challenge.movement-blocked-regen"));
                 return;
             }
         } else {
-            // No regeneration area set - fall back to challenge area or destination world
-            boolean hasChallengeArea = (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null);
-            
+            boolean hasChallengeArea = (cfg.challengeAreas != null && !cfg.challengeAreas.isEmpty()) || (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null);
             if (hasChallengeArea) {
-                // Use challenge area as fallback
                 if (to != null && !isLocationInChallengeArea(cfg, to)) {
                     event.setCancelled(true);
                     Location safeLocation = from.clone();
@@ -8455,6 +8914,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     player.sendMessage(getMessage("challenge.movement-blocked"));
                     return;
                 }
+            }
+        }
+
+        // PLAYER_ENTER_AREA scripts (manager handles cooldown)
+        if (to != null && cfg.scriptNodes != null) {
+            String key = blockKey(to);
+            if (key != null) {
+                scriptManager.runScriptsForTrigger(cfg, key, ScriptTrigger.PLAYER_ENTER_AREA, player, to, null);
             }
         }
     }
@@ -8505,46 +8972,73 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                z >= minZ && z <= maxZ;
     }
     
-    /**
-     * Checks if a location is within a challenge's challenge area bounds.
-     * Falls back to regeneration area if challenge area is not set.
-     * 
-     * @param cfg The challenge configuration
-     * @param loc The location to check
-     * @return true if the location is within the challenge area (or regen area if challenge area not set), false otherwise
-     */
-    private boolean isLocationInChallengeArea(ChallengeConfig cfg, Location loc) {
-        // Prefer challenge area if set, otherwise fall back to regeneration area
-        Location corner1 = cfg.challengeCorner1 != null ? cfg.challengeCorner1 : cfg.regenerationCorner1;
-        Location corner2 = cfg.challengeCorner2 != null ? cfg.challengeCorner2 : cfg.regenerationCorner2;
-        
-        if (corner1 == null || corner2 == null) {
-            // No challenge or regeneration area set - location is NOT in challenge area
-            return false;
+    private static double getDouble(Map<?, ?> map, String key) {
+        Object v = map.get(key);
+        if (v instanceof Number) return ((Number) v).doubleValue();
+        if (v != null) try { return Double.parseDouble(String.valueOf(v)); } catch (NumberFormatException ignored) {}
+        return 0;
+    }
+
+    private static Map<String, Object> cornerMap(Location loc) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("x", loc.getX());
+        m.put("y", loc.getY());
+        m.put("z", loc.getZ());
+        return m;
+    }
+
+    private void syncRegenLegacyFromList(ChallengeConfig cfg) {
+        if (cfg.regenerationAreas != null && !cfg.regenerationAreas.isEmpty()) {
+            Location[] first = cfg.regenerationAreas.get(0);
+            if (first != null && first.length >= 2) {
+                cfg.regenerationCorner1 = first[0];
+                cfg.regenerationCorner2 = first[1];
+                return;
+            }
         }
-        
-        if (corner1.getWorld() == null || 
-            !corner1.getWorld().equals(corner2.getWorld()) ||
-            !corner1.getWorld().equals(loc.getWorld())) {
-            return false;
+        cfg.regenerationCorner1 = null;
+        cfg.regenerationCorner2 = null;
+    }
+
+    private void syncChallengeLegacyFromList(ChallengeConfig cfg) {
+        if (cfg.challengeAreas != null && !cfg.challengeAreas.isEmpty()) {
+            Location[] first = cfg.challengeAreas.get(0);
+            if (first != null && first.length >= 2) {
+                cfg.challengeCorner1 = first[0];
+                cfg.challengeCorner2 = first[1];
+                return;
+            }
         }
-        
-        // Calculate bounding box
+        cfg.challengeCorner1 = null;
+        cfg.challengeCorner2 = null;
+    }
+
+    private boolean isLocationInBox(Location corner1, Location corner2, Location loc) {
+        if (corner1 == null || corner2 == null || loc.getWorld() == null) return false;
+        if (!corner1.getWorld().equals(loc.getWorld()) || !corner2.getWorld().equals(loc.getWorld())) return false;
+        int x = loc.getBlockX(), y = loc.getBlockY(), z = loc.getBlockZ();
         int minX = Math.min(corner1.getBlockX(), corner2.getBlockX());
         int maxX = Math.max(corner1.getBlockX(), corner2.getBlockX());
         int minY = Math.min(corner1.getBlockY(), corner2.getBlockY());
         int maxY = Math.max(corner1.getBlockY(), corner2.getBlockY());
         int minZ = Math.min(corner1.getBlockZ(), corner2.getBlockZ());
         int maxZ = Math.max(corner1.getBlockZ(), corner2.getBlockZ());
-        
-        // Check if location is within bounds
-        int x = loc.getBlockX();
-        int y = loc.getBlockY();
-        int z = loc.getBlockZ();
-        
-        return x >= minX && x <= maxX &&
-               y >= minY && y <= maxY &&
-               z >= minZ && z <= maxZ;
+        return x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ;
+    }
+
+    /**
+     * @return true if the location is within any challenge area (or any regen area if no challenge areas set)
+     */
+    boolean isLocationInChallengeArea(ChallengeConfig cfg, Location loc) {
+        if (cfg.challengeAreas != null && !cfg.challengeAreas.isEmpty()) {
+            for (Location[] corners : cfg.challengeAreas) {
+                if (corners != null && corners.length >= 2 && isLocationInBox(corners[0], corners[1], loc)) return true;
+            }
+            return false;
+        }
+        Location corner1 = cfg.challengeCorner1 != null ? cfg.challengeCorner1 : cfg.regenerationCorner1;
+        Location corner2 = cfg.challengeCorner2 != null ? cfg.challengeCorner2 : cfg.regenerationCorner2;
+        return isLocationInBox(corner1, corner2, loc);
     }
     
     /**
@@ -8553,7 +9047,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
      * @param loc The location to check
      * @return The challenge config if location is in a challenge area, null otherwise
      */
-    private ChallengeConfig getChallengeForLocation(Location loc) {
+    ChallengeConfig getChallengeForLocation(Location loc) {
         for (ChallengeConfig cfg : challenges.values()) {
             if (isLocationInChallengeArea(cfg, loc)) {
                 return cfg;
@@ -8561,7 +9055,244 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         return null;
     }
-    
+
+    /**
+     * Checks if a location is within any of the challenge's regeneration areas.
+     */
+    boolean isLocationInRegenArea(ChallengeConfig cfg, Location loc) {
+        if (cfg.regenerationAreas != null && !cfg.regenerationAreas.isEmpty()) {
+            for (Location[] corners : cfg.regenerationAreas) {
+                if (corners != null && corners.length >= 2 && isLocationInBox(corners[0], corners[1], loc)) return true;
+            }
+            return false;
+        }
+        return isLocationInBox(cfg.regenerationCorner1, cfg.regenerationCorner2, loc);
+    }
+
+    /** Package-visible for ChallengeScriptManager. */
+    static String blockKey(Location loc) {
+        return loc.getWorld() != null ? loc.getWorld().getName() + ":" + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ() : null;
+    }
+    /** Instance method for ChallengeScriptManager. */
+    String getBlockKey(Location loc) { return blockKey(loc); }
+
+    /** Script state: get set of block keys that have fired this run for the challenge. */
+    Set<String> getScriptFiredTriggers(String challengeId) {
+        return scriptFiredTriggers.computeIfAbsent(challengeId, k -> new java.util.HashSet<>());
+    }
+    /** Script state: get set of signal names fired this run. */
+    Set<String> getScriptSignalsFired(String challengeId) {
+        return scriptSignalsFired.computeIfAbsent(challengeId, k -> new java.util.HashSet<>());
+    }
+    /** Script state: mark a signal as fired (for SIGNAL_SENDER). */
+    void fireScriptSignal(String challengeId, String signalName) {
+        if (challengeId != null && signalName != null && !signalName.isEmpty())
+            getScriptSignalsFired(challengeId).add(signalName);
+    }
+    /** Script state: mark a trigger block as fired (for gates / one-shot). */
+    void markScriptTriggerFired(String challengeId, String blockKey) {
+        if (challengeId != null && blockKey != null && !blockKey.isEmpty())
+            getScriptFiredTriggers(challengeId).add(blockKey);
+    }
+    /** Earliest challenge start time (ms) for any active player in this challenge; 0 if none. */
+    long getChallengeStartTime(String challengeId) {
+        long earliest = Long.MAX_VALUE;
+        for (java.util.Map.Entry<java.util.UUID, String> e : activeChallenges.entrySet()) {
+            if (!e.getValue().equals(challengeId)) continue;
+            Long t = challengeStartTimes.get(e.getKey());
+            if (t != null && t < earliest) earliest = t;
+        }
+        return earliest == Long.MAX_VALUE ? 0L : earliest;
+    }
+    /** Number of players currently in this challenge. */
+    int getActiveChallengePlayerCount(String challengeId) {
+        int n = 0;
+        for (String id : activeChallenges.values()) if (challengeId.equals(id)) n++;
+        return n;
+    }
+
+    /** Difficulty tier for the challenge this run (e.g. easy, medium, hard). */
+    String getDifficultyTier(String challengeId) {
+        return activeChallengeDifficulties.getOrDefault(challengeId, "easy");
+    }
+
+    /** Count of players in this challenge within radius of location. */
+    int getPlayersWithinRadius(Location loc, double radius, String challengeId) {
+        if (loc == null || loc.getWorld() == null || radius <= 0) return 0;
+        int count = 0;
+        for (java.util.Map.Entry<UUID, String> e : activeChallenges.entrySet()) {
+            if (!e.getValue().equals(challengeId)) continue;
+            Player p = Bukkit.getPlayer(e.getKey());
+            if (p != null && p.isOnline() && p.getWorld().equals(loc.getWorld())) {
+                if (p.getLocation().distance(loc) <= radius) count++;
+            }
+        }
+        return count;
+    }
+
+    /** Parse block key "world:x,y,z" to block Location; returns null if invalid. */
+    public Location getLocationFromBlockKey(String blockKey) {
+        if (blockKey == null || !blockKey.contains(":")) return null;
+        int colon = blockKey.indexOf(':');
+        String worldName = blockKey.substring(0, colon);
+        String coords = blockKey.substring(colon + 1);
+        String[] parts = coords.split(",");
+        if (parts.length != 3) return null;
+        World w = Bukkit.getWorld(worldName);
+        if (w == null) return null;
+        try {
+            int x = Integer.parseInt(parts[0].trim());
+            int y = Integer.parseInt(parts[1].trim());
+            int z = Integer.parseInt(parts[2].trim());
+            return new Location(w, x, y, z);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Every 5 ticks: for pass-through blocks, set to air when a challenger is near, restore when none are near.
+     * Skips any challenge that has an editor (so we never overwrite blocks they place).
+     */
+    private void updatePassThroughBlocks() {
+        for (Map.Entry<String, ChallengeConfig> entry : challenges.entrySet()) {
+            String challengeId = entry.getKey();
+            ChallengeConfig cfg = entry.getValue();
+            if (cfg.passThroughBlockKeys == null || cfg.passThroughBlockKeys.isEmpty()) continue;
+            // Do not touch pass-through blocks while any editor is in this challenge (prevents removing blocks they place)
+            Set<UUID> editors = challengeEditors.get(challengeId);
+            boolean hasOnlineEditor = false;
+            if (editors != null && !editors.isEmpty()) {
+                for (UUID uuid : editors) {
+                    Player p = Bukkit.getPlayer(uuid);
+                    if (p != null && p.isOnline()) {
+                        hasOnlineEditor = true;
+                        break;
+                    }
+                }
+            }
+            if (hasOnlineEditor) continue; // skip this challenge entirely - editor present, don't touch any blocks
+            List<UUID> playersInChallenge = new ArrayList<>();
+            for (Map.Entry<UUID, String> e : activeChallenges.entrySet()) {
+                if (e.getValue().equals(challengeId)) playersInChallenge.add(e.getKey());
+            }
+            // Include editors for "restore when empty" check only; do NOT use editors for "set to air when near"
+            // so that in edit mode we never clear blocks - editors can place without them disappearing
+            if (editors != null) {
+                for (UUID uuid : editors) {
+                    Player p = Bukkit.getPlayer(uuid);
+                    if (p != null && p.isOnline()) playersInChallenge.add(uuid);
+                }
+            }
+            if (playersInChallenge.isEmpty()) {
+                // Restore all saved pass-through blocks when no challengers and no editors
+                List<String> toRemove = new ArrayList<>();
+                for (Map.Entry<String, BlockState> e : passThroughSavedStates.entrySet()) {
+                    if (e.getKey().startsWith(challengeId + ":")) {
+                        Location loc = getLocationFromBlockKey(e.getKey().substring(challengeId.length() + 1));
+                        if (loc != null) {
+                            Block block = loc.getBlock();
+                            e.getValue().update(true, false);
+                        }
+                        toRemove.add(e.getKey());
+                    }
+                }
+                for (String key : toRemove) passThroughSavedStates.remove(key);
+                continue;
+            }
+            // Only set pass-through blocks to air when an *active challenger* is near (not editors)
+            // so edit mode can place blocks without the pass-through task clearing them
+            List<UUID> challengersOnly = new ArrayList<>();
+            for (Map.Entry<UUID, String> e : activeChallenges.entrySet()) {
+                if (e.getValue().equals(challengeId)) challengersOnly.add(e.getKey());
+            }
+            double range = 2.5;
+            for (String blockKey : cfg.passThroughBlockKeys) {
+                Location loc = getLocationFromBlockKey(blockKey);
+                if (loc == null) continue;
+                Block block = loc.getBlock();
+                String stateKey = challengeId + ":" + blockKey;
+                boolean playerNear = false;
+                for (UUID uuid : challengersOnly) {
+                    Player p = Bukkit.getPlayer(uuid);
+                    if (p != null && p.isOnline() && p.getWorld().equals(loc.getWorld())) {
+                        if (p.getLocation().distance(loc.getBlock().getLocation().add(0.5, 0.5, 0.5)) <= range) {
+                            playerNear = true;
+                            break;
+                        }
+                    }
+                }
+                if (playerNear) {
+                    if (block.getType() != Material.AIR) {
+                        if (!passThroughSavedStates.containsKey(stateKey)) {
+                            passThroughSavedStates.put(stateKey, block.getState());
+                            block.setType(Material.AIR, false);
+                        }
+                    }
+                } else {
+                    if (passThroughSavedStates.containsKey(stateKey)) {
+                        BlockState saved = passThroughSavedStates.remove(stateKey);
+                        if (saved != null) saved.update(true, false);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Spawns particles at block center with wide spread so they protrude past the edges,
+     * giving a soft "surrounds the block" look. Works well for full blocks and thin blocks (ladders, signs).
+     * @param world world to spawn in
+     * @param blockLoc block location (block corner)
+     * @param particle particle type
+     */
+    private void spawnParticlesAroundBlock(World world, Location blockLoc, org.bukkit.Particle particle) {
+        if (world == null || blockLoc == null) return;
+        double x = blockLoc.getBlockX() + 0.5;
+        double y = blockLoc.getBlockY() + 0.5;
+        double z = blockLoc.getBlockZ() + 0.5;
+        // Center spawn, wide spread (0.5) so particles extend to and past block edges
+        world.spawnParticle(particle, x, y, z, 10, 0.5, 0.5, 0.5, 0.02);
+    }
+
+    /**
+     * Every 20 ticks: for players editing a challenge and holding the function tool,
+     * show particles around the block they're looking at and around all blocks that have scripts/pass-through.
+     */
+    private void updateScriptParticles() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            try {
+                String challengeId = getPlayerEditingChallenge(player);
+                if (challengeId == null) continue;
+                ItemStack main = player.getInventory().getItemInMainHand();
+                ItemStack off = player.getInventory().getItemInOffHand();
+                if (!scriptManager.isFunctionTool(main) && !scriptManager.isFunctionTool(off)) continue;
+                ChallengeConfig cfg = challenges.get(challengeId);
+                if (cfg == null) continue;
+                World world = player.getWorld();
+                if (world == null) continue;
+                try {
+                    Block target = player.getTargetBlockExact(5);
+                    if (target != null && target.getWorld().equals(world) && (isLocationInRegenArea(cfg, target.getLocation()) || isLocationInChallengeArea(cfg, target.getLocation()))) {
+                        spawnParticlesAroundBlock(world, target.getLocation(), org.bukkit.Particle.END_ROD);
+                    }
+                } catch (Throwable ignored) { }
+                Set<String> blockKeys = scriptManager.getBlockKeysWithFunctions(cfg);
+                if (blockKeys == null) continue;
+                for (String blockKey : new java.util.HashSet<>(blockKeys)) {
+                    try {
+                        Location loc = getLocationFromBlockKey(blockKey);
+                        if (loc == null || loc.getWorld() == null || !loc.getWorld().equals(world)) continue;
+                        if (!isLocationInRegenArea(cfg, loc) && !isLocationInChallengeArea(cfg, loc)) continue;
+                        spawnParticlesAroundBlock(world, loc, org.bukkit.Particle.HAPPY_VILLAGER);
+                    } catch (Throwable ignored) { }
+                }
+            } catch (Throwable t) {
+                getLogger().warning("Script particles error for " + (player != null ? player.getName() : "?") + ": " + t.getMessage());
+            }
+        }
+    }
+
     /**
      * Moves any blocked items from the player's inventory (and armor) into their ender chest.
      * Sends the configured message for each blocked item type moved.
@@ -8678,7 +9409,52 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("entry.blocked-items-returned")));
     }
-    
+
+    /**
+     * Exits a player from their current challenge (no completion, no rewards).
+     * Same logic as /exit. Used by script function LEAVE_CHALLENGE.
+     * Call only when player is in a challenge; no-op if not.
+     */
+    void exitPlayerFromChallenge(Player player) {
+        UUID uuid = player.getUniqueId();
+        String challengeId = activeChallenges.get(uuid);
+        if (challengeId == null) return;
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null) return;
+        if (spawnLocation == null) {
+            player.sendMessage(getMessage("challenge.spawn-not-configured"));
+            return;
+        }
+        String exitedChallengeId = activeChallenges.remove(uuid);
+        completedChallenges.remove(uuid);
+        challengeStartTimes.remove(uuid);
+        playerLives.remove(uuid);
+        deadPartyMembers.remove(uuid);
+        clearInstanceChestDataForPlayer(uuid, exitedChallengeId);
+        if (exitedChallengeId != null) {
+            cleanupChallengeDifficultyIfEmpty(exitedChallengeId);
+            revertSpawnerLevelsForChallenge(cfg);
+            resetMythicMobsSpawnersInArea(cfg);
+        }
+        if (exitedChallengeId != null && !isChallengeLocked(exitedChallengeId)) {
+            processQueue(exitedChallengeId);
+        }
+        // Clear script gate/signal state when no players left in this challenge
+        if (exitedChallengeId != null && !activeChallenges.containsValue(exitedChallengeId)) {
+            scriptFiredTriggers.remove(exitedChallengeId);
+            scriptSignalsFired.remove(exitedChallengeId);
+        }
+        Location testReturn = testOriginalLocations.remove(uuid);
+        if (testReturn != null) {
+            player.teleport(testReturn);
+        } else {
+            player.teleport(spawnLocation);
+        }
+        giveBackBlockedItemOverflow(player, exitedChallengeId);
+        player.sendMessage(getMessage("exit.exited-returned"));
+        player.sendMessage(getMessage("exit.exited-no-rewards"));
+    }
+
     /** Tries to add as much of the stack to the ender chest as possible. Returns amount actually added. */
     private int moveToEnderChest(org.bukkit.inventory.Inventory ender, ItemStack stack) {
         if (stack == null || stack.getType() == Material.AIR) return 0;
@@ -8756,39 +9532,52 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             
             ChallengeConfig otherCfg = entry.getValue();
             
-            // Check challenge areas
-            if (checkChallengeAreas && otherCfg.challengeCorner1 != null && otherCfg.challengeCorner2 != null) {
-                if (otherCfg.challengeCorner1.getWorld() != null && 
-                    otherCfg.challengeCorner1.getWorld().equals(corner1.getWorld())) {
+            // Check challenge areas (all boxes)
+            if (checkChallengeAreas) {
+                if (otherCfg.challengeAreas != null && !otherCfg.challengeAreas.isEmpty()) {
+                    for (Location[] c : otherCfg.challengeAreas) {
+                        if (c != null && c.length >= 2 && c[0].getWorld() != null && c[0].getWorld().equals(corner1.getWorld())) {
+                            int minX2 = Math.min(c[0].getBlockX(), c[1].getBlockX());
+                            int maxX2 = Math.max(c[0].getBlockX(), c[1].getBlockX());
+                            int minY2 = Math.min(c[0].getBlockY(), c[1].getBlockY());
+                            int maxY2 = Math.max(c[0].getBlockY(), c[1].getBlockY());
+                            int minZ2 = Math.min(c[0].getBlockZ(), c[1].getBlockZ());
+                            int maxZ2 = Math.max(c[0].getBlockZ(), c[1].getBlockZ());
+                            if (boundingBoxesOverlap(minX1, maxX1, minY1, maxY1, minZ1, maxZ1, minX2, maxX2, minY2, maxY2, minZ2, maxZ2)) return challengeId;
+                        }
+                    }
+                } else if (otherCfg.challengeCorner1 != null && otherCfg.challengeCorner2 != null && otherCfg.challengeCorner1.getWorld() != null && otherCfg.challengeCorner1.getWorld().equals(corner1.getWorld())) {
                     int minX2 = Math.min(otherCfg.challengeCorner1.getBlockX(), otherCfg.challengeCorner2.getBlockX());
                     int maxX2 = Math.max(otherCfg.challengeCorner1.getBlockX(), otherCfg.challengeCorner2.getBlockX());
                     int minY2 = Math.min(otherCfg.challengeCorner1.getBlockY(), otherCfg.challengeCorner2.getBlockY());
                     int maxY2 = Math.max(otherCfg.challengeCorner1.getBlockY(), otherCfg.challengeCorner2.getBlockY());
                     int minZ2 = Math.min(otherCfg.challengeCorner1.getBlockZ(), otherCfg.challengeCorner2.getBlockZ());
                     int maxZ2 = Math.max(otherCfg.challengeCorner1.getBlockZ(), otherCfg.challengeCorner2.getBlockZ());
-                    
-                    if (boundingBoxesOverlap(minX1, maxX1, minY1, maxY1, minZ1, maxZ1,
-                                            minX2, maxX2, minY2, maxY2, minZ2, maxZ2)) {
-                        return challengeId;
-                    }
+                    if (boundingBoxesOverlap(minX1, maxX1, minY1, maxY1, minZ1, maxZ1, minX2, maxX2, minY2, maxY2, minZ2, maxZ2)) return challengeId;
                 }
             }
-            
-            // Check regeneration areas
-            if (checkRegenerationAreas && otherCfg.regenerationCorner1 != null && otherCfg.regenerationCorner2 != null) {
-                if (otherCfg.regenerationCorner1.getWorld() != null && 
-                    otherCfg.regenerationCorner1.getWorld().equals(corner1.getWorld())) {
+            // Check regeneration areas (all boxes)
+            if (checkRegenerationAreas) {
+                if (otherCfg.regenerationAreas != null && !otherCfg.regenerationAreas.isEmpty()) {
+                    for (Location[] c : otherCfg.regenerationAreas) {
+                        if (c != null && c.length >= 2 && c[0].getWorld() != null && c[0].getWorld().equals(corner1.getWorld())) {
+                            int minX2 = Math.min(c[0].getBlockX(), c[1].getBlockX());
+                            int maxX2 = Math.max(c[0].getBlockX(), c[1].getBlockX());
+                            int minY2 = Math.min(c[0].getBlockY(), c[1].getBlockY());
+                            int maxY2 = Math.max(c[0].getBlockY(), c[1].getBlockY());
+                            int minZ2 = Math.min(c[0].getBlockZ(), c[1].getBlockZ());
+                            int maxZ2 = Math.max(c[0].getBlockZ(), c[1].getBlockZ());
+                            if (boundingBoxesOverlap(minX1, maxX1, minY1, maxY1, minZ1, maxZ1, minX2, maxX2, minY2, maxY2, minZ2, maxZ2)) return challengeId;
+                        }
+                    }
+                } else if (otherCfg.regenerationCorner1 != null && otherCfg.regenerationCorner2 != null && otherCfg.regenerationCorner1.getWorld() != null && otherCfg.regenerationCorner1.getWorld().equals(corner1.getWorld())) {
                     int minX2 = Math.min(otherCfg.regenerationCorner1.getBlockX(), otherCfg.regenerationCorner2.getBlockX());
                     int maxX2 = Math.max(otherCfg.regenerationCorner1.getBlockX(), otherCfg.regenerationCorner2.getBlockX());
                     int minY2 = Math.min(otherCfg.regenerationCorner1.getBlockY(), otherCfg.regenerationCorner2.getBlockY());
                     int maxY2 = Math.max(otherCfg.regenerationCorner1.getBlockY(), otherCfg.regenerationCorner2.getBlockY());
                     int minZ2 = Math.min(otherCfg.regenerationCorner1.getBlockZ(), otherCfg.regenerationCorner2.getBlockZ());
                     int maxZ2 = Math.max(otherCfg.regenerationCorner1.getBlockZ(), otherCfg.regenerationCorner2.getBlockZ());
-                    
-                    if (boundingBoxesOverlap(minX1, maxX1, minY1, maxY1, minZ1, maxZ1,
-                                            minX2, maxX2, minY2, maxY2, minZ2, maxZ2)) {
-                        return challengeId;
-                    }
+                    if (boundingBoxesOverlap(minX1, maxX1, minY1, maxY1, minZ1, maxZ1, minX2, maxX2, minY2, maxY2, minZ2, maxZ2)) return challengeId;
                 }
             }
         }
@@ -8848,6 +9637,99 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     /**
+     * Block break rules in challenge areas:
+     * - In regen area: only edit mode for that challenge can break; others get "Enter edit mode to make changes to this area."
+     * - In challenge area (not regen): edit mode can always break; challengers: blockBreakEnabled off = can break whatever, on = only blocks they placed or in allow list; others = enter edit mode message.
+     */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBlockBreakInChallenge(BlockBreakEvent event) {
+        Block block = event.getBlock();
+        ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
+        if (cfg == null) return;
+        Player player = event.getPlayer();
+        UUID uuid = player.getUniqueId();
+        String editingId = getPlayerEditingChallenge(player);
+
+        // In regen area: only edit mode for this challenge can break
+        if (isLocationInRegenArea(cfg, block.getLocation())) {
+            if (editingId != null && editingId.equals(cfg.id)) return;
+            event.setCancelled(true);
+            player.sendMessage(getMessage("admin.challenge-regen-enter-edit-mode"));
+            return;
+        }
+
+        // In challenge area (not regen): edit mode can always break; challengers (and test mode) use block break rules
+        if (editingId != null && editingId.equals(cfg.id)) return; // Edit mode: free break
+
+        String activeId = activeChallenges.get(uuid);
+        if (cfg.id.equals(activeId)) {
+            // Challenger or test mode: blockBreakEnabled off = can break whatever; on = only placed + allow list
+            if (!cfg.blockBreakEnabled) return;
+            String key = blockKey(block.getLocation());
+            Map<String, UUID> placed = challengePlacedBlocks.get(cfg.id);
+            boolean placedBySelf = placed != null && uuid.equals(placed.get(key));
+            boolean inAllowList = cfg.breakAllowedMaterials != null && cfg.breakAllowedMaterials.contains(block.getType());
+            if (placedBySelf || inAllowList) {
+                if (placed != null && key != null) placed.remove(key);
+                return;
+            }
+            event.setCancelled(true);
+            player.sendMessage(getMessage("admin.challenge-regen-only-break-placed"));
+            return;
+        }
+
+        event.setCancelled(true);
+        player.sendMessage(getMessage("admin.challenge-regen-enter-edit-mode"));
+    }
+
+    /**
+     * Run BLOCK_BREAK scripts when a block is broken in a challenge.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBlockBreakScript(BlockBreakEvent event) {
+        Block block = event.getBlock();
+        ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
+        if (cfg == null) return;
+        String key = blockKey(block.getLocation());
+        if (key == null) return;
+        scriptManager.runScriptsForTrigger(cfg, key, ScriptTrigger.BLOCK_BREAK, event.getPlayer(), block.getLocation(), null);
+    }
+
+    /**
+     * Block placement in regeneration areas unless the player is in edit mode for that challenge
+     * or is an active challenger. Others get "Enter edit mode to make changes to this area."
+     */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBlockPlaceInChallengeRestrict(BlockPlaceEvent event) {
+        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
+        if (cfg == null) return;
+        if (!isLocationInRegenArea(cfg, event.getBlock().getLocation())) return; // Only restrict inside regen area
+        Player player = event.getPlayer();
+        String editingId = getPlayerEditingChallenge(player);
+        if (editingId != null && editingId.equals(cfg.id)) return; // Edit mode for this challenge can place
+        if (cfg.id.equals(activeChallenges.get(player.getUniqueId()))) return; // Active challenger can place
+        event.setCancelled(true);
+        player.sendMessage(getMessage("admin.challenge-regen-enter-edit-mode"));
+    }
+
+    /**
+     * Track blocks placed by challengers (for blockBreakEnabled "only break what you placed or allow list").
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBlockPlaceInChallenge(BlockPlaceEvent event) {
+        Player player = event.getPlayer();
+        String challengeId = activeChallenges.get(player.getUniqueId());
+        if (challengeId == null) return;
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null || !cfg.blockBreakEnabled) return;
+        if (!isLocationInChallengeArea(cfg, event.getBlock().getLocation())) return;
+        String key = blockKey(event.getBlock().getLocation());
+        if (key == null) return;
+        challengePlacedBlocks.computeIfAbsent(challengeId, k -> new HashMap<>()).put(key, player.getUniqueId());
+        scriptManager.runScriptsForTrigger(cfg, key, ScriptTrigger.BLOCK_PLACE, player, event.getBlock().getLocation(), null);
+    }
+
+    /**
      * Prevents chests inside challenge regen areas from being broken during normal runs.
      * - Allowed when the player is in edit mode for that challenge.
      * - Allowed outside any challenge regen area.
@@ -8868,13 +9750,81 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         // Allow if this player is currently editing this specific challenge
         String editingId = getPlayerEditingChallenge(player);
         if (editingId != null && editingId.equals(cfg.id)) {
+            // Clean up chest data before the break: ignored, legendary, and instance contents
+            cleanupChestDataOnBreak(cfg, block);
             return;
         }
         // Otherwise, block breaking the chest
         event.setCancelled(true);
-        player.sendMessage(ChatColor.RED + "You cannot break chests inside an active challenge.");
+        boolean inActiveChallenge = activeChallenges.get(player.getUniqueId()) != null;
+        player.sendMessage(getMessage(inActiveChallenge ? "admin.challenge-regen-cannot-break-chests" : "admin.challenge-regen-cannot-break-chests-outside-edit"));
     }
-    
+
+    /**
+     * When a chest is broken (in edit mode), remove its keys from ignored/legendary sets
+     * and clear any instance chest contents for that location.
+     */
+    private void cleanupChestDataOnBreak(ChallengeConfig cfg, Block block) {
+        if (cfg == null || block == null) return;
+        // Collect keys while block is still a chest (both halves for double chest)
+        List<Block> chestBlocks = getChestBlocksForIgnore(block);
+        String canonicalKey = getCanonicalChestKey(block);
+        // Remove from ignored set (both halves)
+        if (cfg.ignoredChestKeys != null) {
+            for (Block b : chestBlocks) {
+                cfg.ignoredChestKeys.remove(chestLocationKey(b.getLocation()));
+            }
+        }
+        // Remove from legendary set (one canonical key per inventory)
+        if (cfg.legendaryChestKeys != null && canonicalKey != null) {
+            cfg.legendaryChestKeys.remove(canonicalKey);
+        }
+        // Clear instance chest contents for this chest (all players) so we don't keep orphaned data
+        Map<UUID, Map<String, ItemStack[]>> perChallenge = instanceChestContents.get(cfg.id);
+        if (perChallenge != null && canonicalKey != null) {
+            for (Map<String, ItemStack[]> perPlayer : perChallenge.values()) {
+                perPlayer.remove(canonicalKey);
+            }
+        }
+        saveChallengeToConfig(cfg);
+    }
+
+    /** Function tool: right-click block in edit mode to add a script. */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onFunctionToolInteract(PlayerInteractEvent event) {
+        scriptManager.handleFunctionToolInteract(event);
+    }
+
+    /** Run BLOCK_INTERACT scripts when a challenger right-clicks a block (not with function tool). Run early so key item gate gets event before e.g. book use cancels it. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onBlockInteractScript(PlayerInteractEvent event) {
+        scriptManager.handleBlockInteractScript(event);
+    }
+
+    /** Run REDSTONE_RECEIVER scripts when a block in a challenge receives redstone power. */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBlockPhysicsRedstoneScript(BlockPhysicsEvent event) {
+        Block block = event.getBlock();
+        ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
+        if (cfg == null || cfg.scriptNodes == null) return;
+        String key = getBlockKey(block.getLocation());
+        if (key == null) return;
+        boolean hasRedstoneReceiver = false;
+        for (ChallengeScriptNode node : cfg.scriptNodes) {
+            if (node.blockKey().equals(key) && node.trigger == ScriptTrigger.REDSTONE_RECEIVER) {
+                hasRedstoneReceiver = true;
+                break;
+            }
+        }
+        if (!hasRedstoneReceiver) return;
+        if (block.getBlockPower() == 0 && !block.isBlockIndirectlyPowered()) return;
+        String cooldownKey = cfg.id + ":" + key;
+        long now = System.currentTimeMillis();
+        if (now - scriptRedstoneCooldowns.getOrDefault(cooldownKey, 0L) < 1000L) return;
+        scriptRedstoneCooldowns.put(cooldownKey, now);
+        scriptManager.runScriptsForTrigger(cfg, key, ScriptTrigger.REDSTONE_RECEIVER, null, block.getLocation(), null);
+    }
+
     /**
      * Event handler to protect blocks from being broken in challenge areas.
      * Only blocks blocks if player is not in the challenge (to allow normal gameplay).
@@ -8970,6 +9920,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     @EventHandler(priority = EventPriority.LOW)
+    public void onScriptGuiInventoryClick(InventoryClickEvent event) {
+        scriptManager.handleScriptGuiClick(event);
+    }
+
+    @EventHandler(priority = EventPriority.LOW)
     public void onLoottableInventoryClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) return;
         String title = event.getView().getTitle();
@@ -8978,7 +9933,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (ctx == null) return;
         int slot = event.getRawSlot();
         if (slot != event.getSlot()) return;
-        int backSlot = event.getInventory().getSize() - 1;
+        int backSlot = (ctx.screen == LootTableScreen.LIST) ? LOOTTABLE_LIST_BACK_SLOT : (event.getInventory().getSize() - 1);
 
         // Handle the Back button for all loot table GUIs (including EDIT_CONTENTS).
         if (slot == backSlot) {
@@ -9032,9 +9987,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
             case LIST -> {
-                if (ctx.listOrder != null && slot >= 0 && slot < ctx.listOrder.size()) {
-                    String id = ctx.listOrder.get(slot);
-                    openLoottableOptionsGui(player, id);
+                if (slot == LOOTTABLE_LIST_PREV_SLOT && ctx.listPage > 0) {
+                    openLoottableListGui(player, ctx.listPage - 1);
+                } else if (slot == LOOTTABLE_LIST_NEXT_SLOT) {
+                    int totalPages = Math.max(1, (ctx.listOrder.size() + LOOTTABLE_LIST_CONTENT_PER_PAGE - 1) / LOOTTABLE_LIST_CONTENT_PER_PAGE);
+                    if (ctx.listPage < totalPages - 1) {
+                        openLoottableListGui(player, ctx.listPage + 1);
+                    }
+                } else if (slot >= 0 && slot < LOOTTABLE_LIST_CONTENT_PER_PAGE && ctx.listOrder != null) {
+                    int idx = ctx.listPage * LOOTTABLE_LIST_CONTENT_PER_PAGE + slot;
+                    if (idx >= 0 && idx < ctx.listOrder.size()) {
+                        String id = ctx.listOrder.get(idx);
+                        openLoottableOptionsGui(player, id);
+                    }
                 }
             }
             case OPTIONS -> {
@@ -9053,7 +10018,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         t.contents = newContents;
                     }
                     saveLoottables();
-                    player.sendMessage(ChatColor.GREEN + "Size set to " + t.size.name());
+                    player.sendMessage(getMessage("loottable.size-set", "size", t.size.name()));
                     openLoottableOptionsGui(player, ctx.loottableId);
                 } else if (slot == 2) {
                     openLoottableEditContentsGui(player, ctx.loottableId);
@@ -9063,18 +10028,23 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     openLoottableAssignGui(player, ctx.loottableId);
                 } else if (slot == 8) {
                     openLoottableDeleteConfirmGui(player, ctx.loottableId);
-                } else if (slot == 11) {
+                } else if (slot == 10) {
                     startLoottableIconChange(player, ctx.loottableId);
-                } else if (slot == 13) {
+                } else if (slot == 12) {
                     ItemStack inHand = player.getInventory().getItemInMainHand();
                     if (inHand == null || inHand.getType().isAir()) {
-                        player.sendMessage(ChatColor.RED + "Hold an item in your main hand to use as the icon.");
+                        player.sendMessage(getMessage("loottable.hold-item-for-icon"));
                     } else {
                         t.iconMaterial = inHand.getType();
                         saveLoottables();
-                        player.sendMessage(ChatColor.GREEN + "Loot table icon updated to " + t.iconMaterial.name() + ".");
+                        player.sendMessage(getMessage("loottable.icon-updated", "material", t.iconMaterial.name()));
                         openLoottableOptionsGui(player, ctx.loottableId);
                     }
+                } else if (slot == 14) {
+                    t.lootType = (t.lootType == LootTableType.LEGENDARY) ? LootTableType.NORMAL : LootTableType.LEGENDARY;
+                    saveLoottables();
+                    player.sendMessage(getMessage("loottable.loot-type-set", "type", t.lootType.name()));
+                    openLoottableOptionsGui(player, ctx.loottableId);
                 }
             }
             case DELETE_CONFIRM -> {
@@ -9084,7 +10054,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     saveLoottables();
                     loottableGuiContext.remove(player.getUniqueId());
                     player.closeInventory();
-                    player.sendMessage(ChatColor.GREEN + "Loot table deleted.");
+                    player.sendMessage(getMessage("loottable.deleted"));
                     openLoottableMainGui(player);
                 } else if (slot == 15) {
                     openLoottableOptionsGui(player, ctx.loottableId);
@@ -9141,11 +10111,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         event.setCancelled(true);
         String locationKey = getCanonicalChestKey(block);
         if (locationKey == null) return;
+        boolean legendary = isChestLegendary(cfg, locationKey);
+        LootTableType wantedType = legendary ? LootTableType.LEGENDARY : LootTableType.NORMAL;
         int size = chestHolder.getInventory().getSize();
         List<LootTableData> singleTables = new ArrayList<>();
         List<LootTableData> doubleTables = new ArrayList<>();
         for (LootTableData t : loottables.values()) {
             if (!t.assignedChallengeIds.contains(challengeId)) continue;
+            if (t.lootType != wantedType) continue;
             if (t.size == LootTableSize.SINGLE) singleTables.add(t);
             else doubleTables.add(t);
         }
@@ -9233,6 +10206,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onScriptConfigureChat(AsyncPlayerChatEvent event) {
+        if (!scriptManager.isAwaitingScriptChat(event.getPlayer())) return;
+        event.setCancelled(true);
+        String msg = event.getMessage();
+        Player player = event.getPlayer();
+        Bukkit.getScheduler().runTask(this, () -> scriptManager.handleScriptChatInput(player, msg));
+    }
+
     @EventHandler
     public void onLoottableRenameChat(AsyncPlayerChatEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
@@ -9243,13 +10225,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (iconLoottableId != null) {
             event.setCancelled(true);
             if (msg.equalsIgnoreCase("cancel")) {
-                event.getPlayer().sendMessage(ChatColor.GRAY + "Icon change cancelled.");
+                event.getPlayer().sendMessage(getMessage("loottable.icon-cancelled"));
                 Bukkit.getScheduler().runTask(this, () -> openLoottableOptionsGui(event.getPlayer(), iconLoottableId));
                 return;
             }
             Material mat = parseMaterialIcon(msg);
             if (mat == null) {
-                event.getPlayer().sendMessage(ChatColor.RED + "Unknown item: \"" + msg + "\". Use a valid name (e.g. ender_pearl, diamond).");
+                event.getPlayer().sendMessage(getMessage("loottable.unknown-item", "item", msg));
                 loottableIconPending.put(uuid, iconLoottableId); // put back so they can try again
                 return;
             }
@@ -9258,7 +10240,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 if (t != null) {
                     t.iconMaterial = mat;
                     saveLoottables();
-                    event.getPlayer().sendMessage(ChatColor.GREEN + "Loot table icon set to " + mat.name() + ".");
+                    event.getPlayer().sendMessage(getMessage("loottable.icon-set", "material", mat.name()));
                     openLoottableOptionsGui(event.getPlayer(), iconLoottableId);
                 }
             });
@@ -9270,7 +10252,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (loottableId == null) return;
         event.setCancelled(true);
         if (msg.equalsIgnoreCase("cancel")) {
-            event.getPlayer().sendMessage(ChatColor.GRAY + "Rename cancelled.");
+            event.getPlayer().sendMessage(getMessage("loottable.rename-cancelled"));
             return;
         }
         Bukkit.getScheduler().runTask(this, () -> {
@@ -9278,7 +10260,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             if (t != null) {
                 t.name = msg.isEmpty() ? "Unnamed" : msg;
                 saveLoottables();
-                event.getPlayer().sendMessage(ChatColor.GREEN + "Renamed to: " + t.name);
+                event.getPlayer().sendMessage(getMessage("loottable.renamed-to", "name", t.name));
                 openLoottableOptionsGui(event.getPlayer(), loottableId);
             }
         });
@@ -9291,8 +10273,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         // Clean up edit mode if player was editing
         String editingChallengeId = null;
-        for (Map.Entry<String, UUID> entry : challengeEditors.entrySet()) {
-            if (entry.getValue().equals(uuid)) {
+        for (Map.Entry<String, Set<UUID>> entry : challengeEditors.entrySet()) {
+            if (entry.getValue() != null && entry.getValue().contains(uuid)) {
                 editingChallengeId = entry.getKey();
                 break;
             }
@@ -9301,58 +10283,37 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (editingChallengeId != null) {
             ChallengeConfig cfg = challenges.get(editingChallengeId);
             
-            // Store original location for reconnection (before cleanup)
             Location originalLoc = editorOriginalLocations.get(uuid);
             if (originalLoc != null) {
                 editorDisconnectLocations.put(uuid, originalLoc.clone());
             }
             
             if ("save".equalsIgnoreCase(editModeDisconnectAction)) {
-                // Save changes on disconnect
                 if (cfg != null) {
-                    // Recapture initial state if regeneration area exists
                     if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
                         captureInitialState(cfg);
                     }
-                    
-                    // Save challenge config
                     saveChallengeToConfig(cfg);
                 }
-                
-                // Clean up edit mode
                 editorOriginalLocations.remove(uuid);
-                challengeEditors.remove(editingChallengeId);
-                challengeEditBackups.remove(editingChallengeId);
-                challengeEditStateBackups.remove(editingChallengeId);
-                
+                removeEditorFromChallenge(uuid, editingChallengeId);
                 getLogger().info("Player " + player.getName() + " disconnected while editing challenge '" + editingChallengeId + "'. Edit mode saved and changes kept.");
             } else {
-                // Cancel edit mode and restore (default behavior)
                 ChallengeConfig backup = challengeEditBackups.get(editingChallengeId);
-                
                 if (backup != null && cfg != null) {
-                    // Restore challenge config from backup
                     restoreChallengeConfig(cfg, backup);
                     saveChallengeToConfig(cfg);
-                    
-                    // Restore block states if they were backed up
                     List<BlockState> stateBackup = challengeEditStateBackups.get(editingChallengeId);
                     if (stateBackup != null) {
                         challengeInitialStates.put(editingChallengeId, new ArrayList<>(stateBackup));
                     }
                 }
-                
-                // Clean up edit mode
                 editorOriginalLocations.remove(uuid);
-                challengeEditors.remove(editingChallengeId);
-                challengeEditBackups.remove(editingChallengeId);
-                challengeEditStateBackups.remove(editingChallengeId);
-                
+                removeEditorFromChallenge(uuid, editingChallengeId);
                 getLogger().info("Player " + player.getName() + " disconnected while editing challenge '" + editingChallengeId + "'. Edit mode cancelled and challenge restored.");
             }
             
-            // Process queue if there are players waiting
-            if (!isChallengeLocked(editingChallengeId)) {
+            if (!isChallengeBeingEdited(editingChallengeId) && !isChallengeLocked(editingChallengeId)) {
                 processQueue(editingChallengeId);
             }
         }
@@ -9442,7 +10403,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 public void run() {
                     if (player.isOnline()) {
                         player.teleport(editModeLocation);
-                        player.sendMessage(ChatColor.GREEN + "You have been returned to your location before entering edit mode.");
+                        player.sendMessage(getMessage("admin.challenge-edit-returned-before-edit"));
                     }
                 }
             }.runTaskLater(this, 5L); // 5 ticks delay to ensure world is loaded
@@ -9483,7 +10444,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             public void run() {
                                 if (player.isOnline()) {
                                     player.teleport(teleportLoc);
-                                    player.sendMessage(ChatColor.GREEN + "You reconnected! Welcome back to the challenge.");
+                                    player.sendMessage(getMessage("admin.challenge-edit-reconnected-welcome"));
                                 }
                             }
                         }.runTaskLater(this, 1L);
@@ -9581,6 +10542,29 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         markEverCompleted(cfg, uuid);
     }
 
+    /**
+     * Run MOB_DEATH scripts when a mob dies near a script block in a challenge.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onMobDeathScript(EntityDeathEvent event) {
+        LivingEntity entity = event.getEntity();
+        if (entity == null) return;
+        Location loc = entity.getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || cfg.scriptNodes == null) return;
+        Player killer = entity.getKiller();
+        int ex = loc.getBlockX(), ey = loc.getBlockY(), ez = loc.getBlockZ();
+        String worldName = loc.getWorld() != null ? loc.getWorld().getName() : null;
+        if (worldName == null) return;
+        for (ChallengeScriptNode node : cfg.scriptNodes) {
+            if (node.trigger != ScriptTrigger.MOB_DEATH) continue;
+            if (!node.worldName.equals(worldName)) continue;
+            if (Math.abs(node.blockX - ex) > 5 || Math.abs(node.blockY - ey) > 5 || Math.abs(node.blockZ - ez) > 5) continue;
+            Location nodeLoc = new Location(loc.getWorld(), node.blockX + 0.5, node.blockY + 0.5, node.blockZ + 0.5);
+            scriptManager.runScriptsForTrigger(cfg, node.blockKey(), ScriptTrigger.MOB_DEATH, killer, nodeLoc, entity);
+        }
+    }
+
     @EventHandler(ignoreCancelled = true)
     public void onNpcRightClick(PlayerInteractAtEntityEvent event) {
         if (event.getHand() != EquipmentSlot.HAND) return;
@@ -9636,6 +10620,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         
         if (!isGateKeeper) return;
+
+        event.setCancelled(true); // Prevent opening the book when using it on the GateKeeper
 
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
@@ -10718,7 +11704,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
                 
                 if (isNewRecord[0] && cfg.completionType == CompletionType.SPEED) {
-                    player.sendMessage("§6§lNEW RECORD! §rYou received a bonus multiplier!");
+                    player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("rewards-cmd.new-record-bonus")));
                 }
                 
                 if (rewardMessages.isEmpty()) {
@@ -11276,7 +12262,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         World world = cfg.challengeCorner1.getWorld();
         if (world == null) {
-            player.sendMessage(ChatColor.RED + "Error: Challenge area world is not loaded!");
+            player.sendMessage(getMessage("admin.challenge-area-world-not-loaded"));
             return;
         }
         
@@ -11357,7 +12343,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
         
-        player.sendMessage(ChatColor.GREEN + "Barrier box created with " + barrierCount + " barrier blocks.");
+        player.sendMessage(getMessage("admin.challenge-barrier-created", "count", String.valueOf(barrierCount)));
     }
     
     /**
@@ -11373,7 +12359,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         
         World world = cfg.challengeCorner1.getWorld();
         if (world == null) {
-            player.sendMessage(ChatColor.RED + "Error: Challenge area world is not loaded!");
+            player.sendMessage(getMessage("admin.challenge-area-world-not-loaded"));
             return;
         }
         
@@ -11453,40 +12439,31 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
         
-        player.sendMessage(ChatColor.GREEN + "Removed " + removedCount + " barrier blocks.");
+        player.sendMessage(getMessage("admin.challenge-barrier-removed", "count", String.valueOf(removedCount)));
     }
 
     /**
-     * Helper method to schedule the next batch of block capture (recursive batching)
+     * Schedules next batch of block capture for one regen box; when box is complete calls whenDone.run() (for multi-area chaining).
      */
-    private void scheduleNextCaptureBatch(String challengeId, World world, List<BlockState> states, 
-                                          int[] currentX, int[] currentY, int[] currentZ,
-                                          int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
-                                          int[] failedBlocks, long timeBudget, java.util.function.Consumer<Boolean> callback) {
+    private void scheduleNextCaptureBatchRunnable(String challengeId, World world, List<BlockState> states,
+                                                  int[] currentX, int[] currentY, int[] currentZ,
+                                                  int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
+                                                  int[] failedBlocks, long timeBudget, Runnable whenDone) {
         new BukkitRunnable() {
             @Override
             public void run() {
                 long startTime = System.nanoTime();
-                
-                // Process blocks until we hit time budget or finish
                 while (currentX[0] <= maxX && (System.nanoTime() - startTime) < timeBudget) {
                     try {
                         Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
                         BlockState state = block.getState();
-                        
-                        // For containers, capture NBT data (WorldEdit-style) for exact restoration
-                        // This is more reliable than BlockState snapshots
                         if (state instanceof Container container) {
                             try {
                                 String locKey = currentX[0] + "," + currentY[0] + "," + currentZ[0];
-                                
-                                // Try to capture NBT data first (most reliable)
                                 byte[] nbtData = captureContainerNBT(block);
                                 if (nbtData != null && nbtData.length > 0) {
                                     challengeContainerNBT.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, nbtData);
-                                    getLogger().info("[CONTAINER DEBUG] Stored container NBT at " + locKey + " for challenge '" + challengeId + "' (" + nbtData.length + " bytes)");
                                 } else {
-                                    // Fallback: store inventory items if NBT capture fails
                                     org.bukkit.inventory.Inventory inv = container.getInventory();
                                     if (inv != null) {
                                         ItemStack[] items = new ItemStack[inv.getSize()];
@@ -11496,30 +12473,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                             if (item != null && item.getType() != Material.AIR) {
                                                 items[i] = item.clone();
                                                 hasItems = true;
-                                            } else {
-                                                items[i] = null;
-                                            }
+                                            } else items[i] = null;
                                         }
-                                        challengeContainerInventories.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, items);
-                                        long itemCount = java.util.Arrays.stream(items).filter(item -> item != null && item.getType() != Material.AIR).count();
-                                        if (hasItems) {
-                                            getLogger().info("[CONTAINER DEBUG] Stored container inventory (fallback) at " + locKey + " for challenge '" + challengeId + "' (" + itemCount + " items)");
-                                        }
+                                        if (hasItems) challengeContainerInventories.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, items);
                                     }
                                 }
-                            } catch (Exception invException) {
-                                // If container access fails, log but continue - state will still be captured
-                                getLogger().fine("Could not access container at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " (continuing anyway)");
-                            }
+                            } catch (Exception ignored) {}
                         }
-                        
                         states.add(state);
                     } catch (Exception e) {
                         failedBlocks[0]++;
-                        getLogger().warning("Error capturing block state at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " for challenge '" + challengeId + "': " + e.getMessage());
                     }
-                    
-                    // Move to next block
                     currentZ[0]++;
                     if (currentZ[0] > maxZ) {
                         currentZ[0] = minZ;
@@ -11530,32 +12494,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         }
                     }
                 }
-                
-                // Check if we're done
-                if (currentX[0] > maxX) {
-                    // Done capturing all blocks
-                    challengeInitialStates.put(challengeId, states);
-                    if (failedBlocks[0] > 0) {
-                        getLogger().warning("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + failedBlocks[0] + " failed)");
-                    } else {
-                        getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks)");
-                    }
-                    if (callback != null) {
-                        // Ensure callback runs on main thread
-                        final java.util.function.Consumer<Boolean> finalCallback = callback;
-                        getLogger().fine("Calling capture callback for challenge '" + challengeId + "'");
-                        new BukkitRunnable() {
-                            @Override
-                            public void run() {
-                                getLogger().fine("Executing capture callback for challenge '" + challengeId + "'");
-                                finalCallback.accept(true);
-                            }
-                        }.runTask(ConradChallengesPlugin.this);
-                    }
-                } else {
-                    // More blocks to process, schedule next batch (recursive call)
-                    scheduleNextCaptureBatch(challengeId, world, states, currentX, currentY, currentZ, minX, maxX, minY, maxY, minZ, maxZ, failedBlocks, timeBudget, callback);
-                }
+                if (currentX[0] > maxX) whenDone.run();
+                else scheduleNextCaptureBatchRunnable(challengeId, world, states, currentX, currentY, currentZ, minX, maxX, minY, maxY, minZ, maxZ, failedBlocks, timeBudget, whenDone);
             }
         }.runTaskLater(this, 1L);
     }
@@ -11805,69 +12745,67 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
     
     /**
-     * Captures the initial state of all blocks in the regeneration area for a challenge.
-     * This should be called once when the regeneration area is first set.
-     * Runs asynchronously to prevent server lag.
-     * 
-     * @param cfg The challenge configuration
-     * @param callback Optional callback to run on completion (on main thread). Receives true if successful, false otherwise.
+     * Captures the initial state of all blocks in the regeneration area(s) for a challenge.
+     * With multiple regen areas, captures each box in sequence and merges into one state list;
+     * regeneration then restores all blocks from that list (smooth, one pass).
+     * Runs in batches on main thread to avoid lag.
      */
     private void captureInitialState(ChallengeConfig cfg, java.util.function.Consumer<Boolean> callback) {
-        if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) {
-            if (callback != null) {
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        callback.accept(false);
-                    }
-                }.runTask(ConradChallengesPlugin.this);
+        // Build list of regen boxes (multiple areas or legacy single)
+        List<Location[]> boxes = new ArrayList<>();
+        if (cfg.regenerationAreas != null && !cfg.regenerationAreas.isEmpty()) {
+            for (Location[] c : cfg.regenerationAreas) {
+                if (c != null && c.length >= 2) boxes.add(c);
             }
+        }
+        if (boxes.isEmpty() && cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
+            boxes.add(new Location[]{ cfg.regenerationCorner1, cfg.regenerationCorner2 });
+        }
+        if (boxes.isEmpty()) {
+            if (callback != null) new BukkitRunnable() { @Override public void run() { callback.accept(false); } }.runTask(ConradChallengesPlugin.this);
             return;
         }
-        
-        if (cfg.regenerationCorner1.getWorld() == null || 
-            !cfg.regenerationCorner1.getWorld().equals(cfg.regenerationCorner2.getWorld())) {
-            getLogger().warning("Regeneration area for challenge '" + cfg.id + "' has mismatched worlds!");
-            if (callback != null) {
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        callback.accept(false);
-                    }
-                }.runTask(ConradChallengesPlugin.this);
-            }
-            return;
-        }
-        
-        final World world = cfg.regenerationCorner1.getWorld();
         final String challengeId = cfg.id;
-        
-        // Clear old container inventories and NBT data before recapturing to avoid mixing old/new data
         challengeContainerInventories.remove(challengeId);
         challengeContainerNBT.remove(challengeId);
-        
-        // Calculate bounding box
-        int minX = Math.min(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
-        int maxX = Math.max(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
+        final List<BlockState> allStates = new ArrayList<>();
+        final java.util.function.Consumer<Boolean> finalCallback = callback;
+        Runnable whenAllDone = () -> {
+            challengeInitialStates.put(challengeId, allStates);
+            if (boxes.size() > 1) getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + allStates.size() + " blocks across " + boxes.size() + " regen areas)");
+            if (finalCallback != null) new BukkitRunnable() { @Override public void run() { finalCallback.accept(true); } }.runTask(ConradChallengesPlugin.this);
+        };
+        captureNextRegenBox(cfg, boxes, 0, allStates, whenAllDone);
+    }
+
+    /** Captures one regen box, then runs whenDone (chain for multi-area). */
+    private void captureNextRegenBox(ChallengeConfig cfg, List<Location[]> boxes, int boxIndex, List<BlockState> allStates, Runnable whenAllDone) {
+        if (boxIndex >= boxes.size()) {
+            whenAllDone.run();
+            return;
+        }
+        Location[] corners = boxes.get(boxIndex);
+        Location c1 = corners[0], c2 = corners[1];
+        if (c1.getWorld() == null || !c1.getWorld().equals(c2.getWorld())) {
+            getLogger().warning("Regen area " + (boxIndex + 1) + " for challenge '" + cfg.id + "' has mismatched worlds; skipping.");
+            captureNextRegenBox(cfg, boxes, boxIndex + 1, allStates, whenAllDone);
+            return;
+        }
+        final World world = c1.getWorld();
+        final String challengeId = cfg.id;
+        int minX = Math.min(c1.getBlockX(), c2.getBlockX());
+        int maxX = Math.max(c1.getBlockX(), c2.getBlockX());
         int minY, maxY;
         if (cfg.regenerationAutoExtendY) {
-            // Auto-extend from bedrock to build height
             minY = world.getMinHeight();
-            maxY = world.getMaxHeight() - 1; // getMaxHeight() is exclusive
+            maxY = world.getMaxHeight() - 1;
         } else {
-            // Use Y coordinates from corners
-            minY = Math.min(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
-            maxY = Math.max(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
+            minY = Math.min(c1.getBlockY(), c2.getBlockY());
+            maxY = Math.max(c1.getBlockY(), c2.getBlockY());
         }
-        int minZ = Math.min(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
-        int maxZ = Math.max(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
-        
-        // Calculate total blocks to process
-        final int totalBlocks = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
-        
-        // Process in batches on MAIN THREAD ONLY (required for tile entities)
-        // All block access (getBlockAt, getState) must happen on server thread
-        final List<BlockState> states = new ArrayList<>();
+        int minZ = Math.min(c1.getBlockZ(), c2.getBlockZ());
+        int maxZ = Math.max(c1.getBlockZ(), c2.getBlockZ());
+        final Runnable whenThisBoxDone = () -> captureNextRegenBox(cfg, boxes, boxIndex + 1, allStates, whenAllDone);
         final int[] currentX = {minX};
         final int[] currentY = {minY};
         final int[] currentZ = {minZ};
@@ -11893,14 +12831,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             timeBudget = 3_000_000L;
         }
         
-        getLogger().info("Capturing initial state for challenge '" + challengeId + "' (estimated " + estimatedBlocks + " blocks, time budget: " + (timeBudget / 1_000_000) + "ms per tick)");
+        if (boxes.size() == 1) getLogger().info("Capturing initial state for challenge '" + challengeId + "' (estimated " + estimatedBlocks + " blocks, time budget: " + (timeBudget / 1_000_000) + "ms per tick)");
         
         new BukkitRunnable() {
             @Override
             public void run() {
                 long startTime = System.nanoTime();
-                int processedThisTick = 0;
-                
                 // Process blocks until we hit time budget or finish
                 while (currentX[0] <= maxX && (System.nanoTime() - startTime) < timeBudget) {
                     try {
@@ -11946,15 +12882,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             }
                         }
                         
-                        states.add(state);
+                        allStates.add(state);
                     } catch (Exception e) {
                         failedBlocks[0]++;
                         getLogger().warning("Error capturing block state at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " for challenge '" + challengeId + "': " + e.getMessage());
                     }
-                    
-                    processedThisTick++;
-                    
-                    // Move to next block
                     currentZ[0]++;
                     if (currentZ[0] > maxZ) {
                         currentZ[0] = minZ;
@@ -11965,72 +12897,47 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         }
                     }
                 }
-                
-                // Check if we're done
                 if (currentX[0] > maxX) {
-                    // Done capturing all blocks
-                    challengeInitialStates.put(challengeId, states);
-                    Map<String, ItemStack[]> containerInvMap = challengeContainerInventories.get(challengeId);
-                    int containerCount = containerInvMap != null ? containerInvMap.size() : 0;
-                    if (failedBlocks[0] > 0) {
-                        getLogger().warning("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + failedBlocks[0] + " failed, " + containerCount + " container inventories stored)");
-                    } else {
-                        getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + containerCount + " container inventories stored)");
+                    if (boxIndex == 0 && boxes.size() == 1) {
+                        if (failedBlocks[0] > 0) getLogger().warning("Captured initial state for challenge '" + challengeId + "' (" + allStates.size() + " blocks, " + failedBlocks[0] + " failed)");
+                        else getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + allStates.size() + " blocks)");
                     }
-                    if (callback != null) {
-                        callback.accept(true);
-                    }
+                    whenThisBoxDone.run();
                 } else {
-                    // More blocks to process, schedule next batch (create new runnable instance)
                     new BukkitRunnable() {
                         @Override
                         public void run() {
                             long startTime = System.nanoTime();
-                            
-                            // Process blocks until we hit time budget or finish
                             while (currentX[0] <= maxX && (System.nanoTime() - startTime) < timeBudget) {
                                 try {
                                     Block block = world.getBlockAt(currentX[0], currentY[0], currentZ[0]);
                                     BlockState state = block.getState();
-                                    
-                                    // For containers, store inventory items separately since BlockState snapshots don't reliably preserve them
-                                    // This is done in a separate try-catch to avoid breaking the entire capture if one container fails
                                     if (state instanceof Container container) {
                                         try {
                                             org.bukkit.inventory.Inventory inv = container.getInventory();
                                             if (inv != null) {
-                                                // Store inventory items separately - BlockState snapshots don't preserve container inventories
                                                 ItemStack[] items = new ItemStack[inv.getSize()];
                                                 boolean hasItems = false;
                                                 for (int i = 0; i < inv.getSize(); i++) {
                                                     ItemStack item = inv.getItem(i);
                                                     if (item != null && item.getType() != Material.AIR) {
-                                                        items[i] = item.clone(); // Clone to preserve the item
+                                                        items[i] = item.clone();
                                                         hasItems = true;
-                                                    } else {
-                                                        items[i] = null;
-                                                    }
+                                                    } else items[i] = null;
                                                 }
-                                                
-                                                // Only store if there are items (saves memory)
                                                 if (hasItems) {
                                                     String locKey = currentX[0] + "," + currentY[0] + "," + currentZ[0];
                                                     challengeContainerInventories.computeIfAbsent(challengeId, k -> new HashMap<>()).put(locKey, items);
                                                 }
                                             }
                                         } catch (Exception invException) {
-                                            // If inventory access fails, log but continue - state will still be captured
-                                            getLogger().fine("Could not access inventory for container at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " (continuing anyway)");
+                                            getLogger().fine("Could not access inventory for container at " + currentX[0] + "," + currentY[0] + "," + currentZ[0]);
                                         }
                                     }
-                                    
-                                    states.add(state);
+                                    allStates.add(state);
                                 } catch (Exception e) {
                                     failedBlocks[0]++;
-                                    getLogger().warning("Error capturing block state at " + currentX[0] + "," + currentY[0] + "," + currentZ[0] + " for challenge '" + challengeId + "': " + e.getMessage());
                                 }
-                                
-                                // Move to next block
                                 currentZ[0]++;
                                 if (currentZ[0] > maxZ) {
                                     currentZ[0] = minZ;
@@ -12041,32 +12948,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                     }
                                 }
                             }
-                            
-                            // Check if we're done
-                            if (currentX[0] > maxX) {
-                                // Done capturing all blocks
-                                challengeInitialStates.put(challengeId, states);
-                                if (failedBlocks[0] > 0) {
-                                    getLogger().warning("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks, " + failedBlocks[0] + " failed)");
-                                } else {
-                                    getLogger().info("Captured initial state for challenge '" + challengeId + "' (" + states.size() + " blocks)");
-                                }
-                                if (callback != null) {
-                                    // Ensure callback runs on main thread
-                                    final java.util.function.Consumer<Boolean> finalCallback = callback;
-                                    getLogger().fine("Calling capture callback for challenge '" + challengeId + "' (from initial batch)");
-                                    new BukkitRunnable() {
-                                        @Override
-                                        public void run() {
-                                            getLogger().fine("Executing capture callback for challenge '" + challengeId + "' (from initial batch)");
-                                            finalCallback.accept(true);
-                                        }
-                                    }.runTask(ConradChallengesPlugin.this);
-                                }
-                            } else {
-                                // More blocks to process, schedule next batch (create new instance)
-                                scheduleNextCaptureBatch(challengeId, world, states, currentX, currentY, currentZ, minX, maxX, minY, maxY, minZ, maxZ, failedBlocks, timeBudget, callback);
-                            }
+                            if (currentX[0] > maxX) whenThisBoxDone.run();
+                            else scheduleNextCaptureBatchRunnable(challengeId, world, allStates, currentX, currentY, currentZ, minX, maxX, minY, maxY, minZ, maxZ, failedBlocks, timeBudget, whenThisBoxDone);
                         }
                     }.runTaskLater(ConradChallengesPlugin.this, 1L);
                 }
@@ -12642,7 +13525,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) {
             return; // No regeneration area set
         }
-        
+        challengePlacedBlocks.remove(cfg.id);
+
         List<BlockState> states = challengeInitialStates.get(cfg.id);
         if (states == null || states.isEmpty()) {
             // Cannot regenerate without initial state - don't block the main thread!
@@ -12737,11 +13621,48 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         clone.maxPartySize = original.maxPartySize;
         clone.timeLimitSeconds = original.timeLimitSeconds;
         clone.timeLimitWarnings = new ArrayList<>(original.timeLimitWarnings);
+        clone.regenerationAreas = new ArrayList<>();
+        if (original.regenerationAreas != null) {
+            for (Location[] corners : original.regenerationAreas) {
+                if (corners != null && corners.length >= 2) {
+                    clone.regenerationAreas.add(new Location[]{ corners[0].clone(), corners[1].clone() });
+                } else {
+                    clone.regenerationAreas.add(null);
+                }
+            }
+        }
         clone.regenerationCorner1 = original.regenerationCorner1 != null ? original.regenerationCorner1.clone() : null;
         clone.regenerationCorner2 = original.regenerationCorner2 != null ? original.regenerationCorner2.clone() : null;
         clone.regenerationAutoExtendY = original.regenerationAutoExtendY;
+        clone.challengeAreas = new ArrayList<>();
+        if (original.challengeAreas != null) {
+            for (Location[] corners : original.challengeAreas) {
+                if (corners != null && corners.length >= 2) {
+                    clone.challengeAreas.add(new Location[]{ corners[0].clone(), corners[1].clone() });
+                } else {
+                    clone.challengeAreas.add(null);
+                }
+            }
+        }
+        clone.challengeCorner1 = original.challengeCorner1 != null ? original.challengeCorner1.clone() : null;
+        clone.challengeCorner2 = original.challengeCorner2 != null ? original.challengeCorner2.clone() : null;
         clone.blockedItems = original.blockedItems != null ? new HashSet<>(original.blockedItems) : new HashSet<>();
         clone.ignoredChestKeys = original.ignoredChestKeys != null ? new HashSet<>(original.ignoredChestKeys) : new HashSet<>();
+        clone.legendaryChestKeys = original.legendaryChestKeys != null ? new HashSet<>(original.legendaryChestKeys) : new HashSet<>();
+        clone.scriptNodes = new ArrayList<>();
+        if (original.scriptNodes != null) {
+            for (ChallengeScriptNode n : original.scriptNodes) {
+                ChallengeScriptNode copy = new ChallengeScriptNode(n.worldName, n.blockX, n.blockY, n.blockZ);
+                copy.trigger = n.trigger;
+                copy.functionType = n.functionType;
+                copy.functionData.putAll(n.functionData);
+                for (Map<String, Object> c : n.conditions) {
+                    copy.conditions.add(new HashMap<>(c));
+                }
+                clone.scriptNodes.add(copy);
+            }
+        }
+        clone.passThroughBlockKeys = original.passThroughBlockKeys != null ? new HashSet<>(original.passThroughBlockKeys) : new HashSet<>();
         return clone;
     }
 
@@ -12795,11 +13716,40 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         target.timeLimitSeconds = backup.timeLimitSeconds;
         target.timeLimitWarnings.clear();
         target.timeLimitWarnings.addAll(backup.timeLimitWarnings);
+        target.regenerationAreas.clear();
+        if (backup.regenerationAreas != null) {
+            for (Location[] c : backup.regenerationAreas) {
+                if (c != null && c.length >= 2) target.regenerationAreas.add(new Location[]{ c[0].clone(), c[1].clone() });
+            }
+        }
         target.regenerationCorner1 = backup.regenerationCorner1 != null ? backup.regenerationCorner1.clone() : null;
         target.regenerationCorner2 = backup.regenerationCorner2 != null ? backup.regenerationCorner2.clone() : null;
         target.regenerationAutoExtendY = backup.regenerationAutoExtendY;
+        target.challengeAreas.clear();
+        if (backup.challengeAreas != null) {
+            for (Location[] c : backup.challengeAreas) {
+                if (c != null && c.length >= 2) target.challengeAreas.add(new Location[]{ c[0].clone(), c[1].clone() });
+            }
+        }
+        target.challengeCorner1 = backup.challengeCorner1 != null ? backup.challengeCorner1.clone() : null;
+        target.challengeCorner2 = backup.challengeCorner2 != null ? backup.challengeCorner2.clone() : null;
         target.blockedItems = backup.blockedItems != null ? new HashSet<>(backup.blockedItems) : new HashSet<>();
         target.ignoredChestKeys = backup.ignoredChestKeys != null ? new HashSet<>(backup.ignoredChestKeys) : new HashSet<>();
+        target.legendaryChestKeys = backup.legendaryChestKeys != null ? new HashSet<>(backup.legendaryChestKeys) : new HashSet<>();
+        target.scriptNodes.clear();
+        if (backup.scriptNodes != null) {
+            for (ChallengeScriptNode n : backup.scriptNodes) {
+                ChallengeScriptNode copy = new ChallengeScriptNode(n.worldName, n.blockX, n.blockY, n.blockZ);
+                copy.trigger = n.trigger;
+                copy.functionType = n.functionType;
+                copy.functionData.putAll(n.functionData);
+                for (Map<String, Object> c : n.conditions) {
+                    copy.conditions.add(new HashMap<>(c));
+                }
+                target.scriptNodes.add(copy);
+            }
+        }
+        target.passThroughBlockKeys = backup.passThroughBlockKeys != null ? new HashSet<>(backup.passThroughBlockKeys) : new HashSet<>();
     }
     
     /**
@@ -12944,13 +13894,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (spawnLocation != null) {
             player.teleport(spawnLocation);
             giveBackBlockedItemOverflow(player, challengeId);
-            player.sendMessage(ChatColor.RED + "You disconnected from the challenge. You have been returned to spawn.");
+            player.sendMessage(getMessage("admin.challenge-disconnect-returned-to-spawn"));
         } else {
             // Fallback to challenge destination if spawn not set
             if (cfg.destination != null) {
                 player.teleport(cfg.destination);
                 giveBackBlockedItemOverflow(player, challengeId);
-                player.sendMessage(ChatColor.RED + "You disconnected from the challenge.");
+                player.sendMessage(getMessage("admin.challenge-disconnect-no-return"));
             }
         }
     }
@@ -13075,8 +14025,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 ChallengeConfig cfg = challenges.get(challengeId);
                 if (cfg == null) continue;
                 
-                // Check if spawn location is in this challenge's regeneration area
-                if (!isLocationInRegenerationArea(spawnLocation, cfg)) {
+                if (!isLocationInRegenArea(cfg, spawnLocation)) {
                     continue;
                 }
                 
@@ -14270,6 +15219,25 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
     
     /**
+     * Removes one editor from a challenge's editor set. If they were the last editor,
+     * removes the challenge from challengeEditors and clears backups. Does not teleport.
+     */
+    private void removeEditorFromChallenge(Player player, String challengeId) {
+        removeEditorFromChallenge(player.getUniqueId(), challengeId);
+    }
+    
+    private void removeEditorFromChallenge(UUID editorUuid, String challengeId) {
+        Set<UUID> editors = challengeEditors.get(challengeId);
+        if (editors == null) return;
+        editors.remove(editorUuid);
+        if (editors.isEmpty()) {
+            challengeEditors.remove(challengeId);
+            challengeEditBackups.remove(challengeId);
+            challengeEditStateBackups.remove(challengeId);
+        }
+    }
+    
+    /**
      * Exits edit mode for a player (cleanup helper).
      * 
      * @param player The player exiting edit mode
@@ -14285,8 +15253,6 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             if (backup != null && cfg != null) {
                 restoreChallengeConfig(cfg, backup);
                 saveChallengeToConfig(cfg);
-                
-                // Restore block states
                 List<BlockState> stateBackup = challengeEditStateBackups.get(challengeId);
                 if (stateBackup != null) {
                     challengeInitialStates.put(challengeId, new ArrayList<>(stateBackup));
@@ -14296,15 +15262,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         
         Location originalLoc = editorOriginalLocations.remove(uuid);
-        challengeEditors.remove(challengeId);
-        challengeEditBackups.remove(challengeId);
-        challengeEditStateBackups.remove(challengeId);
+        removeEditorFromChallenge(uuid, challengeId);
         
         if (originalLoc != null) {
             player.teleport(originalLoc);
         }
         
-        // Process queue
         if (!isChallengeLocked(challengeId)) {
             processQueue(challengeId);
         }

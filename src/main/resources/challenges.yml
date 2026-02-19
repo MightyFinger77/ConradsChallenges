@@ -1,0 +1,3 @@
+# Challenges are created via /conradchallenges challenge create <id>
+# Use /conradchallenges challenge setbook, setdestination, etc. to configure them
+challenges: {}

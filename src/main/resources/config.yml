@@ -1,5 +1,5 @@
 # Config version - do not modify
-config_version: 3
+config_version: 5
 
 # World players are sent to when using /challengecomplete or when time limit expires. (sends to world spawn)
 spawn-world: world
@@ -74,6 +74,13 @@ edit-mode:
   # Options: "cancel" (restore from backup) or "save" (keep changes)
   disconnect-action: save # Default: save
 
+# Function tool (script editor): item given in edit mode to add scripts to blocks
+function-tool:
+  # Material for the tool (e.g. BLAZE_ROD, STICK, BONE, CARROT_ON_A_STICK)
+  material: BLAZE_ROD
+  # Display name (use & for color codes, e.g. &6 = gold). Empty = use default.
+  display-name: "§6Challenge Function Tool"
+
 # Challenge area settings
 challenge-area:
   # Whether to automatically box in challenge areas with barrier blocks
@@ -102,7 +109,5 @@ world-aliases: {}
 #   parkour_easy: "&aEasy Parkour"
 challenge-aliases: {}
 
-# Challenges are created via /conradchallenges challenge create <id>
-# Use /conradchallenges challenge setbook, setdestination, etc. to configure them
-challenges: []
+# Challenges are stored in challenges.yml (created via /conradchallenges challenge create <id>)
 
