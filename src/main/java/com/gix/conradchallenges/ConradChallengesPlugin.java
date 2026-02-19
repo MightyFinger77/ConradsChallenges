@@ -329,6 +329,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         ItemStack[] contents; // length 27 or 54
         LootTableType lootType; // NORMAL = used by normal chests, LEGENDARY = used by legendary chests
         final Set<String> assignedChallengeIds = new HashSet<>();
+        long createdAt; // for "Created" sort (newer to older)
 
         LootTableData(String id) {
             this.id = id;
@@ -337,6 +338,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             this.iconMaterial = Material.CHEST;
             this.contents = new ItemStack[27];
             this.lootType = LootTableType.NORMAL;
+            this.createdAt = System.currentTimeMillis();
         }
     }
 
@@ -381,19 +383,33 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
     private static final int LOOTTABLE_LIST_SLOTS = 54;
     private static final int LOOTTABLE_LIST_CONTENT_PER_PAGE = 45; // 5 rows
-    private static final int LOOTTABLE_LIST_BACK_SLOT = 53;   // last slot (bottom-right)
+    private static final int LOOTTABLE_LIST_FILTER_SLOT = 45;     // bottom-left of nav bar
+    private static final int LOOTTABLE_LIST_BACK_SLOT = 53;       // last slot (bottom-right)
     private static final int LOOTTABLE_LIST_PREV_SLOT = 47;
     private static final int LOOTTABLE_LIST_NEXT_SLOT = 49;
     private final Map<UUID, Integer> lastLoottableListPage = new HashMap<>();
+    private final Map<UUID, LootTableListFilterMode> lastLoottableListFilterMode = new HashMap<>();
+    private final Map<UUID, String> lastLoottableListFilterParam = new HashMap<>(); // TYPE: "NORMAL"|"LEGENDARY", CHALLENGE: challengeId
 
     private enum LootTableScreen {
-        MAIN,           // add new / edit list
-        LIST,           // list of loottables (click to open options)
-        OPTIONS,        // Size, Edit, Delete, Rename, Assign for one table
-        DELETE_CONFIRM, // yes / no
-        ASSIGN,         // list of challenges to toggle assignment
-        EDIT_CONTENTS,  // the actual chest inventory to edit items
-        CHALLENGE_LIST  // pick challenge to assign (for Assign from OPTIONS)
+        MAIN,                 // add new / edit list
+        LIST,                 // list of loottables (click to open options)
+        LIST_FILTER,          // filter menu: Created, Name, Type, Challenge
+        LIST_FILTER_TYPE,      // Type sub-menu: Normal, Legendary
+        LIST_FILTER_CHALLENGE, // Challenge sub-menu: list of challenges
+        OPTIONS,              // Size, Edit, Delete, Rename, Assign for one table
+        DELETE_CONFIRM,       // yes / no
+        ASSIGN,               // list of challenges to toggle assignment
+        EDIT_CONTENTS,        // the actual chest inventory to edit items
+        CHALLENGE_LIST        // pick challenge to assign (for Assign from OPTIONS)
+    }
+
+    /** How the loottable list is sorted/filtered. */
+    private enum LootTableListFilterMode {
+        CREATED,  // newer to older
+        NAME,     // ABC by name
+        TYPE,     // filter by type (param: NORMAL or LEGENDARY), then ABC
+        CHALLENGE // filter by challenge (param: challengeId), then ABC
     }
 
     /** Tracks an open instance chest so we can save on close. */
@@ -1446,6 +1462,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             List<String> assigned = sec.getStringList("assigned-challenges");
             if (assigned != null) table.assignedChallengeIds.addAll(assigned);
+            table.createdAt = sec.getLong("created-at", 0L);
             loottables.put(id, table);
         }
     }
@@ -1471,6 +1488,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             root.set(path + ".contents", contentsList);
             root.set(path + ".assigned-challenges", new ArrayList<>(t.assignedChallengeIds));
+            root.set(path + ".created-at", t.createdAt);
         }
         try {
             loottablesConfig.save(loottablesFile);
@@ -1511,10 +1529,43 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         openLoottableListGui(player, page);
     }
 
-    private void openLoottableListGui(Player player, int page) {
+    /** Build ordered list of loottable ids based on current filter mode/param for the player. */
+    private List<String> buildLoottableListIds(Player player) {
+        LootTableListFilterMode mode = lastLoottableListFilterMode.getOrDefault(player.getUniqueId(), LootTableListFilterMode.CREATED);
+        String param = lastLoottableListFilterParam.get(player.getUniqueId());
         List<LootTableData> list = new ArrayList<>(loottables.values());
+        switch (mode) {
+            case CREATED -> list.sort((a, b) -> Long.compare(b.createdAt, a.createdAt)); // newer first
+            case NAME -> list.sort((a, b) -> {
+                int c = (a.name != null ? a.name : "").compareToIgnoreCase(b.name != null ? b.name : "");
+                return c != 0 ? c : a.id.compareTo(b.id);
+            });
+            case TYPE -> {
+                LootTableType want = (param != null && "LEGENDARY".equals(param)) ? LootTableType.LEGENDARY : LootTableType.NORMAL;
+                list.removeIf(t -> (t.lootType != null ? t.lootType : LootTableType.NORMAL) != want);
+                list.sort((a, b) -> {
+                    int c = (a.name != null ? a.name : "").compareToIgnoreCase(b.name != null ? b.name : "");
+                    return c != 0 ? c : a.id.compareTo(b.id);
+                });
+            }
+            case CHALLENGE -> {
+                if (param == null || param.isEmpty()) list.clear();
+                else {
+                    list.removeIf(t -> !t.assignedChallengeIds.contains(param));
+                    list.sort((a, b) -> {
+                        int c = (a.name != null ? a.name : "").compareToIgnoreCase(b.name != null ? b.name : "");
+                        return c != 0 ? c : a.id.compareTo(b.id);
+                    });
+                }
+            }
+        }
         List<String> ids = new ArrayList<>();
         for (LootTableData t : list) ids.add(t.id);
+        return ids;
+    }
+
+    private void openLoottableListGui(Player player, int page) {
+        List<String> ids = buildLoottableListIds(player);
         int totalPages = Math.max(1, (ids.size() + LOOTTABLE_LIST_CONTENT_PER_PAGE - 1) / LOOTTABLE_LIST_CONTENT_PER_PAGE);
         if (page < 0) page = 0;
         if (page >= totalPages) page = totalPages - 1;
@@ -1542,7 +1593,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             inv.setItem(i, icon);
         }
-        // Bottom row: empty, empty, prev, empty, next, empty, empty, empty, back (last slot)
+        // Bottom row: filter (45), empty, prev, empty, next, empty, empty, empty, back (53)
+        inv.setItem(LOOTTABLE_LIST_FILTER_SLOT, makeLoottableGuiItem(Material.HOPPER, ChatColor.GOLD + "Filter / Sort", ChatColor.GRAY + "Change how loottables are listed"));
         inv.setItem(LOOTTABLE_LIST_BACK_SLOT, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to menu"));
         // Always show Prev/Next so layout is consistent; disable when not applicable
         if (page > 0) {
@@ -1556,6 +1608,64 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             inv.setItem(LOOTTABLE_LIST_NEXT_SLOT, makeLoottableGuiItem(Material.ARROW, ChatColor.GRAY + "Next page", ChatColor.DARK_GRAY + (totalPages <= 1 ? "Only one page" : "Already on last page")));
         }
         loottableGuiContext.put(player.getUniqueId(), new LootTableGuiContext(LootTableScreen.LIST, null, ids, page));
+        player.openInventory(inv);
+    }
+
+    private void openLoottableFilterGui(Player player) {
+        Inventory inv = Bukkit.createInventory(null, 36, LOOTTABLE_GUI_TITLE_PREFIX + "Filter");
+        inv.setItem(10, makeLoottableGuiItem(Material.CLOCK, ChatColor.YELLOW + "Created", ChatColor.GRAY + "Newer to older"));
+        inv.setItem(12, makeLoottableGuiItem(Material.NAME_TAG, ChatColor.AQUA + "Name", ChatColor.GRAY + "A–Z by name"));
+        inv.setItem(14, makeLoottableGuiItem(Material.IRON_INGOT, ChatColor.WHITE + "Type", ChatColor.GRAY + "Normal or Legendary"));
+        inv.setItem(16, makeLoottableGuiItem(Material.COMPASS, ChatColor.GREEN + "Challenge", ChatColor.GRAY + "By challenge"));
+        inv.setItem(35, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to list"));
+        loottableGuiContext.put(player.getUniqueId(), new LootTableGuiContext(LootTableScreen.LIST_FILTER, null));
+        player.openInventory(inv);
+    }
+
+    private void openLoottableFilterTypeGui(Player player) {
+        Inventory inv = Bukkit.createInventory(null, 36, LOOTTABLE_GUI_TITLE_PREFIX + "Filter by Type");
+        inv.setItem(11, makeLoottableGuiItem(Material.IRON_INGOT, ChatColor.WHITE + "Normal", ChatColor.GRAY + "Loottables of type Normal (A–Z)"));
+        inv.setItem(15, makeLoottableGuiItem(Material.GOLD_INGOT, ChatColor.GOLD + "Legendary", ChatColor.GRAY + "Loottables of type Legendary (A–Z)"));
+        inv.setItem(35, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to filter menu"));
+        loottableGuiContext.put(player.getUniqueId(), new LootTableGuiContext(LootTableScreen.LIST_FILTER_TYPE, null));
+        player.openInventory(inv);
+    }
+
+    private void openLoottableFilterChallengeGui(Player player) {
+        openLoottableFilterChallengeGui(player, 0);
+    }
+
+    private static final int LOOTTABLE_FILTER_CHALLENGE_SLOTS = 54;
+    private static final int LOOTTABLE_FILTER_CHALLENGE_CONTENT = 45;
+    private static final int LOOTTABLE_FILTER_CHALLENGE_BACK_SLOT = 53;
+
+    private void openLoottableFilterChallengeGui(Player player, int page) {
+        List<String> challengeIds = new ArrayList<>(challenges.keySet());
+        challengeIds.sort(String.CASE_INSENSITIVE_ORDER);
+        int totalPages = Math.max(1, (challengeIds.size() + LOOTTABLE_FILTER_CHALLENGE_CONTENT - 1) / LOOTTABLE_FILTER_CHALLENGE_CONTENT);
+        if (page < 0) page = 0;
+        if (page >= totalPages) page = totalPages - 1;
+        Inventory inv = Bukkit.createInventory(null, LOOTTABLE_FILTER_CHALLENGE_SLOTS, LOOTTABLE_GUI_TITLE_PREFIX + "Filter by Challenge");
+        int start = page * LOOTTABLE_FILTER_CHALLENGE_CONTENT;
+        for (int i = 0; i < LOOTTABLE_FILTER_CHALLENGE_CONTENT; i++) {
+            int idx = start + i;
+            if (idx >= challengeIds.size()) break;
+            String cid = challengeIds.get(idx);
+            int count = 0;
+            for (LootTableData t : loottables.values()) {
+                if (t.assignedChallengeIds.contains(cid)) count++;
+            }
+            ItemStack icon = makeLoottableGuiItem(Material.PAPER, ChatColor.YELLOW + cid, ChatColor.GRAY + (count + " loottable(s) assigned"));
+            inv.setItem(i, icon);
+        }
+        inv.setItem(LOOTTABLE_FILTER_CHALLENGE_BACK_SLOT, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to filter menu"));
+        if (page > 0) {
+            inv.setItem(47, makeLoottableGuiItem(Material.ARROW, ChatColor.GOLD + "Previous page", ChatColor.GRAY + "Page " + page));
+        }
+        if (page < totalPages - 1) {
+            inv.setItem(49, makeLoottableGuiItem(Material.ARROW, ChatColor.GOLD + "Next page", ChatColor.GRAY + "Page " + (page + 2)));
+        }
+        loottableGuiContext.put(player.getUniqueId(), new LootTableGuiContext(LootTableScreen.LIST_FILTER_CHALLENGE, null, challengeIds, page));
         player.openInventory(inv);
     }
 
@@ -7475,6 +7585,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
             
+            // Do not allow edit mode if any player is currently running this challenge (active or test)
+            if (activeChallenges.containsValue(id)) {
+                player.sendMessage(getMessage("admin.challenge-edit-active"));
+                return true;
+            }
+            
             if (cfg.destination == null) {
                 player.sendMessage(getMessage("challenge.no-destination"));
                 return true;
@@ -9933,7 +10049,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (ctx == null) return;
         int slot = event.getRawSlot();
         if (slot != event.getSlot()) return;
-        int backSlot = (ctx.screen == LootTableScreen.LIST) ? LOOTTABLE_LIST_BACK_SLOT : (event.getInventory().getSize() - 1);
+        int backSlot = (ctx.screen == LootTableScreen.LIST) ? LOOTTABLE_LIST_BACK_SLOT
+                : (ctx.screen == LootTableScreen.LIST_FILTER_CHALLENGE ? LOOTTABLE_FILTER_CHALLENGE_BACK_SLOT
+                : (event.getInventory().getSize() - 1));
 
         // Handle the Back button for all loot table GUIs (including EDIT_CONTENTS).
         if (slot == backSlot) {
@@ -9946,6 +10064,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
                 case LIST -> {
                     openLoottableMainGui(player);
+                }
+                case LIST_FILTER -> {
+                    openLoottableListGui(player);
+                }
+                case LIST_FILTER_TYPE -> {
+                    openLoottableFilterGui(player);
+                }
+                case LIST_FILTER_CHALLENGE -> {
+                    openLoottableFilterGui(player);
                 }
                 case OPTIONS -> {
                     openLoottableListGui(player);
@@ -9987,7 +10114,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
             case LIST -> {
-                if (slot == LOOTTABLE_LIST_PREV_SLOT && ctx.listPage > 0) {
+                if (slot == LOOTTABLE_LIST_FILTER_SLOT) {
+                    openLoottableFilterGui(player);
+                } else if (slot == LOOTTABLE_LIST_PREV_SLOT && ctx.listPage > 0) {
                     openLoottableListGui(player, ctx.listPage - 1);
                 } else if (slot == LOOTTABLE_LIST_NEXT_SLOT) {
                     int totalPages = Math.max(1, (ctx.listOrder.size() + LOOTTABLE_LIST_CONTENT_PER_PAGE - 1) / LOOTTABLE_LIST_CONTENT_PER_PAGE);
@@ -9999,6 +10128,55 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     if (idx >= 0 && idx < ctx.listOrder.size()) {
                         String id = ctx.listOrder.get(idx);
                         openLoottableOptionsGui(player, id);
+                    }
+                }
+            }
+            case LIST_FILTER -> {
+                if (slot == 10) {
+                    lastLoottableListFilterMode.put(player.getUniqueId(), LootTableListFilterMode.CREATED);
+                    lastLoottableListFilterParam.remove(player.getUniqueId());
+                    lastLoottableListPage.put(player.getUniqueId(), 0);
+                    openLoottableListGui(player, 0);
+                } else if (slot == 12) {
+                    lastLoottableListFilterMode.put(player.getUniqueId(), LootTableListFilterMode.NAME);
+                    lastLoottableListFilterParam.remove(player.getUniqueId());
+                    lastLoottableListPage.put(player.getUniqueId(), 0);
+                    openLoottableListGui(player, 0);
+                } else if (slot == 14) {
+                    openLoottableFilterTypeGui(player);
+                } else if (slot == 16) {
+                    openLoottableFilterChallengeGui(player);
+                }
+            }
+            case LIST_FILTER_TYPE -> {
+                if (slot == 11) {
+                    lastLoottableListFilterMode.put(player.getUniqueId(), LootTableListFilterMode.TYPE);
+                    lastLoottableListFilterParam.put(player.getUniqueId(), "NORMAL");
+                    lastLoottableListPage.put(player.getUniqueId(), 0);
+                    openLoottableListGui(player, 0);
+                } else if (slot == 15) {
+                    lastLoottableListFilterMode.put(player.getUniqueId(), LootTableListFilterMode.TYPE);
+                    lastLoottableListFilterParam.put(player.getUniqueId(), "LEGENDARY");
+                    lastLoottableListPage.put(player.getUniqueId(), 0);
+                    openLoottableListGui(player, 0);
+                }
+            }
+            case LIST_FILTER_CHALLENGE -> {
+                if (slot == 47 && ctx.listPage > 0) {
+                    openLoottableFilterChallengeGui(player, ctx.listPage - 1);
+                } else if (slot == 49 && ctx.listOrder != null) {
+                    int totalPages = Math.max(1, (ctx.listOrder.size() + LOOTTABLE_FILTER_CHALLENGE_CONTENT - 1) / LOOTTABLE_FILTER_CHALLENGE_CONTENT);
+                    if (ctx.listPage < totalPages - 1) {
+                        openLoottableFilterChallengeGui(player, ctx.listPage + 1);
+                    }
+                } else if (slot >= 0 && slot < LOOTTABLE_FILTER_CHALLENGE_CONTENT && ctx.listOrder != null) {
+                    int idx = ctx.listPage * LOOTTABLE_FILTER_CHALLENGE_CONTENT + slot;
+                    if (idx >= 0 && idx < ctx.listOrder.size()) {
+                        String challengeId = ctx.listOrder.get(idx);
+                        lastLoottableListFilterMode.put(player.getUniqueId(), LootTableListFilterMode.CHALLENGE);
+                        lastLoottableListFilterParam.put(player.getUniqueId(), challengeId);
+                        lastLoottableListPage.put(player.getUniqueId(), 0);
+                        openLoottableListGui(player, 0);
                     }
                 }
             }
@@ -10289,15 +10467,32 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             
             if ("save".equalsIgnoreCase(editModeDisconnectAction)) {
-                if (cfg != null) {
-                    if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
-                        captureInitialState(cfg);
-                    }
-                    saveChallengeToConfig(cfg);
+                if (cfg != null && cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
+                    // Async capture only - never block server thread (blocking caused 30s freezes on quit)
+                    final ChallengeConfig cfgToSave = cfg;
+                    final UUID uuidFinal = uuid;
+                    final String challengeIdFinal = editingChallengeId;
+                    final String playerName = player.getName();
+                    captureInitialState(cfg, success -> {
+                        new BukkitRunnable() {
+                            @Override
+                            public void run() {
+                                if (cfgToSave != null) saveChallengeToConfig(cfgToSave);
+                                editorOriginalLocations.remove(uuidFinal);
+                                removeEditorFromChallenge(uuidFinal, challengeIdFinal);
+                                getLogger().info("Player " + playerName + " disconnected while editing challenge '" + challengeIdFinal + "'. Edit mode saved and changes kept.");
+                                if (!isChallengeBeingEdited(challengeIdFinal) && !isChallengeLocked(challengeIdFinal)) {
+                                    processQueue(challengeIdFinal);
+                                }
+                            }
+                        }.runTask(ConradChallengesPlugin.this);
+                    });
+                } else {
+                    if (cfg != null) saveChallengeToConfig(cfg);
+                    editorOriginalLocations.remove(uuid);
+                    removeEditorFromChallenge(uuid, editingChallengeId);
+                    getLogger().info("Player " + player.getName() + " disconnected while editing challenge '" + editingChallengeId + "'. Edit mode saved and changes kept.");
                 }
-                editorOriginalLocations.remove(uuid);
-                removeEditorFromChallenge(uuid, editingChallengeId);
-                getLogger().info("Player " + player.getName() + " disconnected while editing challenge '" + editingChallengeId + "'. Edit mode saved and changes kept.");
             } else {
                 ChallengeConfig backup = challengeEditBackups.get(editingChallengeId);
                 if (backup != null && cfg != null) {

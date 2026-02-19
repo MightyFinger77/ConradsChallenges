@@ -384,6 +384,7 @@ admin:
   challenge-edit-already-editing-another: "&cYou are already editing challenge '%id%'."
   challenge-edit-cancel-hint: "&7Use &c/challenge cancel &7to exit edit mode first."
   challenge-edit-already-in-edit-mode: "&eYou are already in edit mode. Use &e/challenge save &eor &c/challenge cancel &eto exit first."
+  challenge-edit-active: "&cThis challenge is currently active (someone is running it or in test mode). Wait until it is free before entering edit mode."
   challenge-save-not-editing: "&cYou are not currently editing any challenge."
   challenge-save-success: "&aChanges saved for challenge '%id%'! You have been returned to your original location."
   challenge-cancel-not-editing: "&cYou are not currently editing any challenge."
