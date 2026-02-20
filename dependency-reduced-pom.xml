@@ -4,7 +4,7 @@
   <groupId>com.gix</groupId>
   <artifactId>ConradChallenges</artifactId>
   <name>ConradChallenges</name>
-  <version>4.1.0</version>
+  <version>4.1.1</version>
   <description>GateKeeper-based challenge system with books, NPCs, parties, time limits, and anti-forgery.</description>
   <build>
     <resources>

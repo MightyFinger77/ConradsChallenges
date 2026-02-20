@@ -99,6 +99,25 @@ public class ChallengeScriptManager {
         afterTriggerFired(cfg, blockKey, trigger, triggerPlayer, blockLocation, killedEntity);
     }
 
+    /**
+     * Runs PLAYER_ENTER_AREA scripts when the player moves. Each script fires if the player is within
+     * its configured distance (enterAreaDistance, default 3 blocks) of the script's block.
+     */
+    public void runPlayerEnterAreaScripts(ConradChallengesPlugin.ChallengeConfig cfg, Player player, Location playerLoc) {
+        if (cfg.scriptNodes == null || playerLoc == null || playerLoc.getWorld() == null) return;
+        for (ChallengeScriptNode node : cfg.scriptNodes) {
+            if (node.trigger != ScriptTrigger.PLAYER_ENTER_AREA) continue;
+            org.bukkit.Location blockLoc = plugin.getLocationFromBlockKey(node.blockKey());
+            if (blockLoc == null || blockLoc.getWorld() == null || !blockLoc.getWorld().equals(playerLoc.getWorld())) continue;
+            int distBlocks = node.functionData.get("enterAreaDistance") instanceof Number ? ((Number) node.functionData.get("enterAreaDistance")).intValue() : 3;
+            distBlocks = Math.max(1, Math.min(32, distBlocks));
+            org.bukkit.Location center = blockLoc.getBlock().getLocation().add(0.5, 0.5, 0.5);
+            if (playerLoc.distance(center) <= distBlocks) {
+                runScriptsForTrigger(cfg, node.blockKey(), ScriptTrigger.PLAYER_ENTER_AREA, player, playerLoc, null);
+            }
+        }
+    }
+
     private boolean evaluateScriptConditions(ChallengeScriptNode node, ConradChallengesPlugin.ChallengeConfig cfg, Location blockLocation) {
         if (node.conditions == null || node.conditions.isEmpty()) return true;
         String challengeId = cfg != null ? cfg.id : null;
@@ -165,13 +184,14 @@ public class ChallengeScriptManager {
             case SEND_MESSAGE, BROADCAST_MESSAGE -> {
                 String msg = node.functionData.containsKey("message") ? String.valueOf(node.functionData.get("message")) : "";
                 if (msg.isEmpty()) break;
+                String translated = ChatColor.translateAlternateColorCodes('&', msg);
                 if (node.functionType == ScriptFunctionType.SEND_MESSAGE && targetPlayer != null) {
-                    targetPlayer.sendMessage(ChatColor.translateAlternateColorCodes('&', msg));
+                    targetPlayer.sendMessage(translated);
                 } else if (node.functionType == ScriptFunctionType.BROADCAST_MESSAGE) {
                     for (Map.Entry<UUID, String> e : activeChallenges.entrySet()) {
                         if (!e.getValue().equals(cfg.id)) continue;
                         Player p = Bukkit.getPlayer(e.getKey());
-                        if (p != null && p.isOnline()) p.sendMessage(ChatColor.translateAlternateColorCodes('&', msg));
+                        if (p != null && p.isOnline()) p.sendMessage(translated);
                     }
                 }
             }
@@ -292,7 +312,7 @@ public class ChallengeScriptManager {
 
     public void openScriptFunctionTypeGui(Player player, ScriptGuiContext ctx) {
         ctx.step = ScriptGuiStep.FUNCTION_TYPE;
-        Inventory inv = Bukkit.createInventory(null, 9, SCRIPT_GUI_TITLE_PREFIX + "Function");
+        Inventory inv = Bukkit.createInventory(null, 18, SCRIPT_GUI_TITLE_PREFIX + "Function");
         inv.setItem(0, makeGuiItem(Material.PAPER, ChatColor.GREEN + "Send message", "§7Send message to triggering player"));
         inv.setItem(1, makeGuiItem(Material.WRITABLE_BOOK, ChatColor.GREEN + "Broadcast message", "§7Broadcast to all in challenge"));
         inv.setItem(2, makeGuiItem(Material.NOTE_BLOCK, ChatColor.AQUA + "Play sound", "§7Play a sound at location"));
@@ -302,6 +322,7 @@ public class ChallengeScriptManager {
         inv.setItem(6, makeGuiItem(Material.OAK_DOOR, ChatColor.RED + "Leave challenge", "§7Exit challenge (like /exit)"));
         inv.setItem(7, makeGuiItem(Material.REPEATER, ChatColor.YELLOW + "Send signal", "§7Fire signal for receivers/gates"));
         inv.setItem(8, makeGuiItem(Material.IRON_BARS, ChatColor.GOLD + "Remove block (use item)", "§7Right-click with required item on this block or any linked block to remove them.", "§7Consumes items. Stays gone until regen."));
+        inv.setItem(9, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", "§7Back to block menu"));
         scriptGuiContext.put(player.getUniqueId(), ctx);
         player.openInventory(inv);
     }
@@ -330,6 +351,7 @@ public class ChallengeScriptManager {
         for (int i = 0; i < triggers.length && i < 9; i++) {
             inv.setItem(i, makeGuiItem(mats[i], ChatColor.YELLOW + names[i], lores[i]));
         }
+        inv.setItem(9, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", "§7Back to function type"));
         scriptGuiContext.put(player.getUniqueId(), ctx);
         player.openInventory(inv);
     }
@@ -367,6 +389,11 @@ public class ChallengeScriptManager {
             int linkedCount = lb instanceof List ? ((List<?>) lb).size() : 0;
             inv.setItem(2, makeGuiItem(Material.CHAIN, ChatColor.GOLD + "Link blocks", "§7Click blocks with function tool to link", "§7Current: " + linkedCount + " block(s) linked"));
         }
+        if (tr == ScriptTrigger.PLAYER_ENTER_AREA) {
+            int dist = ctx.node.functionData.get("enterAreaDistance") instanceof Number ? ((Number) ctx.node.functionData.get("enterAreaDistance")).intValue() : 3;
+            inv.setItem(6, makeGuiItem(Material.LEATHER_BOOTS, ChatColor.YELLOW + "Set distance (chat)", "§7Blocks from trigger block", "§7Current: " + dist + " block(s)"));
+        }
+        inv.setItem(7, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", "§7Back to trigger"));
         inv.setItem(8, makeGuiItem(Material.LIME_CONCRETE, ChatColor.GREEN + "Done", "§7Continue to confirm"));
         scriptGuiContext.put(player.getUniqueId(), ctx);
         player.openInventory(inv);
@@ -380,6 +407,15 @@ public class ChallengeScriptManager {
     private void handleConfigureGuiClick(Player player, ScriptGuiContext ctx, int slot) {
         ScriptFunctionType ft = ctx.node.functionType;
         ScriptTrigger tr = ctx.node.trigger;
+        if (slot == 7) {
+            if (ft == ScriptFunctionType.REMOVE_BLOCK_WHEN_ITEM_NEAR) {
+                ConradChallengesPlugin.ChallengeConfig cfg = plugin.getChallenges().get(ctx.challengeId);
+                if (cfg != null) openScriptBlockMenuGui(player, ctx, cfg, ctx.node.blockKey());
+            } else {
+                openScriptTriggerGui(player, ctx);
+            }
+            return;
+        }
         if (slot == 8) {
             openScriptConfirmGui(player, ctx);
             return;
@@ -412,6 +448,10 @@ public class ChallengeScriptManager {
             scriptGuiContext.put(player.getUniqueId(), ctx);
             player.closeInventory();
             player.sendMessage(ChatColor.GRAY + "Right-click a block with the function tool to link it (then choose Link another / Finish / Unlink).");
+            return;
+        }
+        if (slot == 6 && tr == ScriptTrigger.PLAYER_ENTER_AREA) {
+            startChatInput(player, ctx, "enterAreaDistance", "Type distance in blocks (1–32) or 'cancel':");
             return;
         }
         if (slot == 1 && ft == ScriptFunctionType.PLAY_SOUND) {
@@ -482,6 +522,12 @@ public class ChallengeScriptManager {
                 int amt = Integer.parseInt(message.trim());
                 if (amt > 0) ctx.node.functionData.put("amount", amt);
             } catch (NumberFormatException ignored) { }
+        } else if ("enterAreaDistance".equals(field)) {
+            try {
+                int d = Integer.parseInt(message.trim());
+                d = Math.max(1, Math.min(32, d));
+                ctx.node.functionData.put("enterAreaDistance", d);
+            } catch (NumberFormatException ignored) { }
         } else if ("distance".equals(field)) {
             try {
                 double d = Double.parseDouble(message.trim().replace(',', '.'));
@@ -504,7 +550,8 @@ public class ChallengeScriptManager {
             String label = ctx.editingNodeIndex >= 0 ? "Save changes" : "Add script";
             inv.setItem(3, makeGuiItem(Material.LIME_CONCRETE, ChatColor.GREEN + label, "§7" + ctx.node.functionType + " on " + ctx.node.trigger));
         }
-        inv.setItem(5, makeGuiItem(Material.RED_CONCRETE, ChatColor.RED + "Cancel", "§7Discard"));
+        inv.setItem(4, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", "§7Back to configure"));
+        inv.setItem(5, makeGuiItem(Material.RED_CONCRETE, ChatColor.RED + "Cancel", "§7Discard and close"));
         scriptGuiContext.put(player.getUniqueId(), ctx);
         player.openInventory(inv);
     }
@@ -807,6 +854,11 @@ public class ChallengeScriptManager {
         int slot = event.getSlot();
 
         if (ctx.step == ScriptGuiStep.FUNCTION_TYPE) {
+            if (slot == 9) {
+                ConradChallengesPlugin.ChallengeConfig cfg = plugin.getChallenges().get(ctx.challengeId);
+                if (cfg != null) openScriptBlockMenuGui(player, ctx, cfg, ctx.node.blockKey());
+                return;
+            }
             ScriptFunctionType[] types = { ScriptFunctionType.SEND_MESSAGE, ScriptFunctionType.BROADCAST_MESSAGE, ScriptFunctionType.PLAY_SOUND, ScriptFunctionType.RUN_COMMAND, ScriptFunctionType.TELEPORT_PLAYER, ScriptFunctionType.PASS_THROUGH, ScriptFunctionType.LEAVE_CHALLENGE, ScriptFunctionType.SIGNAL_SENDER, ScriptFunctionType.REMOVE_BLOCK_WHEN_ITEM_NEAR };
             if (slot >= 0 && slot < types.length) {
                 ctx.node.functionType = types[slot];
@@ -833,6 +885,10 @@ public class ChallengeScriptManager {
             return;
         }
         if (ctx.step == ScriptGuiStep.TRIGGER) {
+            if (slot == 9) {
+                openScriptFunctionTypeGui(player, ctx);
+                return;
+            }
             ScriptTrigger[] triggers = { ScriptTrigger.BLOCK_INTERACT, ScriptTrigger.BLOCK_BREAK, ScriptTrigger.BLOCK_PLACE, ScriptTrigger.PLAYER_ENTER_AREA, ScriptTrigger.MOB_DEATH, ScriptTrigger.SIGNAL_RECEIVER, ScriptTrigger.REDSTONE_RECEIVER, ScriptTrigger.AND_GATE, ScriptTrigger.OR_GATE };
             if (slot >= 0 && slot < triggers.length) {
                 ctx.node.trigger = triggers[slot];
@@ -946,6 +1002,10 @@ public class ChallengeScriptManager {
             return;
         }
         if (ctx.step == ScriptGuiStep.CONFIRM) {
+            if (slot == 4) {
+                openScriptConfigureGui(player, ctx);
+                return;
+            }
             if (slot == 3) {
                 ConradChallengesPlugin.ChallengeConfig cfg = plugin.getChallenges().get(ctx.challengeId);
                 if (cfg != null && ctx.node.functionType == ScriptFunctionType.PASS_THROUGH) {
@@ -994,6 +1054,8 @@ public class ChallengeScriptManager {
                     }
                     if (ctx.node.trigger == ScriptTrigger.SIGNAL_RECEIVER)
                         ctx.node.functionData.putIfAbsent("signal", "");
+                    if (ctx.node.trigger == ScriptTrigger.PLAYER_ENTER_AREA)
+                        ctx.node.functionData.putIfAbsent("enterAreaDistance", 3);
                     if (ctx.node.trigger == ScriptTrigger.AND_GATE || ctx.node.trigger == ScriptTrigger.OR_GATE)
                         ctx.node.functionData.putIfAbsent("dependencies", new ArrayList<String>());
                 }
