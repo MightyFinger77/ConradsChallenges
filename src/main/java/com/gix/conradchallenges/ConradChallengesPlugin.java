@@ -3383,12 +3383,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         // User has this key - use their value but keep default's formatting
 
                         // Hard preserve for alias maps: copy exact block from original user file, ignore default
+                        // BUT only when the original file actually has an indented block under this key.
+                        // If the user used flow style (single line "{a: b, c: d}"), there are no child lines,
+                        // so we fall through to the normal map handling below instead of wiping the section.
                         if ("challenge-aliases".equals(fullPath) || "world-aliases".equals(fullPath)) {
                             String header = " ".repeat(currentIndent) + keyPart + ":";
                             List<String> userSectionLines = extractSectionFromOriginalLines(originalUserLines, fullPath, currentIndent);
-                            merged.add(header);
-                            merged.addAll(userSectionLines);
-                            continue;
+                            if (!userSectionLines.isEmpty()) {
+                                merged.add(header);
+                                merged.addAll(userSectionLines);
+                                continue;
+                            }
                         }
 
                         Object userValue = userConfig.get(fullPath);
