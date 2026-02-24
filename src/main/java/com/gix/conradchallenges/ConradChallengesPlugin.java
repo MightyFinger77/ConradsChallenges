@@ -3381,6 +3381,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         merged.add(line);
                     } else if (userConfig.contains(fullPath)) {
                         // User has this key - use their value but keep default's formatting
+
+                        // Hard preserve for alias maps: copy exact block from original user file, ignore default
+                        if ("challenge-aliases".equals(fullPath) || "world-aliases".equals(fullPath)) {
+                            String header = " ".repeat(currentIndent) + keyPart + ":";
+                            List<String> userSectionLines = extractSectionFromOriginalLines(originalUserLines, fullPath, currentIndent);
+                            merged.add(header);
+                            merged.addAll(userSectionLines);
+                            continue;
+                        }
+
                         Object userValue = userConfig.get(fullPath);
 
                         // Special-case map sections we want in block style (not flow-style "{ a: b }")
