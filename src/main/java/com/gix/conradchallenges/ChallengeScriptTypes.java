@@ -22,6 +22,8 @@ public final class ChallengeScriptTypes {
         BLOCK_PLACE,
         PLAYER_ENTER_AREA,
         MOB_DEATH,
+        /** Fires when player right-clicks this block with the configured key item (like remove-block trigger). */
+        USE_ITEM,
         /** Fires when a SIGNAL_SENDER with matching signal name runs in this challenge. */
         SIGNAL_RECEIVER,
         /** Fires when the block at this location receives redstone power. */
@@ -100,6 +102,12 @@ public final class ChallengeScriptTypes {
         LINK_BLOCKS_AWAIT_CLICK,
         /** Menu after linking a block: Link another / Finish / Unlink block. */
         LINK_BLOCKS_MENU,
+        /** Pass-through setup: shown right after choosing Pass-through (add) or when editing pass-through (Link blocks / Done or Back / Remove). */
+        PASS_THROUGH_SETUP,
+        /** Pass-through link: menu to link blocks (get close to any = all disappear). */
+        PASS_THROUGH_LINK_MENU,
+        /** Pass-through link: awaiting block click to add to linked group. */
+        PASS_THROUGH_LINK_AWAIT_CLICK,
         /** Closed GUI; waiting for player to right-click with key item in hand to set it. */
         CONFIGURE_AWAIT_KEY_ITEM
     }
@@ -119,6 +127,8 @@ public final class ChallengeScriptTypes {
         public List<Integer> blockEditList;
         /** For EDIT_OR_REMOVE: index into blockEditList that was clicked. */
         public int editListClickedIndex;
+        /** True when in "adding new pass-through" flow (from function type); false when editing existing pass-through. */
+        public boolean passThroughAdding;
 
         public ScriptGuiContext(String challengeId, ChallengeScriptNode node) {
             this.challengeId = challengeId;
@@ -132,6 +142,7 @@ public final class ChallengeScriptTypes {
             this.awaitingField = null;
             this.blockEditList = null;
             this.editListClickedIndex = -1;
+            this.passThroughAdding = false;
         }
     }
 }

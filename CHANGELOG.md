@@ -1,5 +1,52 @@
 # Changelog
 
+## Version 4.2.0
+
+### Features
+- **PvP between challenge members**: When enabled (default), players in the same challenge cannot damage each other. Applies to both melee and projectiles (e.g. arrows). Config option `challenge-area.block-pvp-between-challenge-members` (default: true). Set to false to allow PvP between party/same-instance members.
+- **Loot tables: barrels and shulker boxes**: Per-challenge toggles allow **barrels** and **shulker boxes** in the regeneration area to participate in the single-chest (27-slot) loot table pool. New commands `/challenge loottablebarrels [id]` and `/challenge loottableshulkerboxes [id]` toggle inclusion per challenge; `chestignore`, `loottype`, `chestinfo`, and the list-chests GUI now understand barrels/shulkers when enabled.
+- **Edit mode teleport behavior**: `/challenge save` and `/challenge cancel` now only teleport editors back to their original location if they were actually teleported into the challenge on `/challenge edit`. If you started edit mode from inside the challenge area, save/cancel keeps you where you are.
+- **Area sync both ways**: `/challenge areasync [id]` now works in both directions. If only the **challenge area** is set, it copies challenge → regen (and recaptures initial state). If only the **regeneration area** is set, it copies regen → challenge. If both are set, it still syncs regen from challenge as before.
+
+### Config
+- `challenge-area.block-pvp-between-challenge-members`: When true (default), PvP is blocked between any two players in the same active challenge. Set to false to allow PvP.
+- `loottable-include-barrels`: Per-challenge flag in `challenges.yml`. When true, barrels in that challenge’s regeneration area can be used as single-chest loot table containers.
+- `loottable-include-shulker-boxes`: Per-challenge flag in `challenges.yml`. When true, shulker boxes in that challenge’s regeneration area can be used as single-chest loot table containers.
+
+### Technical
+- New listener `onPlayerDamageByPlayerInChallenge(EntityDamageByEntityEvent)`. Resolves attacker from direct Player or Projectile shooter; cancels damage when both victim and attacker are in the same challenge and option is enabled.
+- New per-editor flag `editorWasTeleportedIn` ensures save/cancel/exit only TP back players who were teleported into the challenge on entering edit mode; disconnect cleanup now also clears this flag.
+- `areasync` uses existing multi-area lists (`challengeAreas` / `regenerationAreas`) and legacy corners, deciding direction based on which area(s) are currently defined, and recaptures regen initial state whenever regen is updated from the challenge.
+
+---
+
+## Version 4.1.1
+
+### Features
+- **List chests GUI**: New `/challenge listchests` command (admin, edit mode) opens a GUI to browse chests in the current challenge. Choose loot type (Normal / Legendary), then view a paginated list (54-slot GUI with Back, Prev, Next). Each entry shows coordinates, size (Single/Double), and Ignored yes/no; click to teleport to that chest. List includes ignored chests. Results are cached per challenge and invalidated on save/cancel.
+
+### Improvements
+- **Regeneration initial state**: Challenges using `regeneration-areas` (list format) now capture initial state on config load when none exists, so "Cannot regenerate – no initial state captured" no longer appears when entering edit mode for the first time.
+- **Script GUIs – Back buttons**: Back button added to Function Type (slot 9), Trigger (slot 9), Configure (slot 7), and Confirm (slot 4) screens.
+- **Player enter area – distance**: "Player enter area" trigger now has a configurable **distance** (blocks). In the Configure GUI, slot 6 shows "Set distance (chat)" when the trigger is PLAYER_ENTER_AREA; stored as `enterAreaDistance` (default 3, range 1–32). Scripts run when the player is within that distance of the script block. PLAYER_ENTER_AREA scripts now also run in edit mode so they can be tested without leaving edit mode.
+- **Broadcast message**: Broadcast message function remains **challenge-only** (only players in that challenge see the message), not server-wide.
+- **Block break messages**: In the regen area, if the player is an **active challenger**, block break is still cancelled but the "Enter edit mode to make changes to this area" message is no longer sent. In the challenge area with block breaking restricted, when an active challenger breaks a disallowed block (e.g. grass), the break is cancelled without showing the "only break placed" message.
+- **Loot table filter GUI**: Clear filter and Direction options moved to the bottom row: Clear filter at slot 31, Direction at slot 33; Back stays at 35. Clear filter icon changed from BARRIER to RED_CONCRETE.
+- **Loot table list – double chests**: Double chests (54 slots) can now roll from both **double** and **single** (27-slot) loot tables; single chests still use only single tables. Single-table contents fill the first 27 slots when used in a double chest.
+- **Loot table list – Next arrow**: Next page arrow slot changed from 49 to 51 (bottom row, two slots to the right).
+- **Messages/placeholders**: `getMessage()` now treats null replacement values as empty string to avoid NPE when placeholders are resolved.
+
+### Commands
+- `/challenge listchests` – In edit mode, open the chest list GUI (loot type → paginated chest list with teleport on click). Help key: `admin.challenge-help-listchests`.
+
+### Technical
+- `ListChestsScreen`, `ListChestsGuiContext`, `listChestsCache`, `openListChestsMainGui`, `openListChestsListGui`, `onListChestsInventoryClick`, `locationKeyToLocation()`. Chest list includes ignored chests; lore shows "Ignored: yes/no".
+- Initial state capture in `loadChallengesFromConfig` when challenge has `regeneration-areas` but no initial state yet.
+- `enterAreaDistance` in script function data (default 3); script Manager runs PLAYER_ENTER_AREA when player within distance; edit mode still calls `runPlayerEnterAreaScripts`.
+- Loottable constants: Clear filter slot 31, Direction slot 33; Next slot 51. Pool for size 54 = double tables + single tables; copy uses `Math.min(chosen.contents.length, size)`.
+
+---
+
 ## Version 4.1.0
 
 ### Features

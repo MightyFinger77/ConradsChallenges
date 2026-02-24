@@ -1,5 +1,5 @@
 # Config version - do not modify
-config_version: 5
+config_version: 6
 
 # World players are sent to when using /challengecomplete or when time limit expires. (sends to world spawn)
 spawn-world: world
@@ -9,6 +9,14 @@ party-radius: 10  # Radius in blocks for party members to be detected (default: 
 pending-challenge-timeout-seconds: 15  # Seconds before a pending challenge is automatically cancelled (default: 15)
 solo-countdown-seconds: 20  # Countdown time in seconds before solo players are teleported to challenge (default: 10)
 party-countdown-seconds: 60  # Countdown time in seconds before party members are teleported to challenge (default: 10)
+
+# Reset MythicMobs spawner cooldowns when a challenge starts (so spawners can fire immediately).
+# If you get TPS drops when challenges start, set to false; spawners will keep their natural cooldown.
+reset-spawner-cooldowns-on-challenge-start: true
+
+# Spawner level updates (when setting difficulty tier on challenge start). Lower = less lag per tick, longer total time.
+spawner-level-batch-size: 2          # How many spawners to update per batch (default 2; use 1 if TPS still drops)
+spawner-level-ticks-between-batches: 2  # Ticks to wait between batches (default 2; increase if server is laggy)
 
 # Difficulty tier level modifiers (adds to spawner's base mob_level)
 difficulty-tiers:
@@ -36,17 +44,33 @@ lives-per-tier:
   hard: 1        # Hard tier gets 1 life
   extreme: 1     # Extreme tier gets 1 life
 
-# Buy-back fee: Amount to pay to get back into challenge after running out of lives
-# Players can use /buyback command to pay this fee and re-enter with lives reset
-buy-back-fee: 6000.0  # Default: $6000
+# Buy-back fees per difficulty (cost to re-enter after running out of lives; /buyback)
+buy-back-fees:
+  easy: 6000.0
+  medium: 6000.0
+  hard: 6000.0
+  extreme: 6000.0
+
+# General debug logging (e.g. container restore/store during challenge regen)
+debug: false  # When true, logs [CONTAINER DEBUG] and other debug messages
 
 # Debug logging for spawner level management
 # When enabled, logs detailed information about spawner level changes (original levels, setting levels, reverting)
 # When disabled, only logs summary information (e.g., "Updated 8 spawner level(s)")
 debug-spawner-levels: false  # Default: false
 
+# Ignored chests (chests that skip loot tables and use normal regen): when false they open the real block; when true they get per-player instance contents (copy of block)
+instance-ignored-chests: false  # Default: false (real block opens)
+
 # GateKeeper NPC UUID list (set via /conradchallenges setnpc)
 npcs: []
+
+# Stuck crystal: given to challengers on entry; right-click opens confirm GUI, then TP to challenge start. Set via /cchallenges setstuck.
+stuck-crystal:
+  material: ""
+  display-name: ""
+  lore: []
+  custom-model-data: null
 
 # Anti-forgery settings (fake challenge books)
 anti-forgery:
@@ -87,6 +111,8 @@ challenge-area:
   # Set challenge area using /conradchallenges challenge setchallengearea <id>
   # Use WorldEdit selection (//1 and //2) to select the area
   barrier-boxing: false  # Default: false (off)
+  # When true, players in the same challenge cannot damage each other (PvP blocked between party/same-instance members)
+  block-pvp-between-challenge-members: true  # Default: true (4.2.0)
 
 # World aliases allow you to replace the world name with something different in displays.
 # Use the placeholder %conradchallenges_world_alias% in scoreboards, chat, holograms, etc.
@@ -108,6 +134,39 @@ world-aliases: {}
 #   dungeon2: "&c&lBoss Arena"
 #   parkour_easy: "&aEasy Parkour"
 challenge-aliases: {}
+
+# Invasions (Souls-like: invade ongoing challenges)
+# Set invasion crystal with /invader setitem, RTP item with /invader setrtp
+# EXPIREMENTAL FEATURE; USE AT YOUR OWN RISK
+invasions:
+  enabled: false
+  # Party invasion countdown (seconds) before teleporting
+  party-countdown-seconds: 10
+  # Max invaders in a solo challenge (1) or party challenge (3)
+  max-invaders-solo-challenge: 1
+  max-invaders-party-challenge: 3
+  # Radius (blocks) for /accept when joining a party invasion
+  party-accept-radius: 10
+  # RTP item: delay (seconds) before teleport when right-clicking
+  rtp-delay-seconds: 5
+  # After PvP (damage dealt or taken), RTP item blocked for this many seconds
+  pvp-cooldown-seconds: 10
+  # Invasion crystal (full item: material, display name, lore, custom model data). Leave blank until set via /invader setitem.
+  crystal-material: ""
+  crystal-display-name: ""
+  crystal-lore: []
+  crystal-custom-model-data: null
+  # RTP item given to invaders (full item). Leave blank until set via /invader setrtp.
+  rtp-material: ""
+  rtp-display-name: ""
+  rtp-lore: []
+  rtp-custom-model-data: null
+  # When a new invader joins an already-invaded challenge: "subtitle", "actionbar", or "none"
+  new-invader-join-message: "subtitle"
+  # Bloodcaller NPC UUIDs (set with /invader setnpc, remove with /invader removenpc). Use crystal on Bloodcaller to invade.
+  bloodcaller-npcs: []
+  # Seconds invaders stay in the challenge to loot after killing all challengers, then are teleported back and must redeem at Bloodcaller
+  victory-loot-seconds: 120
 
 # Challenges are stored in challenges.yml (created via /conradchallenges challenge create <id>)
 

@@ -14,7 +14,7 @@ softdepend:
 commands:
   conradchallenges:
     description: Admin and party commands for ConradChallenges
-    usage: /<command> [setnpc|removenpc|removeallnpcs|reload|challenge|party|top|challenge create|challenge setbook|challenge clearbook|challenge setdestination|challenge settype|challenge setboss|challenge settimer|challenge setitem|challenge setspeed|challenge setcooldown|challenge settimelimit|challenge setmaxparty|challenge addreward|challenge clearrewards|challenge list|challenge info|challenge setregenerationarea|challenge clearregenerationarea|challenge captureregeneration|challenge edit|challenge save|challenge cancel|challenge lockdown|challenge unlockdown|party start|party confirm]
+    usage: /<command> [setnpc|removenpc|removeallnpcs|reload|setstuck|challenge|party|top|challenge create|...|party confirm]
     aliases: [cchallenges]
   challenge:
     description: Shortcut for /conradchallenges challenge commands
@@ -47,7 +47,18 @@ commands:
   buyback:
     description: Buy back into a challenge after running out of lives
     usage: /<command>
-
+  invader:
+    description: Set invasion crystal, RTP item, or Bloodcaller NPC (admin)
+    usage: /<command> [setitem|setrtp|setnpc|removenpc|rtp]
+  invade:
+    description: Invade any random challenge (solo or party)
+    usage: /<command>
+  invadesolo:
+    description: Invade only a solo challenger (one player in challenge)
+    usage: /<command>
+  invadeparty:
+    description: Invade only a party challenge (others with crystal nearby can /accept)
+    usage: /<command>
 permissions:
   conradchallenges.use:
     description: Allows the player to use the conradchallenges command
