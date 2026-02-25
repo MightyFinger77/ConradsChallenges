@@ -420,6 +420,9 @@ public class ChallengeScriptManager {
             int dist = ctx.node.functionData.get("enterAreaDistance") instanceof Number ? ((Number) ctx.node.functionData.get("enterAreaDistance")).intValue() : 3;
             inv.setItem(6, makeGuiItem(Material.LEATHER_BOOTS, ChatColor.YELLOW + "Set distance (chat)", "§7Blocks from trigger block", "§7Current: " + dist + " block(s)"));
         }
+        if (ctx.editingNodeIndex >= 0) {
+            inv.setItem(5, makeGuiItem(Material.RED_CONCRETE, ChatColor.RED + "Remove", "§7Delete this script"));
+        }
         inv.setItem(7, makeGuiItem(Material.LIME_CONCRETE, ChatColor.GREEN + "Save", ctx.editingNodeIndex >= 0 ? "§7Save changes and close" : "§7Continue to confirm"));
         inv.setItem(8, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", "§7Back to trigger"));
         scriptGuiContext.put(player.getUniqueId(), ctx);
@@ -521,6 +524,19 @@ public class ChallengeScriptManager {
                 saveScriptAndClose(player, ctx);
             } else {
                 openScriptConfirmGui(player, ctx);
+            }
+            return;
+        }
+        if (slot == 5 && ctx.editingNodeIndex >= 0) {
+            ConradChallengesPlugin.ChallengeConfig cfg = plugin.getChallenges().get(ctx.challengeId);
+            if (cfg != null) {
+                for (int i = 0; i < ctx.blockEditList.size(); i++) {
+                    if (ctx.blockEditList.get(i) == ctx.editingNodeIndex) {
+                        ctx.editListClickedIndex = i;
+                        break;
+                    }
+                }
+                openScriptRemoveConfirmGui(player, ctx);
             }
             return;
         }
@@ -655,7 +671,8 @@ public class ChallengeScriptManager {
                 d = Math.max(0.5, Math.min(32.0, d));
                 ConradChallengesPlugin.ChallengeConfig cfg = plugin.getChallenges().get(ctx.challengeId);
                 if (cfg != null) {
-                    cfg.passThroughDistance = d;
+                    if (cfg.passThroughDistanceByBlockKey == null) cfg.passThroughDistanceByBlockKey = new java.util.HashMap<>();
+                    cfg.passThroughDistanceByBlockKey.put(ctx.node.blockKey(), d);
                     plugin.saveChallengeToConfig(cfg);
                 }
             } catch (NumberFormatException ignored) { }
@@ -907,12 +924,13 @@ public class ChallengeScriptManager {
         ctx.step = ScriptGuiStep.PASS_THROUGH_SETUP;
         ctx.passThroughAdding = adding;
         ConradChallengesPlugin.ChallengeConfig cfg = plugin.getChallenges().get(ctx.challengeId);
-        double dist = cfg != null ? Math.max(0.5, Math.min(32.0, cfg.passThroughDistance)) : 2.5;
+        double dist = cfg != null ? plugin.getPassThroughDistanceForBlock(cfg, ctx.node.blockKey()) : 2.5;
         Inventory inv = Bukkit.createInventory(null, 9, SCRIPT_GUI_TITLE_PREFIX + "Pass-through");
         inv.setItem(0, makeGuiItem(Material.CHAIN, ChatColor.GOLD + "Link blocks", "§7Get close to any linked block – all disappear", "§7Right-click other pass-through blocks to link"));
-        inv.setItem(1, makeGuiItem(Material.LEATHER_BOOTS, ChatColor.YELLOW + "Set activation distance (chat)", "§7Blocks from block – player within range makes it disappear", "§7Current: " + dist + " block(s)"));
+        inv.setItem(1, makeGuiItem(Material.LEATHER_BOOTS, ChatColor.YELLOW + "Set activation distance (chat)", "§7Blocks from this block – player within range makes it disappear", "§7Current: " + dist + " block(s)"));
         if (adding) {
             inv.setItem(4, makeGuiItem(Material.LIME_CONCRETE, ChatColor.GREEN + "Done – Set as pass-through", "§7Add this block as pass-through and close"));
+            inv.setItem(8, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Cancel", "§7Back to block menu without adding"));
         } else {
             inv.setItem(8, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", "§7Back to block list"));
             inv.setItem(2, makeGuiItem(Material.RED_CONCRETE, ChatColor.RED + "Remove pass-through", "§7Remove pass-through from this block"));
@@ -938,6 +956,9 @@ public class ChallengeScriptManager {
         }
         inv.setItem(0, makeGuiItem(Material.CHAIN, ChatColor.GRAY + "Linked: " + count + " block(s)", "§7Get close to any – all disappear"));
         inv.setItem(8, makeGuiItem(Material.LIME_CONCRETE, ChatColor.GREEN + "Finish", "§7Done linking – back to pass-through options"));
+        if (ctx.passThroughAdding) {
+            inv.setItem(2, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Cancel", "§7Back to block menu without adding"));
+        }
         scriptGuiContext.put(player.getUniqueId(), ctx);
         player.openInventory(inv);
     }
@@ -1195,8 +1216,17 @@ public class ChallengeScriptManager {
                     scriptGuiContext.remove(player.getUniqueId());
                     player.closeInventory();
                 }
-            } else if (slot == 8 && !ctx.passThroughAdding) {
-                openScriptBlockMenuGui(player, ctx, cfg, ctx.node.blockKey());
+            } else if (slot == 8) {
+                if (ctx.passThroughAdding) {
+                    // Cancel add: undo any partial add (e.g. from Link blocks) and return to block menu
+                    if (cfg.passThroughBlockKeys != null) cfg.passThroughBlockKeys.remove(ctx.node.blockKey());
+                    if (cfg.passThroughDistanceByBlockKey != null) cfg.passThroughDistanceByBlockKey.remove(ctx.node.blockKey());
+                    plugin.removeFromPassThroughGroup(cfg, ctx.node.blockKey());
+                    plugin.saveChallengeToConfig(cfg);
+                    openScriptBlockMenuGui(player, ctx, cfg, ctx.node.blockKey());
+                } else {
+                    openScriptBlockMenuGui(player, ctx, cfg, ctx.node.blockKey());
+                }
             } else if (slot == 2 && !ctx.passThroughAdding) {
                 openScriptRemoveConfirmGui(player, ctx);
             }
@@ -1209,6 +1239,13 @@ public class ChallengeScriptManager {
                 scriptGuiContext.put(player.getUniqueId(), ctx);
                 player.closeInventory();
                 player.sendMessage(ChatColor.GRAY + "Right-click any block with the function tool to link it (like remove-block).");
+            } else if (slot == 2 && ctx.passThroughAdding && cfg != null) {
+                // Cancel add from link menu: undo and return to block menu
+                if (cfg.passThroughBlockKeys != null) cfg.passThroughBlockKeys.remove(ctx.node.blockKey());
+                if (cfg.passThroughDistanceByBlockKey != null) cfg.passThroughDistanceByBlockKey.remove(ctx.node.blockKey());
+                plugin.removeFromPassThroughGroup(cfg, ctx.node.blockKey());
+                plugin.saveChallengeToConfig(cfg);
+                openScriptBlockMenuGui(player, ctx, cfg, ctx.node.blockKey());
             } else if (slot == 8) {
                 if (ctx.passThroughAdding) {
                     ConradChallengesPlugin.ChallengeConfig c = plugin.getChallenges().get(ctx.challengeId);
@@ -1309,6 +1346,7 @@ public class ChallengeScriptManager {
                 if (value == -1) {
                     plugin.removeFromPassThroughGroup(cfg, ctx.node.blockKey());
                     if (cfg.passThroughBlockKeys != null) cfg.passThroughBlockKeys.remove(ctx.node.blockKey());
+                    if (cfg.passThroughDistanceByBlockKey != null) cfg.passThroughDistanceByBlockKey.remove(ctx.node.blockKey());
                     plugin.saveChallengeToConfig(cfg);
                     player.sendMessage(ChatColor.GREEN + "Pass-through removed from this block.");
                 } else {

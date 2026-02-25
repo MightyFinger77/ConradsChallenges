@@ -7,7 +7,7 @@
 
     <groupId>com.gix</groupId>
     <artifactId>ConradChallenges</artifactId>
-    <version>4.2.0</version>
+    <version>4.2.1</version>
     <packaging>jar</packaging>
 
     <name>ConradChallenges</name>

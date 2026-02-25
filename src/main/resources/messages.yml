@@ -77,6 +77,7 @@ challenge:
   no-pending-click: "&cYou have no pending Conrad Challenge. Click a book on a GateKeeper first."
   no-active: "&cYou are not currently in a Conrad Challenge."
   config-invalid: "&cThat challenge is not configured correctly. Contact an admin."
+  unknown-id: "&cUnknown challenge: &e%id%&c. Check the challenge ID and try again."
   no-destination: "&cThat challenge has no destination set."
   spawn-not-configured: "&cSpawn location is not configured. Contact an admin."
   already-prompted: "&eYou already have a pending challenge. Type &c/deny &eto cancel it first."
@@ -183,6 +184,7 @@ entry:
   blocked-item-overflow-gatekeeper: "&eSome items could not fit in your ender chest. The GateKeeper will return them when you speak to them after the challenge."
   blocked-items-returned: "&aThe GateKeeper has returned the items that could not fit in your ender chest."
   blocked-use-in-challenge: "&cYou cannot use &e%item%&c in this challenge area!"
+  armor-slot-disabled: "&cSome armor slots are disabled for this challenge. You cannot equip that slot until you leave."
 
 # Challenge completion
 completion:
@@ -514,6 +516,9 @@ admin:
   challenge-regen-only-break-placed: "&cYou can only break blocks you placed or blocks allowed by this challenge."
   challenge-regen-cannot-break-chests: "&cYou cannot break chests inside an active challenge."
   challenge-regen-cannot-break-chests-outside-edit: "&cYou cannot break chests outside of edit mode."
+  # Edit mode actionbar (placeholder: %challenge% = challenge alias or id)
+  edit-mode-actionbar: "&d&lEdit Mode &8| &5%challenge%"
+  edit-mode-actionbar-flash: "&3&lEdit Mode &c| &b%challenge%"
   challenge-edit-returned-before-edit: "&aYou have been returned to your location before entering edit mode."
   challenge-edit-reconnected-welcome: "&aYou reconnected! Welcome back to the challenge."
   challenge-disconnect-returned-to-spawn: "&cYou disconnected from the challenge. You have been returned to spawn."
@@ -613,6 +618,20 @@ completion-gui:
   toggle-team-on: "&aShowing team stats (click for personal)"
   exit-claim: "&aExit and claim loot"
   exit-claim-lore: "&7Close and receive your rewards"
+  close: "&cClose"
+  close-lore: "&7Close this menu (you will be asked to confirm)"
+  item-buyback: "&6Item buyback"
+  item-buyback-lore: "&7Pay $%fee% to recover items lost on death"
+  item-buyback-unavailable: "&8Item buyback (unavailable)"
+  item-buyback-unavailable-lore: "&7Disabled during invasions, or no stored items"
+  item-buyback-insufficient: "&cYou need $%fee% for item buyback. Balance: $%balance%"
+  item-buyback-success: "&aItems recovered! $%fee% was deducted."
+  buyback: "&aBuy back into challenge"
+  buyback-lore: "&7Pay $%fee% to re-enter with lives"
+  confirm-yes: "&aYes, close"
+  confirm-yes-lore: "&7Close the stats menu"
+  confirm-no: "&cNo, go back"
+  confirm-no-lore: "&7Return to stats menu"
 
 # Loot table manager (GUI prompts and feedback)
 loottable:

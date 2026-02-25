@@ -10,6 +10,7 @@ import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -111,7 +112,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         "functiontool",
         "test",
         "edit", "save", "cancel", "lockdown", "unlockdown",
-        "regen"
+        "regen",
+        "gui"
     );
     
     // Available subcommands for /conradchallenges party
@@ -254,6 +256,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         // Loot tables: include shulker boxes (27-slot) as single-chest targets when true
         boolean loottableIncludeShulkerBoxes;
 
+        /** Per-challenge lives per tier override. null or empty = use config default (lives-per-tier). */
+        Map<String, Integer> livesPerTierOverride;
+
+        /** Armor slots that are disabled in this challenge (HEAD, CHEST, LEGS, FEET). Equipped items are moved to inv or stored and returned on exit. */
+        Set<String> disabledArmorSlots;
+
         // Block breaking: when true, challengers are restricted (can only break blocks they placed or in break-allowed list); when false, challengers can break whatever
         boolean blockBreakEnabled;
         // Materials that challengers are allowed to break when blockBreakEnabled is true (in addition to blocks they placed)
@@ -268,6 +276,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         List<Set<String>> passThroughGroups;
         // Distance in blocks: player must be within this range of a pass-through block for it to become air (default 2.5, like PLAYER_ENTER_AREA)
         double passThroughDistance;
+        // Per-block override: blockKey -> distance. If absent for a block, use passThroughDistance.
+        Map<String, Double> passThroughDistanceByBlockKey;
 
         // Invasion: manual RTP spots (set in edit mode with /invader rtp). If non-empty, RTP item picks from these; else fallback to box search.
         List<Location> invasionRtpSpots;
@@ -293,12 +303,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             this.legendaryChestKeys = new HashSet<>();
             this.loottableIncludeBarrels = false;
             this.loottableIncludeShulkerBoxes = false;
+            this.livesPerTierOverride = null;
+            this.disabledArmorSlots = new HashSet<>();
             this.blockBreakEnabled = false;
             this.breakAllowedMaterials = new HashSet<>();
             this.scriptNodes = new ArrayList<>();
             this.passThroughBlockKeys = new HashSet<>();
             this.passThroughGroups = new ArrayList<>();
             this.passThroughDistance = 2.5;
+            this.passThroughDistanceByBlockKey = new HashMap<>();
             this.regenerationAreas = new ArrayList<>();
             this.challengeAreas = new ArrayList<>();
             this.invasionRtpSpots = new ArrayList<>();
@@ -417,7 +430,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    /** Context for completion stats GUI (after /cc): challengeId, tier for rewards, own stats, party stats, team view toggle. */
+    /** Context for completion stats GUI (after /cc or after died with no lives): challengeId, tier, stats, team view. */
     private static class CompletionGuiContext {
         final String challengeId;
         final String difficultyTier;
@@ -425,15 +438,27 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         final List<UUID> partyMemberUuids;
         final Map<UUID, ChallengeRunStats> statsByMember;
         boolean showTeamView;
+        /** True when opened because player ran out of lives (shows Item buyback and Buyback buttons). */
+        final boolean diedNoLives;
+        /** True when they died during an invasion – items dropped on floor, item buyback disabled. */
+        final boolean diedDuringInvasion;
 
         CompletionGuiContext(String challengeId, String difficultyTier, ChallengeRunStats myStats,
                              List<UUID> partyMemberUuids, Map<UUID, ChallengeRunStats> statsByMember) {
+            this(challengeId, difficultyTier, myStats, partyMemberUuids, statsByMember, false, false);
+        }
+
+        CompletionGuiContext(String challengeId, String difficultyTier, ChallengeRunStats myStats,
+                             List<UUID> partyMemberUuids, Map<UUID, ChallengeRunStats> statsByMember,
+                             boolean diedNoLives, boolean diedDuringInvasion) {
             this.challengeId = challengeId;
             this.difficultyTier = difficultyTier;
             this.myStats = myStats;
             this.partyMemberUuids = partyMemberUuids;
             this.statsByMember = statsByMember;
             this.showTeamView = false;
+            this.diedNoLives = diedNoLives;
+            this.diedDuringInvasion = diedDuringInvasion;
         }
     }
 
@@ -528,6 +553,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private static final int LOOTTABLE_LIST_CLEAR_FILTER_SLOT = 46; // next to filter
     private static final int LOOTTABLE_LIST_BACK_SLOT = 53;       // last slot (bottom-right)
     private static final int LOOTTABLE_LIST_PREV_SLOT = 47;
+    private static final int LOOTTABLE_LIST_DIRECTION_SLOT = 49;  // bottom row middle: toggle sort direction of current filter
     private static final int LOOTTABLE_LIST_NEXT_SLOT = 51;
     private final Map<UUID, Integer> lastLoottableListPage = new HashMap<>();
     private final Map<UUID, LootTableListFilterMode> lastLoottableListFilterMode = new HashMap<>();
@@ -585,6 +611,44 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private final Map<UUID, ListChestsGuiContext> listChestsGuiContext = new HashMap<>();
     /** Cache of chest candidates per challenge for listchests GUI; invalidated on save/cancel/chestignore/loottype. */
     private final Map<String, List<ChestCandidate>> listChestsCache = new HashMap<>();
+
+    // ----- Challenge options GUI (/challenge gui [id]) -----
+    private static final String CHALLENGE_OPTIONS_GUI_TITLE_PREFIX = "§8Challenge Options §8";
+    private static final int CHALLENGE_OPTIONS_GUI_SIZE = 36;
+    private static final int CHALLENGE_OPTIONS_SLOT_BARRELS = 0;
+    private static final int CHALLENGE_OPTIONS_SLOT_SHULKER = 1;
+    private static final int CHALLENGE_OPTIONS_SLOT_LOOTTABLE = 2;
+    private static final int CHALLENGE_OPTIONS_SLOT_LIVES = 3;
+    private static final int CHALLENGE_OPTIONS_SLOT_ALIAS = 4;
+    private static final int CHALLENGE_OPTIONS_SLOT_LOCKDOWN = 5;
+    private static final int CHALLENGE_OPTIONS_SLOT_LIST_LOOTTABLES = 6;
+    private static final int CHALLENGE_OPTIONS_SLOT_REGEN = 7;
+    private static final int CHALLENGE_OPTIONS_SLOT_ARMOR_HEAD = 10;
+    private static final int CHALLENGE_OPTIONS_SLOT_ARMOR_CHEST = 12;
+    private static final int CHALLENGE_OPTIONS_SLOT_ARMOR_LEGS = 14;
+    private static final int CHALLENGE_OPTIONS_SLOT_ARMOR_FEET = 16;
+    private static final int CHALLENGE_OPTIONS_NAVBAR_START = 27;
+    private static final int CHALLENGE_OPTIONS_SLOT_BACK = 35;
+    private static final String CHALLENGE_LOOTTABLES_LIST_TITLE_PREFIX = "§8Loottables assigned §8";
+    private static final int CHALLENGE_LOOTTABLES_LIST_SLOTS = 54;
+    private static final int CHALLENGE_LOOTTABLES_LIST_CONTENT_PER_PAGE = 45;
+    private static final int CHALLENGE_LOOTTABLES_LIST_BACK_SLOT = 53;
+    private static final String CHALLENGE_LIVES_GUI_TITLE_PREFIX = "§8Lives per difficulty §8";
+    private static final int CHALLENGE_LIVES_GUI_SIZE = 9;
+    private static final int[] CHALLENGE_LIVES_SLOTS = { 1, 3, 5, 7 }; // easy, medium, hard, extreme
+    private static final int CHALLENGE_LIVES_BACK_SLOT = 0;
+    private static final String CHALLENGE_PICKER_GUI_TITLE_PREFIX = "§8Select challenge §8";
+    private static final int CHALLENGE_PICKER_GUI_SIZE = 54;
+    private static final int CHALLENGE_PICKER_CONTENT_PER_PAGE = 45;
+    private static final int CHALLENGE_PICKER_BACK_SLOT = 53;
+    /** Challenge id when player has challenge options or lives GUI open. */
+    private final Map<UUID, String> challengeOptionsGuiChallengeId = new HashMap<>();
+    /** When non-null, next chat message from player sets challenge alias for this challenge id. */
+    private final Map<UUID, String> pendingChallengeAlias = new HashMap<>();
+    /** Ordered challenge ids for picker GUI (slot index -> id). */
+    private final Map<UUID, List<String>> challengePickerGuiIds = new HashMap<>();
+    /** Loottable ids list when viewing "Loottables assigned" for a challenge (for click-to-open-options). */
+    private final Map<UUID, List<String>> challengeLoottablesListIds = new HashMap<>();
 
     /** Tracks an open instance chest so we can save on close. */
     private static class InstanceChestOpenContext {
@@ -644,6 +708,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private final Map<UUID, ChallengeRunStats> challengeRunStats = new HashMap<>();
     /** Completion stats GUI context (after /cc): player UUID -> context for exit-and-claim and team toggle. */
     private final Map<UUID, CompletionGuiContext> completionGuiContext = new HashMap<>();
+    /** When player dies with no lives: context to show stats GUI on respawn (only for died-no-lives, not /cc). */
+    private final Map<UUID, CompletionGuiContext> pendingDeathStatsGui = new HashMap<>();
+    /** Stored inventory when player died with no lives and item-buyback is enabled (no invasion). UUID -> copy of drops. */
+    private final Map<UUID, List<ItemStack>> storedDeathInventory = new HashMap<>();
     /** Bloodcaller: avoid double-handling when both entity interact events fire in same tick. */
     private final Set<UUID> bloodcallerHandledThisTick = new HashSet<>();
     /** Gatekeeper: avoid double-handling when both PlayerInteractEvent and entity events fire. */
@@ -660,6 +728,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     
     // Track regeneration status per challenge (challenge ID -> true if regeneration is complete)
     private final Map<String, Boolean> challengeRegenerationStatus = new HashMap<>();
+    /** Edit mode: players waiting for regen (UUID -> runnable and challenge ID) so /deny can cancel. */
+    private final Map<UUID, BukkitRunnable> editRegenWaitRunnables = new HashMap<>();
+    private final Map<UUID, String> editRegenWaitChallengeId = new HashMap<>();
     
     // Track last spawner reset time per challenge to prevent duplicate resets
     private final Map<String, Long> lastSpawnerResetTime = new HashMap<>();
@@ -681,6 +752,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
     // Blocked-item overflow: items that couldn't fit in ender chest, to be returned on complete/exit (player UUID -> challenge ID -> list of ItemStacks)
     private final Map<UUID, Map<String, List<ItemStack>>> blockedItemOverflowByPlayer = new HashMap<>();
+    /** Disabled-armor overflow: armor stripped on entry that couldn't fit in inv, returned on complete/exit (player UUID -> challenge ID -> list of ItemStacks). Full NBT preserved. */
+    private final Map<UUID, Map<String, List<ItemStack>>> storedDisabledArmorByPlayer = new HashMap<>();
 
     private Location spawnLocation;
 
@@ -765,7 +838,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private final Map<String, ChallengeConfig> challengeEditBackups = new HashMap<>();
     // Edit mode: Store original block states before edit (challenge ID -> list of block states)
     private final Map<String, List<BlockState>> challengeEditStateBackups = new HashMap<>();
-    
+    // Edit mode: tick counter for flashing actionbar (alternates every 10 ticks)
+    private long editModeActionBarTick = 0;
+
     // Difficulty tiers: Track active challenge difficulty (challenge ID -> tier name)
     private final Map<String, String> activeChallengeDifficulties = new HashMap<>();
     // Difficulty tier modifiers (tier name -> level modifier)
@@ -782,6 +857,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     // Buy-back fee fallback and per-tier fees (from config)
     private double buyBackFee = 100.0;
     private final Map<String, Double> tierBuyBackFees = new HashMap<>();
+    // Item buyback (death stats GUI): enable and fee from config
+    private boolean itemBuybackEnabled = true;
+    private double itemBuybackFee = 100000.0;
     
     // Debug logging (containers, etc.) and spawner level management
     private boolean debug = false;
@@ -878,6 +956,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         getServer().getScheduler().runTaskTimer(this, this::updatePassThroughBlocks, 20L, 5L);
         // Script function tool: particles on looked-at block and blocks with functions (every 20 ticks)
         getServer().getScheduler().runTaskTimer(this, this::updateScriptParticles, 40L, 20L);
+        // Edit mode: flashing actionbar for players in edit mode (every 10 ticks = 0.5s for flash)
+        getServer().getScheduler().runTaskTimer(this, this::updateEditModeActionBar, 20L, 10L);
 
         getLogger().info("ConradChallenges v" + getDescription().getVersion() + " enabled.");
     }
@@ -1780,6 +1860,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         buyBackFee = tierBuyBackFees.getOrDefault("easy", 6000.0);
         getLogger().info("Buy-back fees: " + tierBuyBackFees);
+
+        itemBuybackEnabled = config.getBoolean("item-buyback-enabled", true);
+        itemBuybackFee = config.getDouble("item-buyback-fee", 100000.0);
     }
 
     /** Returns the buy-back fee for the given difficulty tier (from config). */
@@ -1787,7 +1870,59 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (tier != null && tierBuyBackFees.containsKey(tier)) return tierBuyBackFees.get(tier);
         return buyBackFee;
     }
-    
+
+    /** Returns lives for a tier: per-challenge override if set, otherwise config default. */
+    private int getLivesForChallengeTier(ChallengeConfig cfg, String tier) {
+        if (cfg != null && cfg.livesPerTierOverride != null && cfg.livesPerTierOverride.containsKey(tier)) {
+            return Math.max(1, cfg.livesPerTierOverride.get(tier));
+        }
+        return tierLives.getOrDefault(tier != null ? tier : "easy", 3);
+    }
+
+    /**
+     * Performs buy-back into the challenge (same logic as /buyback). Used by death stats GUI button.
+     * @return true if buyback succeeded (player re-entered and was teleported), false otherwise
+     */
+    private boolean doBuybackFromGui(Player player, String challengeId, String tier) {
+        UUID uuid = player.getUniqueId();
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null) {
+            player.sendMessage(getMessage("challenge.config-invalid"));
+            return false;
+        }
+        if (economy == null) {
+            player.sendMessage(getMessage("buyback.no-economy"));
+            return false;
+        }
+        double fee = getBuyBackFeeForTier(tier);
+        double balance = economy.getBalance(player);
+        if (balance < fee) {
+            player.sendMessage(getMessage("buyback.insufficient-funds", "fee", String.format("%.2f", fee), "balance", String.format("%.2f", balance)));
+            return false;
+        }
+        if (isChallengeLocked(challengeId)) {
+            player.sendMessage(getMessage("buyback.challenge-locked"));
+            return false;
+        }
+        economy.withdrawPlayer(player, fee);
+        int lives = getLivesForChallengeTier(cfg, tier);
+        playerLives.put(uuid, lives);
+        activeChallenges.put(uuid, challengeId);
+        activeChallengeDifficulties.put(challengeId, tier);
+        challengeStartTimes.put(uuid, System.currentTimeMillis());
+        deadPartyMembers.remove(uuid);
+        pendingDeathTeleports.remove(uuid);
+        initRunStats(uuid, lives);
+        Location challengeDest = getTeleportLocation(cfg);
+        if (challengeDest != null) {
+            player.teleport(challengeDest);
+            player.sendMessage(getMessage("buyback.success", "fee", String.format("%.2f", fee), "lives", String.valueOf(lives)));
+            return true;
+        }
+        player.sendMessage(getMessage("admin.challenge-no-teleport-location"));
+        return false;
+    }
+
     private void saveNpcIds() {
         List<String> list = npcIds.stream().map(UUID::toString).collect(Collectors.toList());
         getConfig().set("npcs", list);
@@ -2004,9 +2139,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             inv.setItem(i, icon);
         }
-        // Bottom row: filter (45), empty, prev, empty, next, empty, empty, empty, back (53)
+        // Bottom row: filter (45), clear (46), prev (47), empty (48), direction (49), empty (50), next (51), empty (52), back (53)
         inv.setItem(LOOTTABLE_LIST_FILTER_SLOT, makeLoottableGuiItem(Material.HOPPER, ChatColor.GOLD + "Filter / Sort", ChatColor.GRAY + "Change how loottables are listed"));
         inv.setItem(LOOTTABLE_LIST_CLEAR_FILTER_SLOT, makeLoottableGuiItem(Material.RED_CONCRETE, ChatColor.RED + "Clear filter", ChatColor.GRAY + "Reset to default list (Created, newest first)"));
+        LootTableListFilterMode mode = lastLoottableListFilterMode.getOrDefault(player.getUniqueId(), LootTableListFilterMode.CREATED);
+        boolean reversed = Boolean.TRUE.equals(lastLoottableListReversed.get(player.getUniqueId()));
+        String dirLabel = (mode == LootTableListFilterMode.CREATED)
+            ? (reversed ? "Oldest first" : "Newest first")
+            : (reversed ? "Z → A" : "A → Z");
+        inv.setItem(LOOTTABLE_LIST_DIRECTION_SLOT, makeLoottableGuiItem(Material.LEVER, ChatColor.GOLD + "Direction: " + dirLabel, ChatColor.GRAY + "Click to toggle sort direction"));
         inv.setItem(LOOTTABLE_LIST_BACK_SLOT, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to menu"));
         // Always show Prev/Next so layout is consistent; disable when not applicable
         if (page > 0) {
@@ -2025,17 +2166,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
     private void openLoottableFilterGui(Player player) {
         Inventory inv = Bukkit.createInventory(null, 36, LOOTTABLE_GUI_TITLE_PREFIX + "Filter");
-        inv.setItem(10, makeLoottableGuiItem(Material.CLOCK, ChatColor.YELLOW + "Created", ChatColor.GRAY + "Newer to older (or toggle direction)"));
-        inv.setItem(12, makeLoottableGuiItem(Material.NAME_TAG, ChatColor.AQUA + "Name", ChatColor.GRAY + "A–Z by name (or toggle to Z–A)"));
+        inv.setItem(10, makeLoottableGuiItem(Material.CLOCK, ChatColor.YELLOW + "Created", ChatColor.GRAY + "Newer to older (toggle direction from list)"));
+        inv.setItem(12, makeLoottableGuiItem(Material.NAME_TAG, ChatColor.AQUA + "Name", ChatColor.GRAY + "A–Z by name (toggle direction from list)"));
         inv.setItem(14, makeLoottableGuiItem(Material.IRON_INGOT, ChatColor.WHITE + "Type", ChatColor.GRAY + "Normal or Legendary"));
         inv.setItem(16, makeLoottableGuiItem(Material.COMPASS, ChatColor.GREEN + "Challenge", ChatColor.GRAY + "By challenge"));
-        boolean reversed = Boolean.TRUE.equals(lastLoottableListReversed.get(player.getUniqueId()));
-        LootTableListFilterMode mode = lastLoottableListFilterMode.getOrDefault(player.getUniqueId(), LootTableListFilterMode.CREATED);
-        String dirLabel = (mode == LootTableListFilterMode.CREATED)
-            ? (reversed ? "Oldest first" : "Newest first")
-            : (reversed ? "Z → A" : "A → Z");
         inv.setItem(31, makeLoottableGuiItem(Material.RED_CONCRETE, ChatColor.RED + "Clear filter", ChatColor.GRAY + "Reset to default list (Created, newest first)"));
-        inv.setItem(33, makeLoottableGuiItem(Material.ARROW, ChatColor.GOLD + "Direction: " + dirLabel, ChatColor.GRAY + "Click to toggle sort direction"));
         inv.setItem(35, makeLoottableGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Return to list"));
         loottableGuiContext.put(player.getUniqueId(), new LootTableGuiContext(LootTableScreen.LIST_FILTER, null));
         player.openInventory(inv);
@@ -2973,6 +3108,31 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             cfg.loottableIncludeBarrels = cs.getBoolean("loottable-include-barrels", false);
             cfg.loottableIncludeShulkerBoxes = cs.getBoolean("loottable-include-shulker-boxes", false);
 
+            // Per-challenge lives per tier override (optional)
+            ConfigurationSection livesSection = cs.getConfigurationSection("lives-per-tier");
+            if (livesSection != null && !livesSection.getKeys(false).isEmpty()) {
+                cfg.livesPerTierOverride = new HashMap<>();
+                for (String t : Arrays.asList("easy", "medium", "hard", "extreme")) {
+                    if (livesSection.contains(t)) {
+                        cfg.livesPerTierOverride.put(t, Math.max(1, livesSection.getInt(t, 1)));
+                    }
+                }
+                if (cfg.livesPerTierOverride.isEmpty()) cfg.livesPerTierOverride = null;
+            } else {
+                cfg.livesPerTierOverride = null;
+            }
+
+            cfg.disabledArmorSlots.clear();
+            List<String> disabledArmorList = cs.getStringList("disabled-armor-slots");
+            if (disabledArmorList != null) {
+                for (String s : disabledArmorList) {
+                    String upper = s.toUpperCase(Locale.ROOT);
+                    if ("HEAD".equals(upper) || "CHEST".equals(upper) || "LEGS".equals(upper) || "FEET".equals(upper)) {
+                        cfg.disabledArmorSlots.add(upper);
+                    }
+                }
+            }
+
             // Load block break settings: blockBreakEnabled = restriction on (only placed + allow list); false = challengers can break whatever
             cfg.blockBreakEnabled = cs.getBoolean("block-break-enabled", false);
             cfg.breakAllowedMaterials.clear();
@@ -3047,6 +3207,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
             double ptDist = cs.getDouble("pass-through-distance", 2.5);
             cfg.passThroughDistance = Math.max(0.5, Math.min(32.0, ptDist));
+            if (cfg.passThroughDistanceByBlockKey == null) cfg.passThroughDistanceByBlockKey = new HashMap<>();
+            cfg.passThroughDistanceByBlockKey.clear();
+            List<?> ptDistList = cs.getList("pass-through-distances");
+            if (ptDistList != null) {
+                for (Object raw : ptDistList) {
+                    if (raw instanceof Map) {
+                        @SuppressWarnings("unchecked") Map<?, ?> entry = (Map<?, ?>) raw;
+                        String blockKey = entry.get("block-key") != null ? String.valueOf(entry.get("block-key")) : null;
+                        if (blockKey == null || blockKey.isEmpty()) continue;
+                        double d = entry.get("distance") instanceof Number ? ((Number) entry.get("distance")).doubleValue() : cfg.passThroughDistance;
+                        cfg.passThroughDistanceByBlockKey.put(blockKey, Math.max(0.5, Math.min(32.0, d)));
+                    }
+                }
+            }
 
             // Load invasion RTP spots (manual spots for invader RTP item; empty = use box fallback)
             cfg.invasionRtpSpots.clear();
@@ -3355,9 +3529,32 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                 pathStack.push(new Pair<>(keyPart, currentIndent));
                                 continue;
                             } else {
-                                getLogger().warning("Could not extract section '" + fullPath + "' from original config during migration. Using default structure.");
-                                merged.add(line);
+                                // Preserve user section from parsed config instead of overwriting with default
+                                List<String> fallbackSectionLines = sectionToYamlLines(userConfig.getConfigurationSection(fullPath), currentIndent + 2);
+                                if (!fallbackSectionLines.isEmpty()) {
+                                    merged.add(line);
+                                    merged.addAll(fallbackSectionLines);
+                                    // Skip default section body so we don't duplicate content
+                                    int sectionStartIndent = currentIndent;
+                                    while (i + 1 < defaultLines.size()) {
+                                        String nextLine = defaultLines.get(i + 1);
+                                        String nextTrimmed = nextLine.trim();
+                                        if (nextTrimmed.isEmpty() || nextLine.startsWith("#")) {
+                                            int nextIndent = nextLine.length() - nextTrimmed.length();
+                                            if (nextIndent <= sectionStartIndent) break;
+                                            i++;
+                                        } else {
+                                            int nextIndent = nextLine.length() - nextTrimmed.length();
+                                            if (nextIndent <= sectionStartIndent) break;
+                                            i++;
+                                        }
+                                    }
+                                } else {
+                                    getLogger().warning("Could not extract section '" + fullPath + "' from original config during migration. Using default structure.");
+                                    merged.add(line);
+                                }
                                 pathStack.push(new Pair<>(keyPart, currentIndent));
+                                continue;
                             }
                         } else if (userValue instanceof ConfigurationSection && !preserveUserSectionContent) {
                             // Messages: do not replace whole section; add header and continue so default's keys (including new ones) are merged
@@ -3435,6 +3632,35 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         return merged;
     }
     
+    /**
+     * Serialize a ConfigurationSection to YAML lines (indented). Used when extractSectionFromOriginalLines
+     * fails so we preserve user values from the parsed config instead of overwriting with default.
+     */
+    private List<String> sectionToYamlLines(org.bukkit.configuration.ConfigurationSection section, int indentSpaces) {
+        List<String> out = new ArrayList<>();
+        if (section == null) return out;
+        String indent = " ".repeat(indentSpaces);
+        for (String key : section.getKeys(false)) {
+            Object value = section.get(key);
+            if (value instanceof org.bukkit.configuration.ConfigurationSection nested) {
+                out.add(indent + key + ":");
+                out.addAll(sectionToYamlLines(nested, indentSpaces + 2));
+            } else if (value instanceof List<?> list) {
+                out.add(indent + key + ":");
+                for (Object item : list) {
+                    String itemStr = formatYamlValue(item);
+                    if (itemStr.startsWith("\"") && itemStr.endsWith("\"")) {
+                        itemStr = itemStr.substring(1, itemStr.length() - 1);
+                    }
+                    out.add(indent + "  - " + itemStr);
+                }
+            } else {
+                out.add(indent + key + ": " + formatYamlValue(value));
+            }
+        }
+        return out;
+    }
+
     /**
      * Extract a section from the original user config file lines
      * This preserves the exact formatting and comments from the user's file
@@ -4051,6 +4277,22 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         config.set(path + ".loottable-include-barrels", cfg.loottableIncludeBarrels);
         config.set(path + ".loottable-include-shulker-boxes", cfg.loottableIncludeShulkerBoxes);
 
+        if (cfg.livesPerTierOverride != null && !cfg.livesPerTierOverride.isEmpty()) {
+            for (Map.Entry<String, Integer> e : cfg.livesPerTierOverride.entrySet()) {
+                config.set(path + ".lives-per-tier." + e.getKey(), e.getValue());
+            }
+        } else {
+            config.set(path + ".lives-per-tier", null);
+        }
+
+        List<String> disabledArmorList = new ArrayList<>();
+        if (cfg.disabledArmorSlots != null) {
+            for (String slot : Arrays.asList("HEAD", "CHEST", "LEGS", "FEET")) {
+                if (cfg.disabledArmorSlots.contains(slot)) disabledArmorList.add(slot);
+            }
+        }
+        config.set(path + ".disabled-armor-slots", disabledArmorList);
+
         // Save block break settings
         config.set(path + ".block-break-enabled", cfg.blockBreakEnabled);
         List<String> allowBreakNames = new ArrayList<>();
@@ -4091,6 +4333,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         config.set(path + ".pass-through-groups", groupsList);
         config.set(path + ".pass-through-distance", cfg.passThroughDistance);
+        if (cfg.passThroughDistanceByBlockKey != null && !cfg.passThroughDistanceByBlockKey.isEmpty()) {
+            List<Map<String, Object>> ptDistList = new ArrayList<>();
+            for (Map.Entry<String, Double> e : cfg.passThroughDistanceByBlockKey.entrySet()) {
+                Map<String, Object> entry = new HashMap<>();
+                entry.put("block-key", e.getKey());
+                entry.put("distance", e.getValue());
+                ptDistList.add(entry);
+            }
+            config.set(path + ".pass-through-distances", ptDistList);
+        }
 
         // Save invasion RTP spots (manual spots for /invader rtp in edit mode)
         if (cfg.invasionRtpSpots != null && !cfg.invasionRtpSpots.isEmpty()) {
@@ -5962,7 +6214,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
             
-            // Remove from queue (works even during countdown)
+            // Cancel edit/test regen wait if player is waiting for regeneration
+            BukkitRunnable editRegenTask = editRegenWaitRunnables.remove(uuid);
+            String editRegenChallengeId = editRegenWaitChallengeId.remove(uuid);
+            if (editRegenTask != null) {
+                editRegenTask.cancel();
+                if (editRegenChallengeId != null) removeEditorFromChallenge(uuid, editRegenChallengeId);
+                cancelledSomething = true;
+            }
+
+            // Remove from queue (works even during countdown; also cancels test-mode regen wait)
             boolean wasInQueue = playerQueueEntries.containsKey(uuid);
             removeFromQueue(uuid);
             if (wasInQueue) {
@@ -6296,6 +6557,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
                 // Return any blocked-item overflow (items that couldn't fit in ender chest)
                 giveBackBlockedItemOverflow(member, challengeId);
+                giveBackStoredDisabledArmor(member, challengeId);
                 stripRemoveItemsFromPlayer(member, cfg);
                 if (invasionManager != null) invasionManager.removeStuckCrystal(member);
                 // Clean up challenge state
@@ -6421,6 +6683,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
+            int lives = getLivesForChallengeTier(cfg, tier);
+            
             // Check if challenge is still available (not locked or in use by others)
             if (isChallengeLocked(challengeId)) {
                 player.sendMessage(getMessage("buyback.challenge-locked"));
@@ -6431,7 +6695,6 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             economy.withdrawPlayer(player, fee);
             
             // Reset lives and add player back to challenge
-            int lives = tierLives.getOrDefault(tier, 3);
             playerLives.put(uuid, lives);
             
             // Add back to active challenges
@@ -6866,6 +7129,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             player.sendMessage(getMessage("admin.challenge-help-loottype"));
             player.sendMessage(getMessage("admin.challenge-help-loottablebarrels"));
             player.sendMessage(getMessage("admin.challenge-help-loottableshulkerboxes"));
+            player.sendMessage(ChatColor.GRAY + "/challenge gui [id]" + ChatColor.WHITE + " - Open challenge options GUI (no edit mode required)");
             player.sendMessage(getMessage("admin.challenge-areasync-command"));
             player.sendMessage(getMessage("admin.challenge-edit-command"));
             player.sendMessage(getMessage("admin.challenge-save-command"));
@@ -9229,6 +9493,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             removeFromQueue(uuid);
                             return;
                         }
+                        // /deny removes from queue; stop waiting if no longer in queue for this challenge
+                        QueueEntry queueEntry = playerQueueEntries.get(uuid);
+                        if (queueEntry == null || !testChallengeId.equals(queueEntry.challengeId)) {
+                            cancel();
+                            return;
+                        }
                         Boolean done = challengeRegenerationStatus.get(testChallengeId);
                         if (done == null || !done) {
                             player.sendTitle(regenTitle, regenSubtitle, 0, 20, 0);
@@ -9240,12 +9510,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         activeChallenges.put(uuid, testChallengeId);
                         activeChallengeDifficulties.put(testChallengeId, finalSelectedTier);
                         challengeStartTimes.put(uuid, System.currentTimeMillis());
+                        int lives = getLivesForChallengeTier(finalCfg, finalSelectedTier);
+                        playerLives.put(uuid, lives);
+                        initRunStats(uuid, lives);
                         Location teleportLoc = getTeleportLocation(finalCfg);
                         if (teleportLoc != null) {
                             player.teleport(teleportLoc);
+                            moveBlockedItemsToEnderChest(player, finalCfg);
+                            stripDisabledArmorSlots(player, finalCfg);
                             assignGuaranteedLootTablesForPlayer(player, finalCfg);
                         }
                         player.sendMessage(getMessage("admin.challenge-test-entered", "challenge", displayName(finalCfg), "tier", finalSelectedTier));
+                        // Same cleanup as normal start: mobs, dropped items (if config), spawner reset/levels (5-tick delay)
+                        Bukkit.getScheduler().runTaskLater(ConradChallengesPlugin.this, () -> runChallengeStartCleanup(finalCfg, finalSelectedTier), 5L);
                     }
                 }.runTaskTimer(this, 20L, 20L);
             } else {
@@ -9255,12 +9532,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 activeChallenges.put(uuid, cfg.id);
                 activeChallengeDifficulties.put(cfg.id, selectedTier);
                 challengeStartTimes.put(uuid, System.currentTimeMillis());
+                int lives = tierLives.getOrDefault(selectedTier, 3);
+                playerLives.put(uuid, lives);
+                initRunStats(uuid, lives);
                 Location teleportLoc = getTeleportLocation(cfg);
                 if (teleportLoc != null) {
                     player.teleport(teleportLoc);
                     assignGuaranteedLootTablesForPlayer(player, cfg);
                 }
                 player.sendMessage(getMessage("admin.challenge-test-entered", "challenge", displayName(cfg), "tier", selectedTier));
+                // Same cleanup as normal start: mobs, dropped items (if config), spawner reset/levels (5-tick delay)
+                final ChallengeConfig finalCfgForCleanup = cfg;
+                final String finalTierForCleanup = selectedTier;
+                Bukkit.getScheduler().runTaskLater(ConradChallengesPlugin.this, () -> runChallengeStartCleanup(finalCfgForCleanup, finalTierForCleanup), 5L);
             }
             return true;
         }
@@ -9333,12 +9617,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             if (firstEditor && cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
                 regenerateChallengeArea(cfg);
                 final String challengeIdForRegen = id;
+                final UUID editorUuid = player.getUniqueId();
                 final BossBar[] editRegenBossBar = new BossBar[1];
-                new BukkitRunnable() {
+                BukkitRunnable editRegenTask = new BukkitRunnable() {
                     @Override
                     public void run() {
                         if (!player.isOnline()) {
                             if (editRegenBossBar[0] != null) editRegenBossBar[0].removeAll();
+                            editRegenWaitRunnables.remove(editorUuid);
+                            editRegenWaitChallengeId.remove(editorUuid);
+                            removeEditorFromChallenge(editorUuid, challengeIdForRegen);
                             cancel();
                             return;
                         }
@@ -9369,6 +9657,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             }
                             return;
                         }
+                        editRegenWaitRunnables.remove(editorUuid);
+                        editRegenWaitChallengeId.remove(editorUuid);
                         if (editRegenBossBar[0] != null) {
                             editRegenBossBar[0].removeAll();
                             editRegenBossBar[0] = null;
@@ -9389,7 +9679,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         scriptManager.giveFunctionTool(player);
                         cancel();
                     }
-                }.runTaskTimer(this, 20L, 20L); // Check every second, same as countdown
+                };
+                editRegenWaitRunnables.put(editorUuid, editRegenTask);
+                editRegenWaitChallengeId.put(editorUuid, challengeIdForRegen);
+                editRegenTask.runTaskTimer(this, 20L, 20L); // Check every second, same as countdown
             } else {
                 // Not first editor, or no regen area: teleport only if not already in challenge area
                 Location playerLoc = player.getLocation();
@@ -9620,6 +9913,25 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 String bookPart = cfg.bookTitle != null ? getMessage("admin.challenge-list-entry-book", "book", cfg.bookTitle) : getMessage("admin.challenge-list-entry-no-book");
                 String statusPart = cfg.lockedDown ? " &c[LOCKED DOWN]" : "";
                 player.sendMessage(getMessage("admin.challenge-list-entry", "id", cfg.id) + " " + bookPart + statusPart);
+            }
+            return true;
+        }
+
+        if (sub.equals("gui")) {
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id != null) {
+                ChallengeConfig cfg = challenges.get(id);
+                if (cfg == null) {
+                    player.sendMessage(getMessage("challenge.unknown-id", "id", id));
+                    return true;
+                }
+                openChallengeOptionsGui(player, id);
+            } else {
+                if (challenges.isEmpty()) {
+                    player.sendMessage(getMessage("admin.challenge-list-empty"));
+                    return true;
+                }
+                openChallengePickerGui(player);
             }
             return true;
         }
@@ -10418,7 +10730,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         
                         // Initialize lives based on difficulty tier
                         String tier = activeChallengeDifficulties.getOrDefault(cfg.id, "easy");
-                        int lives = tierLives.getOrDefault(tier, 3);
+                        int lives = getLivesForChallengeTier(cfg, tier);
                         playerLives.put(p.getUniqueId(), lives);
                         initRunStats(p.getUniqueId(), lives);
 
@@ -10433,6 +10745,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             }
                             // Move any blocked items to ender chest and notify
                             moveBlockedItemsToEnderChest(p, cfg);
+                            stripDisabledArmorSlots(p, cfg);
                             // Solo only: per-player guaranteed assignment (party uses guaranteedChestAssignmentsByChallenge set above)
                             if (playersToTeleport.size() == 1) {
                                 assignGuaranteedLootTablesForPlayer(p, cfg);
@@ -10460,22 +10773,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         startTimeLimitWatcher(p, cfg);
                     }
                     
-                    // Kill mobs for clean slate, then reset spawner cooldowns (if enabled) and set spawner levels (after all players are in). One-time per start, not per tick.
+                    // Kill mobs (and optionally clear dropped items) for clean slate, then reset spawner cooldowns (if enabled) and set spawner levels (after all players are in). One-time per start, not per tick.
                     // Run on main thread since MythicMobs API requires it
                     // Add 5-tick delay (0.25 seconds) after regeneration to let spawners sync
-                    String tier = activeChallengeDifficulties.getOrDefault(cfg.id, "easy");
-                    final String finalTier = tier;
-                    Bukkit.getScheduler().runTaskLater(ConradChallengesPlugin.this, new Runnable() {
-                        @Override
-                        public void run() {
-                            killMobsInChallengeArea(cfg);
-                            if (getConfig().getBoolean("reset-spawner-cooldowns-on-challenge-start", true)) {
-                                resetMythicMobsSpawnersInArea(cfg);
-                            }
-                            // Defer spawner level updates to next tick so discovery doesn't run in same tick as kill+cooldown
-                            Bukkit.getScheduler().runTaskLater(ConradChallengesPlugin.this, () -> setSpawnerLevelsForChallenge(cfg, finalTier), 1L);
-                        }
-                    }, 5L); // 5 ticks = 0.25 seconds delay
+                    final String finalTier = activeChallengeDifficulties.getOrDefault(cfg.id, "easy");
+                    Bukkit.getScheduler().runTaskLater(ConradChallengesPlugin.this, () -> runChallengeStartCleanup(cfg, finalTier), 5L); // 5 ticks = 0.25 seconds delay
                     
                     // Clean up tracking
                     activeCountdownTasks.remove(cfg.id);
@@ -10648,6 +10950,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             player.teleport(spawnLocation);
         }
         giveBackBlockedItemOverflow(player, cfg.id);
+        giveBackStoredDisabledArmor(player, cfg.id);
         if (invasionManager != null && !activeChallenges.containsValue(cfg.id))
             invasionManager.removeInvadersFromChallenge(cfg.id);
         if (!activeChallenges.containsValue(cfg.id)) {
@@ -11411,6 +11714,32 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     /**
+     * Every 10 ticks: send a flashing actionbar "Edit Mode" to all players currently in edit mode.
+     * Uses %challenge% placeholder (challenge alias or id) in admin.edit-mode-actionbar / admin.edit-mode-actionbar-flash.
+     */
+    private void updateEditModeActionBar() {
+        if (challengeEditors.isEmpty()) return;
+        editModeActionBarTick++;
+        boolean useFlash = (editModeActionBarTick % 2) == 0;
+        for (Map.Entry<String, Set<UUID>> entry : challengeEditors.entrySet()) {
+            String challengeId = entry.getKey();
+            Set<UUID> editors = entry.getValue();
+            if (editors == null) continue;
+            String challengeDisplay = getChallengeAlias(challengeId);
+            String msg = ChatColor.translateAlternateColorCodes('&',
+                getMessage(useFlash ? "admin.edit-mode-actionbar-flash" : "admin.edit-mode-actionbar", "challenge", challengeDisplay));
+            for (UUID uuid : editors) {
+                Player p = Bukkit.getPlayer(uuid);
+                if (p == null || !p.isOnline()) continue;
+                try {
+                    p.spigot().sendMessage(net.md_5.bungee.api.ChatMessageType.ACTION_BAR,
+                        net.md_5.bungee.api.chat.TextComponent.fromLegacyText(msg));
+                } catch (Exception ignored) { }
+            }
+        }
+    }
+
+    /**
      * Every 5 ticks: for pass-through blocks, set to air when a challenger is near, restore when none are near.
      * Skips any challenge that has an editor (so we never overwrite blocks they place).
      */
@@ -11466,7 +11795,6 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             for (Map.Entry<UUID, String> e : activeChallenges.entrySet()) {
                 if (e.getValue().equals(challengeId)) challengersOnly.add(e.getKey());
             }
-            double range = Math.max(0.5, Math.min(32.0, cfg.passThroughDistance));
             // Collect unique groups (linked blocks disappear together when player is near any in the group)
             List<Set<String>> effectiveGroups = new ArrayList<>();
             for (String blockKey : cfg.passThroughBlockKeys) {
@@ -11482,6 +11810,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 for (String key : group) {
                     Location loc = getLocationFromBlockKey(key);
                     if (loc == null) continue;
+                    double range = getPassThroughDistanceForBlock(cfg, key);
                     for (UUID uuid : challengersOnly) {
                         Player p = Bukkit.getPlayer(uuid);
                         if (p != null && p.isOnline() && p.getWorld().equals(loc.getWorld())) {
@@ -11662,6 +11991,75 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             .computeIfAbsent(playerUuid, k -> new HashMap<>())
             .computeIfAbsent(challengeId, k -> new ArrayList<>());
     }
+
+    private List<ItemStack> getOrCreateStoredDisabledArmorList(UUID playerUuid, String challengeId) {
+        return storedDisabledArmorByPlayer
+            .computeIfAbsent(playerUuid, k -> new HashMap<>())
+            .computeIfAbsent(challengeId, k -> new ArrayList<>());
+    }
+
+    /** Armor order in getArmorContents(): [0]=FEET, [1]=LEGS, [2]=CHEST, [3]=HEAD. */
+    private static final String[] ARMOR_SLOT_NAMES = { "FEET", "LEGS", "CHEST", "HEAD" };
+
+    /** Returns HEAD, CHEST, LEGS, or FEET if the item is armor for that slot; otherwise null. */
+    private static String getArmorSlotForItem(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) return null;
+        String name = item.getType().name();
+        if (name.endsWith("_HELMET") || name.endsWith("_SKULL") || name.endsWith("_HEAD")) return "HEAD";
+        if (name.endsWith("_CHESTPLATE") || name.endsWith("_ELYTRA")) return "CHEST";
+        if (name.endsWith("_LEGGINGS")) return "LEGS";
+        if (name.endsWith("_BOOTS")) return "FEET";
+        return null;
+    }
+
+    /**
+     * Strips armor from disabled slots on challenge entry. Items go to inventory or, if full, to stored list (returned on exit/complete).
+     * Preserves full ItemStack data (NBT, CustomModelData, etc.).
+     */
+    private void stripDisabledArmorSlots(Player player, ChallengeConfig cfg) {
+        if (cfg.disabledArmorSlots == null || cfg.disabledArmorSlots.isEmpty()) return;
+        org.bukkit.inventory.PlayerInventory inv = player.getInventory();
+        ItemStack[] armor = inv.getArmorContents();
+        boolean changed = false;
+        for (int i = 0; i < 4; i++) {
+            String slotName = ARMOR_SLOT_NAMES[i];
+            if (!cfg.disabledArmorSlots.contains(slotName)) continue;
+            ItemStack stack = armor[i];
+            if (stack == null || stack.getType() == Material.AIR) {
+                armor[i] = null;
+                changed = true;
+                continue;
+            }
+            ItemStack clone = stack.clone();
+            armor[i] = null;
+            changed = true;
+            java.util.HashMap<Integer, ItemStack> leftover = inv.addItem(clone);
+            for (ItemStack left : leftover.values()) {
+                if (left != null && left.getType() != Material.AIR) {
+                    getOrCreateStoredDisabledArmorList(player.getUniqueId(), cfg.id).add(left);
+                }
+            }
+        }
+        if (changed) inv.setArmorContents(armor);
+    }
+
+    /** Gives back stored disabled-armor overflow (items that couldn't fit in inv on entry). Full NBT preserved. */
+    private void giveBackStoredDisabledArmor(Player player, String challengeId) {
+        Map<String, List<ItemStack>> byChallenge = storedDisabledArmorByPlayer.get(player.getUniqueId());
+        if (byChallenge == null) return;
+        List<ItemStack> list = byChallenge.remove(challengeId);
+        if (list == null || list.isEmpty()) return;
+        if (byChallenge.isEmpty()) storedDisabledArmorByPlayer.remove(player.getUniqueId());
+        for (ItemStack stack : list) {
+            if (stack == null || stack.getType() == Material.AIR) continue;
+            java.util.HashMap<Integer, ItemStack> leftover = player.getInventory().addItem(stack);
+            for (ItemStack left : leftover.values()) {
+                if (left != null && left.getType() != Material.AIR) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), left);
+                }
+            }
+        }
+    }
     
     /**
      * Joins the player to an open challenge. Caller must have already removed them from pendingJoinOpenChallenge.
@@ -11689,7 +12087,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         activeChallenges.put(uuid, joinChallengeId);
         challengeStartTimes.put(uuid, System.currentTimeMillis());
         String tier = activeChallengeDifficulties.getOrDefault(joinChallengeId, "easy");
-        int lives = tierLives.getOrDefault(tier, 3);
+        int lives = getLivesForChallengeTier(cfg, tier);
         playerLives.put(uuid, lives);
         initRunStats(uuid, lives);
         player.teleport(dest);
@@ -11699,6 +12097,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("invasion.stuck-crystal-given"));
         }
         moveBlockedItemsToEnderChest(player, cfg);
+        stripDisabledArmorSlots(player, cfg);
         assignGuaranteedLootTablesForPlayer(player, cfg);
         player.sendMessage(getMessage("entry.entered", "challenge", displayName(cfg)));
         switch (cfg.completionType) {
@@ -11829,6 +12228,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             player.teleport(spawnLocation);
         }
         giveBackBlockedItemOverflow(player, exitedChallengeId);
+        giveBackStoredDisabledArmor(player, exitedChallengeId);
         stripRemoveItemsFromPlayer(player, cfg);
         if (invasionManager != null) {
             invasionManager.removeStuckCrystal(player);
@@ -12256,7 +12656,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private static final int COMPLETION_SLOT_LIVES_LOST = 22;
     private static final int COMPLETION_SLOT_INVADERS_SLAIN = 24;
     private static final int COMPLETION_SLOT_TOGGLE_TEAM = 45;
+    private static final int COMPLETION_SLOT_ITEM_BUYBACK = 49;
+    private static final int COMPLETION_SLOT_BUYBACK = 51;
     private static final int COMPLETION_SLOT_EXIT_CLAIM = 53;
+    private static final String COMPLETION_EXIT_CONFIRM_TITLE_PREFIX = "§8Close stats? §8";
+    private static final int CONFIRM_YES_SLOT = 11;
+    private static final int CONFIRM_NO_SLOT = 15;
 
     // Bloodcaller invasion GUI
     private static final String BLOODCALLER_GUI_TITLE_PREFIX = "§8Bloodcaller §8";
@@ -12304,12 +12709,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     /** Opens Gatekeeper difficulty selection GUI (Easy, Medium, Hard, Extreme) with Back button. Lore shows lives and buy-back fee from config. */
     private void openGatekeeperDifficultyGui(Player player, String challengeId) {
         Inventory inv = Bukkit.createInventory(null, GATEKEEPER_DIFFICULTY_SIZE, GATEKEEPER_GUI_TITLE_PREFIX + "Difficulty");
+        ChallengeConfig cfgForLives = challenges.get(challengeId);
         String[] tiers = { "easy", "medium", "hard", "extreme" };
         int[] livesArr = {
-            tierLives.getOrDefault("easy", 3),
-            tierLives.getOrDefault("medium", 2),
-            tierLives.getOrDefault("hard", 1),
-            tierLives.getOrDefault("extreme", 1)
+            getLivesForChallengeTier(cfgForLives, "easy"),
+            getLivesForChallengeTier(cfgForLives, "medium"),
+            getLivesForChallengeTier(cfgForLives, "hard"),
+            getLivesForChallengeTier(cfgForLives, "extreme")
         };
         int[] slots = { GATEKEEPER_DIFF_EASY_SLOT, GATEKEEPER_DIFF_MEDIUM_SLOT, GATEKEEPER_DIFF_HARD_SLOT, GATEKEEPER_DIFF_EXTREME_SLOT };
         Material[] mats = { Material.LIME_CONCRETE, Material.YELLOW_CONCRETE, Material.ORANGE_CONCRETE, Material.RED_CONCRETE };
@@ -12323,6 +12729,151 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             inv.setItem(slots[i], makeGuiItemWithLore(mats[i], names[i], lore));
         }
         inv.setItem(GATEKEEPER_DIFF_BACK_SLOT, makeGuiItem(Material.ARROW, getMessage("gui.difficulty-back"), getMessage("gui.difficulty-back-lore")));
+        player.openInventory(inv);
+    }
+
+    /** Opens challenge picker GUI (list of challenges; click to open options for that challenge). Used by /challenge gui when no id given. */
+    private void openChallengePickerGui(Player player) {
+        List<String> ids = new ArrayList<>(challenges.keySet());
+        ids.sort(String.CASE_INSENSITIVE_ORDER);
+        Inventory inv = Bukkit.createInventory(null, CHALLENGE_PICKER_GUI_SIZE, CHALLENGE_OPTIONS_GUI_TITLE_PREFIX + "Select");
+        int n = Math.min(ids.size(), CHALLENGE_PICKER_CONTENT_PER_PAGE);
+        for (int i = 0; i < n; i++) {
+            String cid = ids.get(i);
+            ChallengeConfig cfg = challenges.get(cid);
+            String displayName = getChallengeAlias(cid);
+            List<String> lore = new ArrayList<>();
+            lore.add(ChatColor.GRAY + "ID: " + cid);
+            if (cfg != null && cfg.lockedDown) lore.add(ChatColor.RED + "Locked down");
+            inv.setItem(i, makeGuiItemWithLore(Material.PAPER, ChatColor.YELLOW + displayName, lore));
+        }
+        inv.setItem(CHALLENGE_PICKER_BACK_SLOT, makeGuiItem(Material.BARRIER, ChatColor.RED + "Back", ChatColor.GRAY + "Close"));
+        challengePickerGuiIds.put(player.getUniqueId(), ids);
+        challengeOptionsGuiChallengeId.put(player.getUniqueId(), null);
+        player.openInventory(inv);
+    }
+
+    /** Opens challenge options GUI for a challenge (toggles, loottable, lives, alias, lockdown). */
+    private void openChallengeOptionsGui(Player player, String challengeId) {
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null) {
+            player.closeInventory();
+            return;
+        }
+        String title = CHALLENGE_OPTIONS_GUI_TITLE_PREFIX + challengeId;
+        Inventory inv = Bukkit.createInventory(null, CHALLENGE_OPTIONS_GUI_SIZE, title);
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_BARRELS, makeGuiItemWithLore(
+            cfg.loottableIncludeBarrels ? Material.LIME_CONCRETE : Material.GRAY_CONCRETE,
+            ChatColor.AQUA + (cfg.loottableIncludeBarrels ? "Barrels: ON" : "Barrels: OFF"),
+            Arrays.asList(ChatColor.GRAY + "Include barrels in loot tables", ChatColor.GRAY + "Click to toggle")));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_SHULKER, makeGuiItemWithLore(
+            cfg.loottableIncludeShulkerBoxes ? Material.LIME_CONCRETE : Material.GRAY_CONCRETE,
+            ChatColor.AQUA + (cfg.loottableIncludeShulkerBoxes ? "Shulker boxes: ON" : "Shulker boxes: OFF"),
+            Arrays.asList(ChatColor.GRAY + "Include shulker boxes in loot tables", ChatColor.GRAY + "Click to toggle")));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_LOOTTABLE, makeGuiItem(Material.CHEST, ChatColor.GOLD + "Loot table menu", ChatColor.GRAY + "Open loot table manager"));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_LIVES, makeGuiItem(Material.GOLDEN_APPLE, ChatColor.YELLOW + "Lives per difficulty", ChatColor.GRAY + "Set lives for Easy/Medium/Hard/Extreme"));
+        String aliasDisplay = getChallengeAlias(challengeId);
+        boolean hasCustomAlias = challengeAliases.containsKey(challengeId);
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_ALIAS, makeGuiItemWithLore(Material.NAME_TAG, ChatColor.YELLOW + "Set alias",
+            Arrays.asList(ChatColor.GRAY + "Current: " + (hasCustomAlias ? aliasDisplay : "(config default)"), ChatColor.GRAY + "Click then type in chat (or 'clear')")));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_LOCKDOWN, makeGuiItemWithLore(
+            cfg.lockedDown ? Material.RED_CONCRETE : Material.LIME_CONCRETE,
+            ChatColor.RED + "Lockdown: " + (cfg.lockedDown ? "ON" : "OFF"),
+            Arrays.asList(ChatColor.GRAY + "When ON, players cannot start this challenge", ChatColor.GRAY + "Click to toggle")));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_LIST_LOOTTABLES, makeGuiItem(Material.BOOK, ChatColor.YELLOW + "List loottables", ChatColor.GRAY + "View loot tables assigned to this challenge"));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_REGEN, makeGuiItem(Material.GRASS_BLOCK, ChatColor.GREEN + "Regenerate area", ChatColor.GRAY + "Run regeneration (like /challenge regen)"));
+        boolean headDisabled = cfg.disabledArmorSlots != null && cfg.disabledArmorSlots.contains("HEAD");
+        boolean chestDisabled = cfg.disabledArmorSlots != null && cfg.disabledArmorSlots.contains("CHEST");
+        boolean legsDisabled = cfg.disabledArmorSlots != null && cfg.disabledArmorSlots.contains("LEGS");
+        boolean feetDisabled = cfg.disabledArmorSlots != null && cfg.disabledArmorSlots.contains("FEET");
+        inv.setItem(9, makeGuiItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_ARMOR_HEAD, makeGuiItemWithLore(
+            headDisabled ? Material.RED_TERRACOTTA : Material.LEATHER_HELMET,
+            (headDisabled ? ChatColor.RED : ChatColor.GREEN) + "Helmet: " + (headDisabled ? "Disabled" : "Allowed"),
+            Arrays.asList(ChatColor.GRAY + "If disabled, equipped item is moved to inv on entry", ChatColor.GRAY + "Click to toggle")));
+        inv.setItem(11, makeGuiItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_ARMOR_CHEST, makeGuiItemWithLore(
+            chestDisabled ? Material.RED_TERRACOTTA : Material.LEATHER_CHESTPLATE,
+            (chestDisabled ? ChatColor.RED : ChatColor.GREEN) + "Chestplate: " + (chestDisabled ? "Disabled" : "Allowed"),
+            Arrays.asList(ChatColor.GRAY + "If disabled, equipped item is moved to inv on entry", ChatColor.GRAY + "Click to toggle")));
+        inv.setItem(13, makeGuiItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_ARMOR_LEGS, makeGuiItemWithLore(
+            legsDisabled ? Material.RED_TERRACOTTA : Material.LEATHER_LEGGINGS,
+            (legsDisabled ? ChatColor.RED : ChatColor.GREEN) + "Leggings: " + (legsDisabled ? "Disabled" : "Allowed"),
+            Arrays.asList(ChatColor.GRAY + "If disabled, equipped item is moved to inv on entry", ChatColor.GRAY + "Click to toggle")));
+        inv.setItem(15, makeGuiItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
+        inv.setItem(CHALLENGE_OPTIONS_SLOT_ARMOR_FEET, makeGuiItemWithLore(
+            feetDisabled ? Material.RED_TERRACOTTA : Material.LEATHER_BOOTS,
+            (feetDisabled ? ChatColor.RED : ChatColor.GREEN) + "Boots: " + (feetDisabled ? "Disabled" : "Allowed"),
+            Arrays.asList(ChatColor.GRAY + "If disabled, equipped item is moved to inv on entry", ChatColor.GRAY + "Click to toggle")));
+        inv.setItem(17, makeGuiItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
+        for (int i = CHALLENGE_OPTIONS_NAVBAR_START; i < CHALLENGE_OPTIONS_GUI_SIZE; i++) {
+            if (i == CHALLENGE_OPTIONS_SLOT_BACK) {
+                inv.setItem(i, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", ChatColor.GRAY + "Close or return to list"));
+            } else {
+                inv.setItem(i, makeGuiItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
+            }
+        }
+        challengeOptionsGuiChallengeId.put(player.getUniqueId(), challengeId);
+        player.openInventory(inv);
+    }
+
+    /** Opens GUI listing loot tables assigned to this challenge. Click a loottable to open its options. */
+    private void openChallengeLoottablesListGui(Player player, String challengeId) {
+        List<String> assignedIds = new ArrayList<>();
+        for (LootTableData t : loottables.values()) {
+            if (t.assignedChallengeIds != null && t.assignedChallengeIds.contains(challengeId)) {
+                assignedIds.add(t.id);
+            }
+        }
+        assignedIds.sort(String.CASE_INSENSITIVE_ORDER);
+        challengeLoottablesListIds.put(player.getUniqueId(), assignedIds);
+
+        Inventory inv = Bukkit.createInventory(null, CHALLENGE_LOOTTABLES_LIST_SLOTS, CHALLENGE_LOOTTABLES_LIST_TITLE_PREFIX + challengeId);
+        int n = Math.min(assignedIds.size(), CHALLENGE_LOOTTABLES_LIST_CONTENT_PER_PAGE);
+        for (int i = 0; i < n; i++) {
+            String lid = assignedIds.get(i);
+            LootTableData t = loottables.get(lid);
+            if (t == null) continue;
+            Material iconMat = (t.iconMaterial != null ? t.iconMaterial : Material.CHEST);
+            ItemStack icon = new ItemStack(iconMat);
+            org.bukkit.inventory.meta.ItemMeta meta = icon.getItemMeta();
+            if (meta != null) {
+                meta.setDisplayName(ChatColor.YELLOW + (t.name != null ? t.name : t.id));
+                meta.setLore(Arrays.asList(
+                    ChatColor.GRAY + "ID: " + t.id,
+                    ChatColor.GRAY + "Size: " + t.size.name(),
+                    ChatColor.GRAY + "Click to open options"
+                ));
+                icon.setItemMeta(meta);
+            }
+            inv.setItem(i, icon);
+        }
+        for (int i = CHALLENGE_LOOTTABLES_LIST_CONTENT_PER_PAGE; i < CHALLENGE_LOOTTABLES_LIST_BACK_SLOT; i++) {
+            inv.setItem(i, makeGuiItem(Material.GRAY_STAINED_GLASS_PANE, " ", null));
+        }
+        inv.setItem(CHALLENGE_LOOTTABLES_LIST_BACK_SLOT, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", ChatColor.GRAY + "Return to challenge options"));
+        challengeOptionsGuiChallengeId.put(player.getUniqueId(), challengeId);
+        player.openInventory(inv);
+    }
+
+    /** Opens lives-per-difficulty sub-GUI for a challenge. Left/right click to decrease/increase (min 1, max 10). */
+    private void openChallengeLivesGui(Player player, String challengeId) {
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null) {
+            openChallengeOptionsGui(player, challengeId);
+            return;
+        }
+        Inventory inv = Bukkit.createInventory(null, CHALLENGE_LIVES_GUI_SIZE, CHALLENGE_LIVES_GUI_TITLE_PREFIX + challengeId);
+        String[] tiers = { "easy", "medium", "hard", "extreme" };
+        for (int i = 0; i < 4; i++) {
+            int lives = getLivesForChallengeTier(cfg, tiers[i]);
+            Material mat = lives >= 3 ? Material.GOLDEN_APPLE : (lives == 2 ? Material.APPLE : Material.CHORUS_FRUIT);
+            inv.setItem(CHALLENGE_LIVES_SLOTS[i], makeGuiItemWithLore(mat, ChatColor.YELLOW + tiers[i] + ": " + lives,
+                Arrays.asList(ChatColor.GRAY + "Left click: -1", ChatColor.GRAY + "Right click: +1")));
+        }
+        inv.setItem(CHALLENGE_LIVES_BACK_SLOT, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", ChatColor.GRAY + "Return to options"));
+        challengeOptionsGuiChallengeId.put(player.getUniqueId(), challengeId);
         player.openInventory(inv);
     }
 
@@ -12384,7 +12935,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         inv.setItem(COMPLETION_SLOT_LIVES_LOST, makeGuiItemWithLore(Material.GOLDEN_APPLE, getMessage("completion-gui.lives-lost"), loreLives));
         inv.setItem(COMPLETION_SLOT_INVADERS_SLAIN, makeGuiItemWithLore(Material.NETHER_STAR, getMessage("completion-gui.invaders-slain"), loreInvaders));
         inv.setItem(COMPLETION_SLOT_TOGGLE_TEAM, makeGuiItem(Material.NAME_TAG, getMessage("completion-gui.toggle-team"), getMessage(teamView ? "completion-gui.toggle-team-on" : "completion-gui.toggle-team-off")));
-        inv.setItem(COMPLETION_SLOT_EXIT_CLAIM, makeGuiItem(Material.LIME_CONCRETE, getMessage("completion-gui.exit-claim"), getMessage("completion-gui.exit-claim-lore")));
+        if (ctx.diedNoLives) {
+            inv.setItem(COMPLETION_SLOT_EXIT_CLAIM, makeGuiItem(Material.BARRIER, getMessage("completion-gui.close"), getMessage("completion-gui.close-lore")));
+            boolean itemBuybackAvailable = itemBuybackEnabled && !ctx.diedDuringInvasion && storedDeathInventory.containsKey(player.getUniqueId());
+            if (itemBuybackAvailable) {
+                inv.setItem(COMPLETION_SLOT_ITEM_BUYBACK, makeGuiItem(Material.CHEST, getMessage("completion-gui.item-buyback"), getMessage("completion-gui.item-buyback-lore", "fee", String.format("%.2f", itemBuybackFee))));
+            } else {
+                inv.setItem(COMPLETION_SLOT_ITEM_BUYBACK, makeGuiItem(Material.GRAY_DYE, getMessage("completion-gui.item-buyback-unavailable"), getMessage("completion-gui.item-buyback-unavailable-lore")));
+            }
+            double buybackFee = getBuyBackFeeForTier(ctx.difficultyTier);
+            inv.setItem(COMPLETION_SLOT_BUYBACK, makeGuiItem(Material.EMERALD, getMessage("completion-gui.buyback"), getMessage("completion-gui.buyback-lore", "fee", String.format("%.2f", buybackFee))));
+        } else {
+            inv.setItem(COMPLETION_SLOT_EXIT_CLAIM, makeGuiItem(Material.LIME_CONCRETE, getMessage("completion-gui.exit-claim"), getMessage("completion-gui.exit-claim-lore")));
+        }
         player.openInventory(inv);
     }
 
@@ -12484,13 +13047,40 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        // Completion stats GUI (view-only; exit-and-claim and toggle team)
+        // Completion exit confirm GUI (Are you sure? Yes / No) – only when died-no-lives
+        if (title.startsWith(COMPLETION_EXIT_CONFIRM_TITLE_PREFIX)) {
+            event.setCancelled(true);
+            CompletionGuiContext ctx = completionGuiContext.get(uuid);
+            if (ctx == null) return;
+            int slot = event.getRawSlot();
+            if (slot == CONFIRM_YES_SLOT) {
+                completionGuiContext.remove(uuid);
+                player.closeInventory();
+                return;
+            }
+            if (slot == CONFIRM_NO_SLOT) {
+                player.closeInventory();
+                Bukkit.getScheduler().runTaskLater(this, () -> openCompletionStatsGui(player, ctx), 1L);
+                return;
+            }
+            return;
+        }
+
+        // Completion stats GUI (view-only; exit-and-claim and toggle team; when diedNoLives: close, item buyback, buyback)
         if (title.startsWith(COMPLETION_GUI_TITLE_PREFIX)) {
             event.setCancelled(true);
             CompletionGuiContext ctx = completionGuiContext.get(uuid);
             if (ctx == null) return;
             int slot = event.getRawSlot();
             if (slot == COMPLETION_SLOT_EXIT_CLAIM) {
+                if (ctx.diedNoLives) {
+                    // Open confirm: Are you sure you want to close? Yes / No
+                    Inventory confirmInv = Bukkit.createInventory(null, 27, COMPLETION_EXIT_CONFIRM_TITLE_PREFIX);
+                    confirmInv.setItem(CONFIRM_YES_SLOT, makeGuiItem(Material.LIME_CONCRETE, getMessage("completion-gui.confirm-yes"), getMessage("completion-gui.confirm-yes-lore")));
+                    confirmInv.setItem(CONFIRM_NO_SLOT, makeGuiItem(Material.RED_CONCRETE, getMessage("completion-gui.confirm-no"), getMessage("completion-gui.confirm-no-lore")));
+                    player.openInventory(confirmInv);
+                    return;
+                }
                 completionGuiContext.remove(uuid);
                 player.closeInventory();
                 ChallengeConfig cfg = challenges.get(ctx.challengeId);
@@ -12507,6 +13097,32 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             if (slot == COMPLETION_SLOT_TOGGLE_TEAM) {
                 ctx.showTeamView = !ctx.showTeamView;
                 openCompletionStatsGui(player, ctx);
+                return;
+            }
+            if (ctx.diedNoLives && slot == COMPLETION_SLOT_ITEM_BUYBACK) {
+                if (itemBuybackEnabled && !ctx.diedDuringInvasion) {
+                    List<ItemStack> stored = storedDeathInventory.remove(uuid);
+                    if (stored != null && !stored.isEmpty() && economy != null) {
+                        if (economy.getBalance(player) < itemBuybackFee) {
+                            player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("completion-gui.item-buyback-insufficient", "fee", String.format("%.2f", itemBuybackFee), "balance", String.format("%.2f", economy.getBalance(player)))));
+                            return;
+                        }
+                        economy.withdrawPlayer(player, itemBuybackFee);
+                        for (ItemStack stack : stored) {
+                            if (stack != null && !stack.getType().isAir()) player.getInventory().addItem(stack);
+                        }
+                        player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("completion-gui.item-buyback-success", "fee", String.format("%.2f", itemBuybackFee))));
+                        completionGuiContext.remove(uuid);
+                        player.closeInventory();
+                    }
+                }
+                return;
+            }
+            if (ctx.diedNoLives && slot == COMPLETION_SLOT_BUYBACK) {
+                if (doBuybackFromGui(player, ctx.challengeId, ctx.difficultyTier)) {
+                    completionGuiContext.remove(uuid);
+                    player.closeInventory();
+                }
                 return;
             }
             return;
@@ -12761,7 +13377,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         // Check if player has lives remaining
         Integer remainingLives = playerLives.get(uuid);
         if (remainingLives == null) {
-            remainingLives = tierLives.getOrDefault(activeChallengeDifficulties.getOrDefault(challengeId, "easy"), 3);
+            ChallengeConfig cfgForLives = challenges.get(challengeId);
+            String tier = activeChallengeDifficulties.getOrDefault(challengeId, "easy");
+            remainingLives = getLivesForChallengeTier(cfgForLives, tier);
             playerLives.put(uuid, remainingLives);
         }
         
@@ -12787,9 +13405,27 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             // Don't remove from challenge - they're still in it
             // Don't process queue - challenge is still active
         } else {
-            // No lives remaining - remove from challenge; drop inventory unless easy mode (easy keeps inventory)
+            // No lives remaining - remove from challenge; drop inventory unless easy mode or item buyback (non-invasion)
             String tier = activeChallengeDifficulties.getOrDefault(challengeId, "easy");
+            boolean duringInvasion = invasionManager != null && invasionManager.isEnabled() && invasionManager.getInvaderCount(challengeId) > 0;
+            // Snapshot run stats for death stats GUI (before we remove)
+            ChallengeRunStats myStatsSnapshot = challengeRunStats.get(uuid);
+            ChallengeRunStats statsCopy = myStatsSnapshot != null ? myStatsSnapshot.copy() : new ChallengeRunStats(0);
+            Map<UUID, ChallengeRunStats> statsByMember = new HashMap<>();
+            statsByMember.put(uuid, statsCopy);
+
             if ("easy".equals(tier)) {
+                event.setKeepInventory(true);
+                event.getDrops().clear();
+                event.setKeepLevel(true);
+                event.setDroppedExp(0);
+            } else if (!duringInvasion && itemBuybackEnabled && economy != null) {
+                // Store drops for item buyback; don't drop on floor
+                List<ItemStack> copy = new ArrayList<>();
+                for (ItemStack drop : event.getDrops()) {
+                    if (drop != null && !drop.getType().isAir()) copy.add(drop.clone());
+                }
+                if (!copy.isEmpty()) storedDeathInventory.put(uuid, copy);
                 event.setKeepInventory(true);
                 event.getDrops().clear();
                 event.setKeepLevel(true);
@@ -12804,7 +13440,6 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             clearInstanceChestDataForPlayer(uuid, challengeId);
             if (invasionManager != null) invasionManager.removeStuckCrystal(player);
             // Track as dead party member if in a party
-            // Check if there are other active players in this challenge
             boolean hasOtherActivePlayers = false;
             for (Map.Entry<UUID, String> entry : activeChallenges.entrySet()) {
                 if (entry.getValue().equals(challengeId) && !entry.getKey().equals(uuid)) {
@@ -12813,32 +13448,78 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
             if (hasOtherActivePlayers) {
-                // Party member died but party is still active - track for rewards
                 deadPartyMembers.put(uuid, challengeId);
             } else {
                 // All challengers in this challenge are dead; invaders win if any are present
-                if (invasionManager != null && invasionManager.isEnabled() && invasionManager.getInvaderCount(challengeId) > 0) {
+                if (duringInvasion && invasionManager != null) {
                     String victoryTier = activeChallengeDifficulties.getOrDefault(challengeId, "easy");
                     invasionManager.onChallengersAllDead(challengeId, victoryTier);
                 }
             }
             
-            // Clean up difficulty tier if no players are active in this challenge
             if (removedChallengeId != null) {
                 cleanupChallengeDifficultyIfEmpty(removedChallengeId);
             }
             
-            // Mark player for teleport to spawn on respawn
             pendingDeathTeleports.put(uuid, challengeId);
+            // Show stats GUI on respawn (died-no-lives only; not for /cc completion)
+            List<UUID> partyUuids = Collections.singletonList(uuid);
+            CompletionGuiContext deathCtx = new CompletionGuiContext(challengeId, tier, statsCopy, partyUuids, statsByMember, true, duringInvasion);
+            pendingDeathStatsGui.put(uuid, deathCtx);
             
             double fee = getBuyBackFeeForTier(tier);
             player.sendMessage(getMessage("lives.died-no-lives", "fee", String.format("%.2f", fee)));
             
-            // Check if challenge is now available and process queue
             if (!isChallengeLocked(challengeId)) {
                 processQueue(challengeId);
             }
         }
+    }
+
+    /** Blocks equipping armor in disabled slots while player is in a challenge. Handles direct slot click, shift-click from inv, and right-click equip. */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = false)
+    public void onDisabledArmorSlotClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (event.getView().getType() != InventoryType.CRAFTING) return;
+        String challengeId = activeChallenges.get(player.getUniqueId());
+        if (challengeId == null) return;
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null || cfg.disabledArmorSlots == null || cfg.disabledArmorSlots.isEmpty()) return;
+
+        int raw = event.getRawSlot();
+        if (raw >= 36 && raw <= 39) {
+            String slotName = ARMOR_SLOT_NAMES[raw - 36];
+            if (cfg.disabledArmorSlots.contains(slotName)) {
+                event.setCancelled(true);
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("entry.armor-slot-disabled")));
+            }
+            return;
+        }
+        if (event.isShiftClick() && raw >= 0 && raw < 36) {
+            ItemStack current = event.getCurrentItem();
+            String slotName = getArmorSlotForItem(current);
+            if (slotName != null && cfg.disabledArmorSlots.contains(slotName)) {
+                event.setCancelled(true);
+                player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("entry.armor-slot-disabled")));
+            }
+        }
+    }
+
+    /** Blocks right-click equipping armor into a disabled slot while in a challenge. */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = false)
+    public void onDisabledArmorRightClickEquip(PlayerInteractEvent event) {
+        if (event.getAction() != org.bukkit.event.block.Action.RIGHT_CLICK_AIR && event.getAction() != org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK) return;
+        Player player = event.getPlayer();
+        ItemStack item = event.getItem();
+        if (item == null || item.getType() == Material.AIR) return;
+        String slotName = getArmorSlotForItem(item);
+        if (slotName == null) return;
+        String challengeId = activeChallenges.get(player.getUniqueId());
+        if (challengeId == null) return;
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null || cfg.disabledArmorSlots == null || !cfg.disabledArmorSlots.contains(slotName)) return;
+        event.setCancelled(true);
+        player.sendMessage(ChatColor.translateAlternateColorCodes('&', getMessage("entry.armor-slot-disabled")));
     }
 
     @EventHandler(priority = EventPriority.LOW)
@@ -12930,6 +13611,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     lastLoottableListReversed.put(player.getUniqueId(), false);
                     lastLoottableListPage.put(player.getUniqueId(), 0);
                     openLoottableListGui(player, 0);
+                } else if (slot == LOOTTABLE_LIST_DIRECTION_SLOT) {
+                    boolean current = Boolean.TRUE.equals(lastLoottableListReversed.get(player.getUniqueId()));
+                    lastLoottableListReversed.put(player.getUniqueId(), !current);
+                    lastLoottableListPage.put(player.getUniqueId(), 0);
+                    openLoottableListGui(player, 0);
                 } else if (slot == LOOTTABLE_LIST_PREV_SLOT && ctx.listPage > 0) {
                     openLoottableListGui(player, ctx.listPage - 1);
                 } else if (slot == LOOTTABLE_LIST_NEXT_SLOT) {
@@ -12969,12 +13655,6 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     lastLoottableListFilterMode.remove(player.getUniqueId());
                     lastLoottableListFilterParam.remove(player.getUniqueId());
                     lastLoottableListReversed.put(player.getUniqueId(), false);
-                    lastLoottableListPage.put(player.getUniqueId(), 0);
-                    openLoottableListGui(player, 0);
-                } else if (slot == 33) {
-                    // Toggle direction (newest/oldest or A→Z / Z→A)
-                    boolean current = Boolean.TRUE.equals(lastLoottableListReversed.get(player.getUniqueId()));
-                    lastLoottableListReversed.put(player.getUniqueId(), !current);
                     lastLoottableListPage.put(player.getUniqueId(), 0);
                     openLoottableListGui(player, 0);
                 }
@@ -13149,6 +13829,161 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     }
                 }
             }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOW)
+    public void onChallengeOptionsInventoryClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        String title = event.getView().getTitle();
+        int slot = event.getRawSlot();
+        if (slot != event.getSlot()) return;
+
+        if (title.startsWith(CHALLENGE_LOOTTABLES_LIST_TITLE_PREFIX)) {
+            String challengeId = challengeOptionsGuiChallengeId.get(player.getUniqueId());
+            List<String> listIds = challengeLoottablesListIds.get(player.getUniqueId());
+            event.setCancelled(true);
+            if (slot == CHALLENGE_LOOTTABLES_LIST_BACK_SLOT) {
+                challengeLoottablesListIds.remove(player.getUniqueId());
+                if (challengeId != null) openChallengeOptionsGui(player, challengeId);
+                else player.closeInventory();
+                return;
+            }
+            if (listIds != null && slot >= 0 && slot < listIds.size()) {
+                String loottableId = listIds.get(slot);
+                if (loottables.containsKey(loottableId)) {
+                    challengeLoottablesListIds.remove(player.getUniqueId());
+                    challengeOptionsGuiChallengeId.remove(player.getUniqueId());
+                    player.closeInventory();
+                    openLoottableOptionsGui(player, loottableId);
+                }
+            }
+            return;
+        }
+
+        if (title.startsWith(CHALLENGE_LIVES_GUI_TITLE_PREFIX)) {
+            String challengeId = challengeOptionsGuiChallengeId.get(player.getUniqueId());
+            if (challengeId == null) return;
+            event.setCancelled(true);
+            ChallengeConfig cfg = challenges.get(challengeId);
+            if (cfg == null) return;
+            if (slot == CHALLENGE_LIVES_BACK_SLOT) {
+                openChallengeOptionsGui(player, challengeId);
+                return;
+            }
+            String[] tiers = { "easy", "medium", "hard", "extreme" };
+            for (int i = 0; i < 4; i++) {
+                if (slot == CHALLENGE_LIVES_SLOTS[i]) {
+                    int current = getLivesForChallengeTier(cfg, tiers[i]);
+                    boolean right = event.getClick() == org.bukkit.event.inventory.ClickType.RIGHT;
+                    int next = right ? Math.min(10, current + 1) : Math.max(1, current - 1);
+                    if (cfg.livesPerTierOverride == null) cfg.livesPerTierOverride = new HashMap<>();
+                    cfg.livesPerTierOverride.put(tiers[i], next);
+                    saveChallengeToConfig(cfg);
+                    openChallengeLivesGui(player, challengeId);
+                    player.sendMessage(ChatColor.GRAY + tiers[i] + " lives set to " + next);
+                    return;
+                }
+            }
+            return;
+        }
+
+        if (!title.startsWith(CHALLENGE_OPTIONS_GUI_TITLE_PREFIX)) return;
+        event.setCancelled(true);
+
+        if (title.equals(CHALLENGE_OPTIONS_GUI_TITLE_PREFIX + "Select")) {
+            if (slot == CHALLENGE_PICKER_BACK_SLOT) {
+                challengePickerGuiIds.remove(player.getUniqueId());
+                challengeOptionsGuiChallengeId.remove(player.getUniqueId());
+                player.closeInventory();
+                return;
+            }
+            List<String> ids = challengePickerGuiIds.get(player.getUniqueId());
+            if (ids != null && slot >= 0 && slot < ids.size()) {
+                String id = ids.get(slot);
+                if (challenges.containsKey(id)) {
+                    challengePickerGuiIds.remove(player.getUniqueId());
+                    openChallengeOptionsGui(player, id);
+                }
+            }
+            return;
+        }
+
+        String challengeId = challengeOptionsGuiChallengeId.get(player.getUniqueId());
+        if (challengeId == null) return;
+        ChallengeConfig cfg = challenges.get(challengeId);
+        if (cfg == null) return;
+
+        if (slot == CHALLENGE_OPTIONS_SLOT_BARRELS) {
+            cfg.loottableIncludeBarrels = !cfg.loottableIncludeBarrels;
+            saveChallengeToConfig(cfg);
+            player.sendMessage(getMessage("admin.challenge-loottable-barrels-status", "id", challengeId, "status", cfg.loottableIncludeBarrels ? "enabled" : "disabled"));
+            openChallengeOptionsGui(player, challengeId);
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_SHULKER) {
+            cfg.loottableIncludeShulkerBoxes = !cfg.loottableIncludeShulkerBoxes;
+            saveChallengeToConfig(cfg);
+            player.sendMessage(getMessage("admin.challenge-loottable-shulkerboxes-status", "id", challengeId, "status", cfg.loottableIncludeShulkerBoxes ? "enabled" : "disabled"));
+            openChallengeOptionsGui(player, challengeId);
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_LOOTTABLE) {
+            lastLoottableListFilterMode.put(player.getUniqueId(), LootTableListFilterMode.CHALLENGE);
+            lastLoottableListFilterParam.put(player.getUniqueId(), challengeId);
+            lastLoottableListPage.put(player.getUniqueId(), 0);
+            challengeOptionsGuiChallengeId.remove(player.getUniqueId());
+            player.closeInventory();
+            openLoottableListGui(player, 0);
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_LIVES) {
+            openChallengeLivesGui(player, challengeId);
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_ALIAS) {
+            pendingChallengeAlias.put(player.getUniqueId(), challengeId);
+            challengeOptionsGuiChallengeId.remove(player.getUniqueId());
+            player.closeInventory();
+            player.sendMessage(ChatColor.YELLOW + "Type the challenge alias in chat (use & color codes), or 'clear' to remove. You have 60 seconds.");
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_LOCKDOWN) {
+            cfg.lockedDown = !cfg.lockedDown;
+            saveChallengeToConfig(cfg);
+            player.sendMessage(cfg.lockedDown ? getMessage("admin.challenge-lockdown-success", "id", challengeId) : getMessage("admin.challenge-unlockdown-success", "id", challengeId));
+            openChallengeOptionsGui(player, challengeId);
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_LIST_LOOTTABLES) {
+            openChallengeLoottablesListGui(player, challengeId);
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_REGEN) {
+            if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
+                regenerateChallengeArea(cfg);
+                player.sendMessage(ChatColor.GREEN + "Regeneration started for challenge '" + challengeId + "'.");
+            } else {
+                player.sendMessage(ChatColor.RED + "No regeneration area set for this challenge.");
+            }
+            openChallengeOptionsGui(player, challengeId);
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_ARMOR_HEAD || slot == CHALLENGE_OPTIONS_SLOT_ARMOR_CHEST
+                || slot == CHALLENGE_OPTIONS_SLOT_ARMOR_LEGS || slot == CHALLENGE_OPTIONS_SLOT_ARMOR_FEET) {
+            String armorSlotName = (slot == CHALLENGE_OPTIONS_SLOT_ARMOR_HEAD) ? "HEAD"
+                : (slot == CHALLENGE_OPTIONS_SLOT_ARMOR_CHEST) ? "CHEST"
+                : (slot == CHALLENGE_OPTIONS_SLOT_ARMOR_LEGS) ? "LEGS" : "FEET";
+            if (cfg.disabledArmorSlots == null) cfg.disabledArmorSlots = new HashSet<>();
+            if (cfg.disabledArmorSlots.contains(armorSlotName)) {
+                cfg.disabledArmorSlots.remove(armorSlotName);
+                if (cfg.disabledArmorSlots.isEmpty()) cfg.disabledArmorSlots = new HashSet<>();
+            } else {
+                cfg.disabledArmorSlots.add(armorSlotName);
+            }
+            saveChallengeToConfig(cfg);
+            player.sendMessage(ChatColor.GRAY + armorSlotName.toLowerCase(Locale.ROOT) + " slot: " + (cfg.disabledArmorSlots.contains(armorSlotName) ? "disabled" : "allowed"));
+            openChallengeOptionsGui(player, challengeId);
+        } else if (slot == CHALLENGE_OPTIONS_SLOT_BACK) {
+            challengeOptionsGuiChallengeId.remove(player.getUniqueId());
+            player.closeInventory();
+        }
+    }
+
+    @EventHandler
+    public void onChallengeOptionsGuiClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player player)) return;
+        String title = event.getView().getTitle();
+        if (title.startsWith(CHALLENGE_OPTIONS_GUI_TITLE_PREFIX) || title.startsWith(CHALLENGE_LIVES_GUI_TITLE_PREFIX)) {
+            challengeOptionsGuiChallengeId.remove(player.getUniqueId());
+            challengePickerGuiIds.remove(player.getUniqueId());
+        }
+        if (title.startsWith(CHALLENGE_LOOTTABLES_LIST_TITLE_PREFIX)) {
+            challengeLoottablesListIds.remove(player.getUniqueId());
         }
     }
 
@@ -13383,6 +14218,24 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }, 1L);
     }
 
+    /** When player closes the death-stats exit-confirm GUI with E (instead of Yes/No), reopen stats so they're not stuck. */
+    @EventHandler
+    public void onCompletionConfirmClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player player)) return;
+        String title = event.getView().getTitle();
+        if (!title.startsWith(COMPLETION_EXIT_CONFIRM_TITLE_PREFIX)) return;
+        CompletionGuiContext ctx = completionGuiContext.get(player.getUniqueId());
+        if (ctx == null || !ctx.diedNoLives) return;
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            if (!player.isOnline()) return;
+            if (player.getOpenInventory() == null || player.getOpenInventory().getTopInventory() == null) return;
+            String nowOpen = player.getOpenInventory().getTitle();
+            if (!nowOpen.startsWith(COMPLETION_GUI_TITLE_PREFIX) && !nowOpen.startsWith(COMPLETION_EXIT_CONFIRM_TITLE_PREFIX)) {
+                openCompletionStatsGui(player, ctx);
+            }
+        }, 1L);
+    }
+
     public void onLoottableInventoryClose(InventoryCloseEvent event) {
         if (!(event.getPlayer() instanceof Player player)) return;
         String title = event.getView().getTitle();
@@ -13416,6 +14269,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String msg = event.getMessage();
         Player player = event.getPlayer();
         Bukkit.getScheduler().runTask(this, () -> scriptManager.handleScriptChatInput(player, msg));
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onChallengeAliasChat(AsyncPlayerChatEvent event) {
+        UUID uuid = event.getPlayer().getUniqueId();
+        String challengeId = pendingChallengeAlias.remove(uuid);
+        if (challengeId == null) return;
+        event.setCancelled(true);
+        String msg = event.getMessage().trim();
+        Bukkit.getScheduler().runTask(this, () -> {
+            if (msg.equalsIgnoreCase("clear")) {
+                getConfig().set("challenge-aliases." + challengeId, null);
+                saveConfig();
+                loadChallengeAliases();
+                event.getPlayer().sendMessage(ChatColor.GREEN + "Challenge alias cleared for '" + challengeId + "'.");
+            } else {
+                getConfig().set("challenge-aliases." + challengeId, msg);
+                saveConfig();
+                loadChallengeAliases();
+                event.getPlayer().sendMessage(ChatColor.GREEN + "Challenge alias set for '" + challengeId + "': " + ChatColor.translateAlternateColorCodes('&', msg));
+            }
+        });
     }
 
     @EventHandler
@@ -13655,7 +14530,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     
                     // Initialize lives based on difficulty tier
                     String tier = activeChallengeDifficulties.getOrDefault(challengeId, "easy");
-                    int lives = tierLives.getOrDefault(tier, 3);
+                    int lives = getLivesForChallengeTier(cfg, tier);
                     playerLives.put(uuid, lives);
                     
                     // Teleport player back to challenge
@@ -13719,7 +14594,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     if (spawnLocation != null) {
                         player.teleport(spawnLocation);
                         giveBackBlockedItemOverflow(player, challengeId);
+                        giveBackStoredDisabledArmor(player, challengeId);
                         player.sendMessage(getMessage("challenge.died"));
+                    }
+                    // Open death stats GUI if we have pending context (died with no lives)
+                    CompletionGuiContext deathCtx = pendingDeathStatsGui.remove(uuid);
+                    if (deathCtx != null) {
+                        completionGuiContext.put(uuid, deathCtx);
+                        Bukkit.getScheduler().runTaskLater(ConradChallengesPlugin.this, () -> {
+                            if (player.isOnline()) openCompletionStatsGui(player, deathCtx);
+                        }, 5L);
                     }
                 }
             }
@@ -16515,10 +17399,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     try {
                         Location loc = originalState.getLocation();
                         
-                        // Fast chunk check - skip if not loaded
+                        // If chunk is not loaded, still queue for restore (restore phase will load chunk).
+                        // Skipping would cause removed blocks (e.g. iron bars, doors) to never regenerate.
                         int chunkX = loc.getBlockX() >> 4;
                         int chunkZ = loc.getBlockZ() >> 4;
                         if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                            blocksToRestore.add(originalState);
                             currentIndex[0]++;
                             continue;
                         }
@@ -16702,25 +17588,38 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         }
                     } else {
                         // Start restoration phase. Sort so bisected blocks (doors, beds, etc.) restore bottom half before top half – otherwise the top can fail to link.
+                        // Also sort gravity-affected blocks (gravel, sand, etc.) last so pistons/support blocks restore first and have a tick to settle.
+                        // Comparator must be transitive: use a total order (BOTTOM=0, TOP=1, non-Bisected=2) to avoid "Comparison method violates its general contract".
                         blocksToRestore.sort((a, b) -> {
+                            // Gravity-affected blocks last (so pistons below can retract before gravel above is placed)
+                            boolean gravityA = isGravityAffectedBlock(a.getType());
+                            boolean gravityB = isGravityAffectedBlock(b.getType());
+                            int cmp = Boolean.compare(gravityA, gravityB);
+                            if (cmp != 0) return cmp;
                             BlockData ad = a.getBlockData();
                             BlockData bd = b.getBlockData();
-                            if (ad instanceof Bisected aa && bd instanceof Bisected bb) {
-                                Bisected.Half ah = aa.getHalf();
-                                Bisected.Half bh = bb.getHalf();
-                                if (ah != bh) return ah == Bisected.Half.BOTTOM ? -1 : 1;
-                            }
-                            return 0;
+                            int keyA = (ad instanceof Bisected aa) ? (aa.getHalf() == Bisected.Half.BOTTOM ? 0 : 1) : 2;
+                            int keyB = (bd instanceof Bisected bb) ? (bb.getHalf() == Bisected.Half.BOTTOM ? 0 : 1) : 2;
+                            cmp = Integer.compare(keyA, keyB);
+                            if (cmp != 0) return cmp;
+                            // Tie-break by location so order is deterministic and transitive
+                            Location la = a.getLocation();
+                            Location lb = b.getLocation();
+                            if (la.getBlockY() != lb.getBlockY()) return Integer.compare(la.getBlockY(), lb.getBlockY());
+                            if (la.getBlockX() != lb.getBlockX()) return Integer.compare(la.getBlockX(), lb.getBlockX());
+                            return Integer.compare(la.getBlockZ(), lb.getBlockZ());
                         });
                         final int[] restored = {0};
                         final int[] restoreIndex = {0};
+                        final java.util.Set<String> restoreChunkSkipRetried = new java.util.HashSet<>();
+                        final java.util.List<BlockState> deferredGravityBlocks = new java.util.ArrayList<>();
                         // Scale time budget for very large restorations (e.g. 30M blocks with lots of fire→air) to reduce total ticks
                         int toRestore = blocksToRestore.size();
                         long restoreTimeBudget = 15_000_000L; // 15ms default
                         if (toRestore > 2_000_000) restoreTimeBudget = 35_000_000L;  // 35ms for huge regens
                         else if (toRestore > 500_000) restoreTimeBudget = 25_000_000L; // 25ms for large
                         else if (toRestore > 100_000) restoreTimeBudget = 20_000_000L; // 20ms for medium-large
-                        scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, restoreIndex, restoreTimeBudget, blocksToRestore.size());
+                        scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, restoreIndex, restoreTimeBudget, blocksToRestore.size(), restoreChunkSkipRetried, deferredGravityBlocks);
                     }
                 } else {
                     // More blocks to compare, schedule next tick
@@ -16731,10 +17630,25 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
     
     /**
+     * Returns true for blocks that are affected by gravity (gravel, sand, concrete powder, anvils, dragon egg).
+     * Used to restore these blocks last and optionally defer them by 1 tick so pistons below can retract first.
+     */
+    private static boolean isGravityAffectedBlock(Material m) {
+        if (m == null) return false;
+        String name = m.name();
+        return name.equals("GRAVEL") || name.equals("SAND") || name.equals("RED_SAND") || name.equals("DRAGON_EGG")
+            || name.endsWith("_CONCRETE_POWDER") || name.equals("ANVIL") || name.equals("CHIPPED_ANVIL") || name.equals("DAMAGED_ANVIL");
+    }
+
+    /**
      * Helper method to schedule the next batch of block restoration (phase 2: restore only changed blocks)
+     * @param retriedChunkSkipKeys set of "x,y,z" block keys we already re-queued once due to unloaded chunk; blocks get one retry
+     * @param deferredGravityBlocks list of gravity-affected blocks to place 1 tick later so pistons can retract first
      */
     private void scheduleNextRestoreBatch(String challengeId, World world, List<BlockState> blocksToRestore,
-                                          int[] restored, int[] currentIndex, long timeBudgetNs, int totalToRestore) {
+                                          int[] restored, int[] currentIndex, long timeBudgetNs, int totalToRestore,
+                                          java.util.Set<String> retriedChunkSkipKeys,
+                                          java.util.List<BlockState> deferredGravityBlocks) {
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -16745,7 +17659,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     // Check time budget
                     if (System.nanoTime() - startTime >= timeBudgetNs) {
                         // Time budget exceeded, schedule next tick
-                        scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, currentIndex, timeBudgetNs, totalToRestore);
+                        scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, currentIndex, timeBudgetNs, totalToRestore, retriedChunkSkipKeys, deferredGravityBlocks);
                         return;
                     }
                     
@@ -16759,8 +17673,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         if (!world.isChunkLoaded(chunkX, chunkZ)) {
                             // Chunk unloaded - reload it
                             world.loadChunk(chunkX, chunkZ, true);
-                            // If still not loaded, skip this block and try again next tick
                             if (!world.isChunkLoaded(chunkX, chunkZ)) {
+                                // Give block one retry by re-queuing at end (chunk may load later in big regens)
+                                String blockKey = loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ();
+                                if (!retriedChunkSkipKeys.contains(blockKey)) {
+                                    retriedChunkSkipKeys.add(blockKey);
+                                    blocksToRestore.add(originalState);
+                                }
                                 currentIndex[0]++;
                                 continue;
                             }
@@ -16773,6 +17692,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         if (originalType == Material.AIR) {
                             block.setType(Material.AIR, false);
                             restored[0]++;
+                            currentIndex[0]++;
+                            continue;
+                        }
+                        
+                        // Defer gravity-affected blocks by 1 tick so pistons (and other support) below can retract/settle first
+                        if (isGravityAffectedBlock(originalType)) {
+                            deferredGravityBlocks.add(originalState);
                             currentIndex[0]++;
                             continue;
                         }
@@ -16911,39 +17837,70 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     currentIndex[0]++;
                 }
                 
-                // All blocks restored
+                // All blocks restored (non-gravity done; gravity may be deferred)
                 if (currentIndex[0] >= blocksToRestore.size()) {
-                    // Done!
-                    if (restored[0] < totalToRestore) {
-                        getLogger().warning("Regeneration incomplete for challenge '" + challengeId + "': Only restored " + restored[0] + "/" + totalToRestore + " blocks. Some blocks may have been skipped due to unloaded chunks.");
-                    } else {
-                        getLogger().info("Regenerated challenge area for '" + challengeId + "' (" + restored[0] + "/" + totalToRestore + " blocks restored)");
-                    }
-                    
-                    // Mark regeneration as complete
-                    challengeRegenerationStatus.put(challengeId, true);
-                    
-                    // Fill chests with assigned loot tables (clear then random roll per chest)
-                    ChallengeConfig cfgForLoot = challenges.get(challengeId);
-                    if (cfgForLoot != null) {
-                        fillChestsWithLoottables(challengeId, cfgForLoot);
-                    }
-                    
-                    // Spawner cooldowns will be reset when challenge completes/exits, not during start
-                    
-                    // Check if countdown already finished and teleport players if so
-                    CountdownTaskWrapper wrapper = activeCountdownTasks.get(challengeId);
-                    if (wrapper != null && wrapper.seconds <= 0) {
+                    if (!deferredGravityBlocks.isEmpty()) {
+                        // Place gravity blocks 1 tick later so pistons below have retracted
+                        final int deferredCount = deferredGravityBlocks.size();
+                        final java.util.List<BlockState> toPlace = new java.util.ArrayList<>(deferredGravityBlocks);
                         new BukkitRunnable() {
                             @Override
                             public void run() {
-                                wrapper.task.run();
+                                for (BlockState originalState : toPlace) {
+                                    try {
+                                        Location loc = originalState.getLocation();
+                                        if (!world.isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4)) {
+                                            world.loadChunk(loc.getBlockX() >> 4, loc.getBlockZ() >> 4, true);
+                                        }
+                                        Block block = world.getBlockAt(loc);
+                                        block.setType(originalState.getType(), false);
+                                        block.setBlockData(originalState.getBlockData(), false);
+                                    } catch (Exception e) {
+                                        getLogger().warning("Error restoring deferred gravity block at " + originalState.getLocation() + " for challenge '" + challengeId + "': " + e.getMessage());
+                                    }
+                                }
+                                int totalRestored = restored[0] + deferredCount;
+                                if (totalRestored < totalToRestore) {
+                                    getLogger().warning("Regeneration incomplete for challenge '" + challengeId + "': Only restored " + totalRestored + "/" + totalToRestore + " blocks.");
+                                } else {
+                                    getLogger().info("Regenerated challenge area for '" + challengeId + "' (" + totalRestored + "/" + totalToRestore + " blocks restored)");
+                                }
+                                challengeRegenerationStatus.put(challengeId, true);
+                                ChallengeConfig cfgForLoot = challenges.get(challengeId);
+                                if (cfgForLoot != null) {
+                                    fillChestsWithLoottables(challengeId, cfgForLoot);
+                                }
+                                CountdownTaskWrapper wrapper = activeCountdownTasks.get(challengeId);
+                                if (wrapper != null && wrapper.seconds <= 0) {
+                                    wrapper.task.run();
+                                }
                             }
-                        }.runTask(ConradChallengesPlugin.this);
+                        }.runTaskLater(ConradChallengesPlugin.this, 1L);
+                    } else {
+                        // No deferred blocks – complete immediately
+                        if (restored[0] < totalToRestore) {
+                            getLogger().warning("Regeneration incomplete for challenge '" + challengeId + "': Only restored " + restored[0] + "/" + totalToRestore + " blocks. Some blocks may have been skipped due to unloaded chunks.");
+                        } else {
+                            getLogger().info("Regenerated challenge area for '" + challengeId + "' (" + restored[0] + "/" + totalToRestore + " blocks restored)");
+                        }
+                        challengeRegenerationStatus.put(challengeId, true);
+                        ChallengeConfig cfgForLoot = challenges.get(challengeId);
+                        if (cfgForLoot != null) {
+                            fillChestsWithLoottables(challengeId, cfgForLoot);
+                        }
+                        CountdownTaskWrapper wrapper = activeCountdownTasks.get(challengeId);
+                        if (wrapper != null && wrapper.seconds <= 0) {
+                            new BukkitRunnable() {
+                                @Override
+                                public void run() {
+                                    wrapper.task.run();
+                                }
+                            }.runTask(ConradChallengesPlugin.this);
+                        }
                     }
                 } else {
                     // More blocks to restore, schedule next tick
-                    scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, currentIndex, timeBudgetNs, totalToRestore);
+                    scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, currentIndex, timeBudgetNs, totalToRestore, retriedChunkSkipKeys, deferredGravityBlocks);
                 }
             }
         }.runTaskLater(this, 1L);
@@ -17128,6 +18085,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         clone.legendaryChestKeys = original.legendaryChestKeys != null ? new HashSet<>(original.legendaryChestKeys) : new HashSet<>();
         clone.loottableIncludeBarrels = original.loottableIncludeBarrels;
         clone.loottableIncludeShulkerBoxes = original.loottableIncludeShulkerBoxes;
+        clone.livesPerTierOverride = original.livesPerTierOverride != null ? new HashMap<>(original.livesPerTierOverride) : null;
+        clone.disabledArmorSlots = original.disabledArmorSlots != null ? new HashSet<>(original.disabledArmorSlots) : new HashSet<>();
         clone.scriptNodes = new ArrayList<>();
         if (original.scriptNodes != null) {
             for (ChallengeScriptNode n : original.scriptNodes) {
@@ -17149,6 +18108,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
         clone.passThroughDistance = original.passThroughDistance;
+        clone.passThroughDistanceByBlockKey = original.passThroughDistanceByBlockKey != null ? new HashMap<>(original.passThroughDistanceByBlockKey) : new HashMap<>();
         return clone;
     }
 
@@ -17232,6 +18192,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         target.legendaryChestKeys = backup.legendaryChestKeys != null ? new HashSet<>(backup.legendaryChestKeys) : new HashSet<>();
         target.loottableIncludeBarrels = backup.loottableIncludeBarrels;
         target.loottableIncludeShulkerBoxes = backup.loottableIncludeShulkerBoxes;
+        target.livesPerTierOverride = backup.livesPerTierOverride != null ? new HashMap<>(backup.livesPerTierOverride) : null;
+        target.disabledArmorSlots = backup.disabledArmorSlots != null ? new HashSet<>(backup.disabledArmorSlots) : new HashSet<>();
         target.scriptNodes.clear();
         if (backup.scriptNodes != null) {
             for (ChallengeScriptNode n : backup.scriptNodes) {
@@ -17253,6 +18215,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
         target.passThroughDistance = backup.passThroughDistance;
+        target.passThroughDistanceByBlockKey = backup.passThroughDistanceByBlockKey != null ? new HashMap<>(backup.passThroughDistanceByBlockKey) : new HashMap<>();
     }
 
     /**
@@ -17268,6 +18231,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
         return java.util.Collections.singleton(blockKey);
+    }
+
+    /**
+     * Returns the activation distance in blocks for a pass-through block. Uses per-block override if set, else challenge default.
+     */
+    public double getPassThroughDistanceForBlock(ChallengeConfig cfg, String blockKey) {
+        if (cfg == null) return 2.5;
+        if (cfg.passThroughDistanceByBlockKey != null && cfg.passThroughDistanceByBlockKey.containsKey(blockKey)) {
+            return Math.max(0.5, Math.min(32.0, cfg.passThroughDistanceByBlockKey.get(blockKey)));
+        }
+        return Math.max(0.5, Math.min(32.0, cfg.passThroughDistance));
     }
 
     /**
@@ -17458,12 +18432,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (spawnLocation != null) {
             player.teleport(spawnLocation);
             giveBackBlockedItemOverflow(player, challengeId);
+            giveBackStoredDisabledArmor(player, challengeId);
             player.sendMessage(getMessage("admin.challenge-disconnect-returned-to-spawn"));
         } else {
             // Fallback to challenge destination if spawn not set
             if (cfg.destination != null) {
                 player.teleport(cfg.destination);
                 giveBackBlockedItemOverflow(player, challengeId);
+                giveBackStoredDisabledArmor(player, challengeId);
                 player.sendMessage(getMessage("admin.challenge-disconnect-no-return"));
             }
         }
@@ -17651,10 +18627,22 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     /**
      * Kills all mobs (non-player living entities) in the challenge's regeneration and challenge areas.
      * Used when the last player exits, on completion, and on edit save/cancel so the next run starts clean.
+     * Does not clear dropped items (use overload with clearDroppedItems for challenge start).
      *
      * @param cfg The challenge configuration
      */
     private void killMobsInChallengeArea(ChallengeConfig cfg) {
+        killMobsInChallengeArea(cfg, false);
+    }
+
+    /**
+     * Kills mobs and optionally clears dropped items in the challenge's regen and challenge areas.
+     * Single entity pass per box to avoid TPS impact.
+     *
+     * @param cfg The challenge configuration
+     * @param clearDroppedItems If true, also remove dropped item entities (for challenge start / test mode)
+     */
+    private void killMobsInChallengeArea(ChallengeConfig cfg, boolean clearDroppedItems) {
         if (cfg == null) return;
         // Regen areas (with optional auto-extend Y)
         List<Location[]> regenAreas = new ArrayList<>();
@@ -17673,7 +18661,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             int maxZ = Math.max(corners[0].getBlockZ(), corners[1].getBlockZ());
             int minY = cfg.regenerationAutoExtendY ? world.getMinHeight() : Math.min(corners[0].getBlockY(), corners[1].getBlockY());
             int maxY = cfg.regenerationAutoExtendY ? world.getMaxHeight() - 1 : Math.max(corners[0].getBlockY(), corners[1].getBlockY());
-            killMobsInBox(world, minX, maxX, minY, maxY, minZ, maxZ);
+            killMobsAndOptionalItemsInBox(world, minX, maxX, minY, maxY, minZ, maxZ, clearDroppedItems);
         }
         // Challenge areas (use corner Y, no auto-extend)
         List<Location[]> challengeAreas = new ArrayList<>();
@@ -17694,11 +18682,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             int maxY = Math.max(corners[0].getBlockY(), corners[1].getBlockY());
             int minZ = Math.min(corners[0].getBlockZ(), corners[1].getBlockZ());
             int maxZ = Math.max(corners[0].getBlockZ(), corners[1].getBlockZ());
-            killMobsInBox(world, minX, maxX, minY, maxY, minZ, maxZ);
+            killMobsAndOptionalItemsInBox(world, minX, maxX, minY, maxY, minZ, maxZ, clearDroppedItems);
         }
     }
 
-    private void killMobsInBox(World world, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+    /** One pass over entities in box: kill mobs (non-player); optionally remove dropped items. No extra getNearbyEntities. */
+    private void killMobsAndOptionalItemsInBox(World world, int minX, int maxX, int minY, int maxY, int minZ, int maxZ, boolean clearDroppedItems) {
         double centerX = (minX + maxX + 1) / 2.0;
         double centerY = (minY + maxY + 1) / 2.0;
         double centerZ = (minZ + maxZ + 1) / 2.0;
@@ -17709,8 +18698,28 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         for (Entity entity : world.getNearbyEntities(center, halfX, halfY, halfZ)) {
             if (entity instanceof LivingEntity && !(entity instanceof Player)) {
                 entity.remove();
+            } else if (clearDroppedItems && entity instanceof Item) {
+                entity.remove();
             }
         }
+    }
+
+    /** @deprecated Use killMobsAndOptionalItemsInBox for new code. Kept for any external reference. */
+    private void killMobsInBox(World world, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+        killMobsAndOptionalItemsInBox(world, minX, maxX, minY, maxY, minZ, maxZ, false);
+    }
+
+    /**
+     * Runs challenge-start cleanup: kill mobs, optionally clear dropped items, reset spawner cooldowns, set spawner levels.
+     * Called from countdown and test mode (5-tick delayed). Single-threaded, same entity pass as mob kill for items – no extra TPS cost.
+     */
+    private void runChallengeStartCleanup(ChallengeConfig cfg, String tier) {
+        boolean clearDroppedItems = getConfig().getBoolean("clear-dropped-items-on-challenge-start", true);
+        killMobsInChallengeArea(cfg, clearDroppedItems);
+        if (getConfig().getBoolean("reset-spawner-cooldowns-on-challenge-start", true)) {
+            resetMythicMobsSpawnersInArea(cfg);
+        }
+        Bukkit.getScheduler().runTaskLater(this, () -> setSpawnerLevelsForChallenge(cfg, tier), 1L);
     }
 
     /**

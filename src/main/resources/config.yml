@@ -14,6 +14,10 @@ party-countdown-seconds: 60  # Countdown time in seconds before party members ar
 # If you get TPS drops when challenges start, set to false; spawners will keep their natural cooldown.
 reset-spawner-cooldowns-on-challenge-start: true
 
+# Clear dropped items on the ground in the challenge/regen area when a challenge starts (and in test mode).
+# Uses the same entity pass as mob clearing, so no extra TPS cost when enabled.
+clear-dropped-items-on-challenge-start: true
+
 # Spawner level updates (when setting difficulty tier on challenge start). Lower = less lag per tick, longer total time.
 spawner-level-batch-size: 2          # How many spawners to update per batch (default 2; use 1 if TPS still drops)
 spawner-level-ticks-between-batches: 2  # Ticks to wait between batches (default 2; increase if server is laggy)
@@ -50,6 +54,12 @@ buy-back-fees:
   medium: 6000.0
   hard: 6000.0
   extreme: 6000.0
+
+# Item buyback: when a player runs out of lives (and did NOT die during an invasion), store their dropped items
+# and let them pay a fee to get them back from the death stats GUI. If they died during an invasion, items drop
+# on the floor and this option is disabled.
+item-buyback-enabled: true
+item-buyback-fee: 100000.0
 
 # General debug logging (e.g. container restore/store during challenge regen)
 debug: false  # When true, logs [CONTAINER DEBUG] and other debug messages
