@@ -1,0 +1,116 @@
+# Default values for challenge flags.
+# New challenges use these when a flag is not set in challenges.yml.
+# Edit and use /conradchallenges reload to apply changes live.
+# Flags config version - do not modify
+flags_version: 2
+
+# Master switch: when false, the plugin ignores all flags below (WG/GriefDefender can control). Toggle per-challenge via Options GUI.
+flags-applied: false
+# Allow breaking blocks in the challenge area
+block-break-enabled: false
+# Allow placing blocks in the challenge area
+block-place-enabled: false
+# Allow interacting with blocks (buttons, levers, doors, etc.) in the challenge area
+block-interact-enabled: false
+# Allow mob/entity spawning (natural and spawn eggs) in the challenge area
+entity-spawn-enabled: false
+# Allow damaging entities (mobs, animals) in the challenge area
+entity-damage-enabled: false
+# Allow players to drop items in the challenge area
+item-drop-enabled: false
+# Allow players to pick up items in the challenge area
+item-pickup-enabled: false
+# Allow using nether/end portals in the challenge area
+portal-use-enabled: false
+# Allow opening containers (chests, barrels, shulkers, etc.) in the challenge area
+interact-inventory-enabled: false
+# Allow crops to grow (wheat, carrots, etc.) in the challenge area
+crop-growth: true
+# Allow endermen to pick up and place blocks in the challenge area
+enderman-grief: false
+# Allow fire to spread in the challenge area
+fire-spread: false
+# Allow grass and mycelium to spread in the challenge area
+grass-growth: false
+# Allow water to form ice in the challenge area
+ice-form: true
+# Allow ice to melt in the challenge area
+ice-melt: true
+# Allow lava to flow in the challenge area
+lava-flow: true
+# Allow leaves to decay when trees are broken in the challenge area
+leaf-decay: false
+# Allow using flint and steel / fire charges in the challenge area
+lighter: false
+# Allow damaging or breaking paintings in the challenge area
+painting-damage: false
+# Allow riding entities (horses, pigs, boats, etc.) in the challenge area
+ride: true
+# Allow editing sign text in the challenge area
+sign-edit: false
+# Allow right-clicking signs to read/use them in the challenge area
+sign-use: true
+# Allow snow layers to form in the challenge area
+snow-fall: true
+# Allow snow to melt in the challenge area
+snow-melt: true
+# Allow snow golems to leave snow trails in the challenge area
+snowman-trail: true
+# Allow using minecarts and boats in the challenge area
+vehicle-use: true
+# Allow trading with villagers in the challenge area
+villager-trade: true
+# Allow vines to grow in the challenge area
+vine-growth: false
+# Allow water to flow in the challenge area
+water-flow: true
+# Allow ambient mobs (bats, etc.) to spawn in the challenge area
+ambient-spawn: true
+# Allow animals (cows, sheep, etc.) to spawn in the challenge area
+animal-spawn: true
+# Allow aquatic mobs (fish, dolphins, etc.) to spawn in the challenge area
+aquatic-spawn: true
+# Allow hostile mobs to spawn in the challenge area
+monster-spawn: true
+# Allow interacting with armor stands (equipping, taking items) in the challenge area
+armorstand-use: false
+# Allow chorus fruit to teleport players in the challenge area
+chorus-fruit-teleport: false
+# Allow creeper explosions to break blocks in the challenge area
+creeper-block-explosion: true
+# Allow placing or using end crystals in the challenge area
+endcrystal-use: false
+# Allow damaging armor stands in the challenge area
+entity-armorstand-damage: false
+# Allow damaging item frames in the challenge area
+entity-itemframe-damage: false
+# Allow mobs to drop experience orbs when killed in the challenge area
+exp-drop: true
+# Allow fall damage to entities (mobs, animals) in the challenge area
+fall-entity-damage: true
+# Allow fall damage to players in the challenge area
+fall-player-damage: true
+# Allow falling blocks (sand, gravel, anvils) to break on impact in the challenge area
+falling-block-break: true
+# Allow fire/lava to damage or destroy blocks in the challenge area
+fire-block-damage: false
+# Allow fire/lava to damage entities in the challenge area
+fire-entity-damage: true
+# PvP: when enabled, allows normal flow (challengers are allies; challengers can fight invaders; invaders can fight each other). When disabled, no player-vs-player damage and invasions are disabled.
+pvp: true
+# Allow players to take damage from mobs in the challenge area
+player-damage: true
+# Allow players to interact with ender pearls (teleport) in the challenge area
+player-enderpearl-interact: false
+# Allow players to interact with entities (e.g. name tags, lead) in the challenge area
+player-entity-interact: true
+# Allow players to interact with item frames (rotate, take items) in the challenge area
+player-itemframe-interact: false
+# Allow players to place paintings and item frames in the challenge area
+player-itemhanging-place: true
+# Allow players to damage villagers in the challenge area
+player-villager-damage: false
+# Allow TNT explosions to break blocks in the challenge area
+tnt-block-explosion: true
+# Allow TNT and other explosions to damage entities in the challenge area
+tnt-entity-explosion: true

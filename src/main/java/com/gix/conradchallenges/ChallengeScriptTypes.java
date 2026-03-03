@@ -41,6 +41,8 @@ public final class ChallengeScriptTypes {
         PLAY_SOUND,
         RUN_COMMAND,
         TELEPORT_PLAYER,
+        /** Distance-based checkpoint (PLAYER_ENTER_AREA): save respawn point for lives/buyback/stuck crystal. */
+        CHECKPOINT,
         /** Invisible wall: block can be walked through when a challenger is near. No trigger. */
         PASS_THROUGH,
         /** Exits the triggering player from the challenge (like /exit). */
@@ -89,6 +91,8 @@ public final class ChallengeScriptTypes {
         CONFIGURE,
         /** Waiting for chat input (message, command, signal name, etc.). */
         CONFIGURE_AWAIT_CHAT,
+        /** Chest options menu (ignore / loot type / scripts) for containers in edit mode. */
+        CHEST_MENU,
         CONFIRM,
         /** First screen when block already has functions: Add vs Edit/Remove. */
         BLOCK_MENU,
