@@ -124,7 +124,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         "clearchallengearea", "clearchallengearea2", "clearchallengearea3", "clearchallengearea4",
         "areasync",
         "blockitem", "unblockitem", "blockuse", "unblockuse", "removeitem", "unremoveitem", "setcompletionkey",
-        "blockbreak", "blockplace", "blockinteract",
+        "blockbreak", "blockplace", "blockinteract", "mergeflags",
         "loottable", "listchests", "chestignore", "loottype", "chestinfo", "loottablebarrels", "loottableshulkerboxes",
         "functiontool",
         "test",
@@ -145,7 +145,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         TIMER,
         ITEM,
         SPEED,
-        NONE
+        NORMAL
     }
 
     private static class SpeedTier {
@@ -363,6 +363,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         boolean tntBlockExplosion;
         boolean tntEntityExplosion;
 
+        /** Per-area flags (1-based area index -> flags). When null or empty, area 1 is created on first access. */
+        Map<Integer, AreaFlags> flagsByArea;
+
         // Script nodes (function tool): block/location + trigger + function + options
         List<ChallengeScriptNode> scriptNodes;
 
@@ -388,7 +391,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             this.cooldownSeconds = 0;
             this.lockedDown = false;
             this.regenerationAutoExtendY = false; // Default to manual Y range
-            this.completionType = CompletionType.NONE;
+            this.completionType = CompletionType.NORMAL;
             this.fallbackRewardCommands = new ArrayList<>();
             this.difficultyTierRewards = new HashMap<>();
             this.topTimeRewards = new ArrayList<>();
@@ -472,6 +475,141 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             this.regenerationAreas = new ArrayList<>();
             this.challengeAreas = new ArrayList<>();
             this.invasionRtpSpots = new ArrayList<>();
+            this.flagsByArea = new HashMap<>();
+        }
+    }
+
+    /**
+     * Per-challenge-area flags (block break/place/interact and GriefDefender-style flags).
+     * Each challenge area (1, 2, 3, ...) has its own AreaFlags so flags are area-exclusive.
+     */
+    private static class AreaFlags {
+        boolean blockBreakEnabled;
+        Set<Material> breakAllowedMaterials;
+        boolean blockPlaceEnabled;
+        Set<Material> placeAllowedMaterials;
+        boolean blockInteractEnabled;
+        Set<Material> interactAllowedMaterials;
+        boolean entitySpawnEnabled;
+        boolean entityDamageEnabled;
+        boolean itemDropEnabled;
+        boolean itemPickupEnabled;
+        boolean portalUseEnabled;
+        boolean interactInventoryEnabled;
+        boolean cropGrowth;
+        boolean endermanGrief;
+        boolean fireSpread;
+        boolean grassGrowth;
+        boolean iceForm;
+        boolean iceMelt;
+        boolean lavaFlow;
+        boolean leafDecay;
+        boolean lighter;
+        boolean paintingDamage;
+        boolean ride;
+        boolean signEdit;
+        boolean signUse;
+        boolean snowFall;
+        boolean snowMelt;
+        boolean snowmanTrail;
+        boolean vehicleUse;
+        boolean villagerTrade;
+        boolean vineGrowth;
+        boolean waterFlow;
+        boolean ambientSpawn;
+        boolean animalSpawn;
+        boolean aquaticSpawn;
+        boolean monsterSpawn;
+        boolean armorstandUse;
+        boolean chorusFruitTeleport;
+        boolean creeperBlockExplosion;
+        boolean endcrystalUse;
+        boolean entityArmorstandDamage;
+        boolean entityItemframeDamage;
+        boolean expDrop;
+        boolean fallEntityDamage;
+        boolean fallPlayerDamage;
+        boolean fallingBlockBreak;
+        boolean fireBlockDamage;
+        boolean fireEntityDamage;
+        boolean pvp;
+        boolean playerDamage;
+        boolean playerEnderpearlInteract;
+        boolean playerEntityInteract;
+        boolean playerItemframeInteract;
+        boolean playerItemHangingPlace;
+        boolean playerVillagerDamage;
+        boolean tntBlockExplosion;
+        boolean tntEntityExplosion;
+
+        AreaFlags() {
+            breakAllowedMaterials = new HashSet<>();
+            placeAllowedMaterials = new HashSet<>();
+            interactAllowedMaterials = new HashSet<>();
+        }
+
+        void copyFrom(AreaFlags other) {
+            if (other == null) return;
+            blockBreakEnabled = other.blockBreakEnabled;
+            breakAllowedMaterials.clear();
+            breakAllowedMaterials.addAll(other.breakAllowedMaterials);
+            blockPlaceEnabled = other.blockPlaceEnabled;
+            placeAllowedMaterials.clear();
+            placeAllowedMaterials.addAll(other.placeAllowedMaterials);
+            blockInteractEnabled = other.blockInteractEnabled;
+            interactAllowedMaterials.clear();
+            interactAllowedMaterials.addAll(other.interactAllowedMaterials);
+            entitySpawnEnabled = other.entitySpawnEnabled;
+            entityDamageEnabled = other.entityDamageEnabled;
+            itemDropEnabled = other.itemDropEnabled;
+            itemPickupEnabled = other.itemPickupEnabled;
+            portalUseEnabled = other.portalUseEnabled;
+            interactInventoryEnabled = other.interactInventoryEnabled;
+            cropGrowth = other.cropGrowth;
+            endermanGrief = other.endermanGrief;
+            fireSpread = other.fireSpread;
+            grassGrowth = other.grassGrowth;
+            iceForm = other.iceForm;
+            iceMelt = other.iceMelt;
+            lavaFlow = other.lavaFlow;
+            leafDecay = other.leafDecay;
+            lighter = other.lighter;
+            paintingDamage = other.paintingDamage;
+            ride = other.ride;
+            signEdit = other.signEdit;
+            signUse = other.signUse;
+            snowFall = other.snowFall;
+            snowMelt = other.snowMelt;
+            snowmanTrail = other.snowmanTrail;
+            vehicleUse = other.vehicleUse;
+            villagerTrade = other.villagerTrade;
+            vineGrowth = other.vineGrowth;
+            waterFlow = other.waterFlow;
+            ambientSpawn = other.ambientSpawn;
+            animalSpawn = other.animalSpawn;
+            aquaticSpawn = other.aquaticSpawn;
+            monsterSpawn = other.monsterSpawn;
+            armorstandUse = other.armorstandUse;
+            chorusFruitTeleport = other.chorusFruitTeleport;
+            creeperBlockExplosion = other.creeperBlockExplosion;
+            endcrystalUse = other.endcrystalUse;
+            entityArmorstandDamage = other.entityArmorstandDamage;
+            entityItemframeDamage = other.entityItemframeDamage;
+            expDrop = other.expDrop;
+            fallEntityDamage = other.fallEntityDamage;
+            fallPlayerDamage = other.fallPlayerDamage;
+            fallingBlockBreak = other.fallingBlockBreak;
+            fireBlockDamage = other.fireBlockDamage;
+            fireEntityDamage = other.fireEntityDamage;
+            pvp = other.pvp;
+            playerDamage = other.playerDamage;
+            playerEnderpearlInteract = other.playerEnderpearlInteract;
+            playerEntityInteract = other.playerEntityInteract;
+            playerItemframeInteract = other.playerItemframeInteract;
+            playerItemHangingPlace = other.playerItemHangingPlace;
+            playerVillagerDamage = other.playerVillagerDamage;
+            tntBlockExplosion = other.tntBlockExplosion;
+            tntEntityExplosion = other.tntEntityExplosion;
         }
     }
 
@@ -849,6 +987,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private static final String CHALLENGER_GUI_TITLE_PREFIX = "§8Challenges §8";
     /** Challenge id when player has challenge options or lives GUI open. */
     private final Map<UUID, String> challengeOptionsGuiChallengeId = new HashMap<>();
+    /** When in Flags GUI, the 1-based challenge area index being edited (so flags are area-exclusive). */
+    private final Map<UUID, Integer> flagsGuiAreaIndex = new HashMap<>();
     /** When non-null, next chat message from player sets challenge alias for this challenge id. */
     private final Map<UUID, String> pendingChallengeAlias = new HashMap<>();
     /** Challenge id pending delete confirmation (player has delete-confirm GUI open). */
@@ -1085,6 +1225,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
     // Difficulty tiers: Track active challenge difficulty (challenge ID -> tier name)
     private final Map<String, String> activeChallengeDifficulties = new HashMap<>();
+    /** For SPEED challenges: last completed speed tier name per player (e.g. GOLD, SILVER, BRONZE). */
+    private final Map<UUID, String> lastSpeedTierByPlayer = new HashMap<>();
     // Difficulty tier modifiers (tier name -> level modifier)
     private final Map<String, Integer> difficultyTierModifiers = new HashMap<>();
     // Difficulty tier reward multipliers (tier name -> multiplier vs Easy, e.g. hard=3.0 means 3x Easy rewards)
@@ -2893,6 +3035,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
     /** Max chests to clear per tick in fillChestsWithLoottables to avoid main-thread spikes. */
     private static final int FILL_CHESTS_BATCH_SIZE = 32;
+    /** Time budget (ns) per tick for clearing chests; combined with FILL_CHESTS_BATCH_SIZE for smoother TPS. */
+    private static final long FILL_CHESTS_TIME_BUDGET_NS = 4_000_000L; // ~4ms
 
     private void fillChestsWithLoottables(String challengeId, ChallengeConfig cfg) {
         if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) return;
@@ -2929,12 +3073,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
     /**
      * Clears chests in batches (main thread); only left half of double chests are processed.
+     * Uses both a max batch size and a small time budget to smooth out TPS impact.
      */
     private void scheduleNextFillChestsBatch(String challengeId, ChallengeConfig cfg, List<Location> chestLocations, int startIndex) {
-        int end = Math.min(startIndex + FILL_CHESTS_BATCH_SIZE, chestLocations.size());
         World world = cfg.regenerationCorner1 != null ? cfg.regenerationCorner1.getWorld() : null;
         if (world == null) return;
-        for (int i = startIndex; i < end; i++) {
+        int size = chestLocations.size();
+        if (startIndex >= size) return;
+        int maxEnd = Math.min(startIndex + FILL_CHESTS_BATCH_SIZE, size);
+        long startTime = System.nanoTime();
+        int i = startIndex;
+        for (; i < maxEnd; i++) {
             Location loc = chestLocations.get(i);
             try {
                 if (loc.getWorld() == null || !loc.getWorld().equals(world)) continue;
@@ -2949,9 +3098,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             } catch (Exception e) {
                 getLogger().fine("Error clearing chest at " + loc + " for challenge '" + challengeId + "': " + e.getMessage());
             }
+            // Respect small per-tick time budget to avoid chest clearing and other work landing in the same long tick
+            if (System.nanoTime() - startTime >= FILL_CHESTS_TIME_BUDGET_NS) {
+                i++; // advance past this chest
+                break;
+            }
         }
-        if (end >= chestLocations.size()) return;
-        final int nextStart = end;
+        if (i >= size) return;
+        final int nextStart = i;
         Bukkit.getScheduler().runTaskLater(this, () -> scheduleNextFillChestsBatch(challengeId, cfg, chestLocations, nextStart), 1L);
     }
 
@@ -3002,14 +3156,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             cfg.lockedDown = cs.getBoolean("locked-down", false);
 
             ConfigurationSection compSec = cs.getConfigurationSection("completion");
-            cfg.completionType = CompletionType.NONE;
+            cfg.completionType = CompletionType.NORMAL;
             if (compSec != null) {
-                String typeStr = compSec.getString("type", "NONE").toUpperCase(Locale.ROOT);
+                String typeStr = compSec.getString("type", "NORMAL").toUpperCase(Locale.ROOT);
+                // Backward compatibility: treat NONE as NORMAL
+                if ("NONE".equals(typeStr)) typeStr = "NORMAL";
                 try {
                     cfg.completionType = CompletionType.valueOf(typeStr);
                 } catch (IllegalArgumentException e) {
-                    getLogger().warning("Invalid completion type '" + typeStr + "' for challenge '" + id + "'. Using NONE.");
-                    cfg.completionType = CompletionType.NONE;
+                    getLogger().warning("Invalid completion type '" + typeStr + "' for challenge '" + id + "'. Using NORMAL.");
+                    cfg.completionType = CompletionType.NORMAL;
                 }
 
                 switch (cfg.completionType) {
@@ -3058,7 +3214,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             cfg.speedTiers.add(new SpeedTier(tName, maxSec, rcs));
                         }
                     }
-                    case NONE -> {
+                    case NORMAL -> {
                     }
                 }
             }
@@ -3558,6 +3714,29 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             cfg.playerVillagerDamage = cs.getBoolean("player-villager-damage", getFlagDefault("player-villager-damage"));
             cfg.tntBlockExplosion = cs.getBoolean("tnt-block-explosion", getFlagDefault("tnt-block-explosion"));
             cfg.tntEntityExplosion = cs.getBoolean("tnt-entity-explosion", getFlagDefault("tnt-entity-explosion"));
+
+            // Load flags by area (per-area exclusive flags)
+            cfg.flagsByArea = new HashMap<>();
+            ConfigurationSection flagsByAreaSec = cs.getConfigurationSection("flags-by-area");
+            if (flagsByAreaSec != null && !flagsByAreaSec.getKeys(false).isEmpty()) {
+                for (String key : flagsByAreaSec.getKeys(false)) {
+                    try {
+                        int areaNum = Integer.parseInt(key);
+                        if (areaNum >= 1) {
+                            ConfigurationSection areaSec = flagsByAreaSec.getConfigurationSection(key);
+                            if (areaSec != null) {
+                                AreaFlags af = loadAreaFlagsFromSection(areaSec, id);
+                                if (af != null) cfg.flagsByArea.put(areaNum, af);
+                            }
+                        }
+                    } catch (NumberFormatException ignored) { }
+                }
+            }
+            if (cfg.flagsByArea.isEmpty()) {
+                AreaFlags area1 = new AreaFlags();
+                copyFromConfigToAreaFlags(cfg, area1);
+                cfg.flagsByArea.put(1, area1);
+            }
 
             // Load script nodes (function tool)
             cfg.scriptNodes.clear();
@@ -4637,7 +4816,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
         // Always create completion section with all fields
         ConfigurationSection compSec = config.createSection(path + ".completion");
-        CompletionType type = cfg.completionType != null ? cfg.completionType : CompletionType.NONE;
+        CompletionType type = cfg.completionType != null ? cfg.completionType : CompletionType.NORMAL;
         compSec.set("type", type.name());
 
         // Save completion-specific fields based on type, but always set all fields to ensure structure
@@ -4703,7 +4882,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
                 compSec.set("tiers", tierList);
             }
-            case NONE -> {
+            case NORMAL -> {
                 compSec.set("boss-type", "");
                 compSec.set("boss-name", "");
                 compSec.set("seconds", 0);
@@ -4906,83 +5085,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         config.set(path + ".disabled-armor-slots", disabledArmorList);
 
-        // Save block break settings
-        config.set(path + ".block-break-enabled", cfg.blockBreakEnabled);
-        List<String> allowBreakNames = new ArrayList<>();
-        if (cfg.breakAllowedMaterials != null) {
-            for (Material m : cfg.breakAllowedMaterials) {
-                allowBreakNames.add(m.name());
-            }
-        }
-        config.set(path + ".break-allowed-blocks", allowBreakNames);
-        config.set(path + ".block-place-enabled", cfg.blockPlaceEnabled);
-        List<String> placeAllowNames = new ArrayList<>();
-        if (cfg.placeAllowedMaterials != null) {
-            for (Material m : cfg.placeAllowedMaterials) {
-                placeAllowNames.add(m.name());
-            }
-        }
-        config.set(path + ".place-allowed-blocks", placeAllowNames);
-        config.set(path + ".block-interact-enabled", cfg.blockInteractEnabled);
-        List<String> interactAllowNames = new ArrayList<>();
-        if (cfg.interactAllowedMaterials != null) {
-            for (Material m : cfg.interactAllowedMaterials) {
-                interactAllowNames.add(m.name());
-            }
-        }
-        config.set(path + ".interact-allowed-blocks", interactAllowNames);
-        config.set(path + ".entity-spawn-enabled", cfg.entitySpawnEnabled);
-        config.set(path + ".entity-damage-enabled", cfg.entityDamageEnabled);
-        config.set(path + ".item-drop-enabled", cfg.itemDropEnabled);
-        config.set(path + ".item-pickup-enabled", cfg.itemPickupEnabled);
-        config.set(path + ".portal-use-enabled", cfg.portalUseEnabled);
-        config.set(path + ".interact-inventory-enabled", cfg.interactInventoryEnabled);
+        // Save flags (global toggle + per-area flags)
         config.set(path + ".flags-applied", cfg.flagsApplied);
-        config.set(path + ".crop-growth", cfg.cropGrowth);
-        config.set(path + ".enderman-grief", cfg.endermanGrief);
-        config.set(path + ".fire-spread", cfg.fireSpread);
-        config.set(path + ".grass-growth", cfg.grassGrowth);
-        config.set(path + ".ice-form", cfg.iceForm);
-        config.set(path + ".ice-melt", cfg.iceMelt);
-        config.set(path + ".lava-flow", cfg.lavaFlow);
-        config.set(path + ".leaf-decay", cfg.leafDecay);
-        config.set(path + ".lighter", cfg.lighter);
-        config.set(path + ".painting-damage", cfg.paintingDamage);
-        config.set(path + ".ride", cfg.ride);
-        config.set(path + ".sign-edit", cfg.signEdit);
-        config.set(path + ".sign-use", cfg.signUse);
-        config.set(path + ".snow-fall", cfg.snowFall);
-        config.set(path + ".snow-melt", cfg.snowMelt);
-        config.set(path + ".snowman-trail", cfg.snowmanTrail);
-        config.set(path + ".vehicle-use", cfg.vehicleUse);
-        config.set(path + ".villager-trade", cfg.villagerTrade);
-        config.set(path + ".vine-growth", cfg.vineGrowth);
-        config.set(path + ".water-flow", cfg.waterFlow);
-        config.set(path + ".ambient-spawn", cfg.ambientSpawn);
-        config.set(path + ".animal-spawn", cfg.animalSpawn);
-        config.set(path + ".aquatic-spawn", cfg.aquaticSpawn);
-        config.set(path + ".monster-spawn", cfg.monsterSpawn);
-        config.set(path + ".armorstand-use", cfg.armorstandUse);
-        config.set(path + ".chorus-fruit-teleport", cfg.chorusFruitTeleport);
-        config.set(path + ".creeper-block-explosion", cfg.creeperBlockExplosion);
-        config.set(path + ".endcrystal-use", cfg.endcrystalUse);
-        config.set(path + ".entity-armorstand-damage", cfg.entityArmorstandDamage);
-        config.set(path + ".entity-itemframe-damage", cfg.entityItemframeDamage);
-        config.set(path + ".exp-drop", cfg.expDrop);
-        config.set(path + ".fall-entity-damage", cfg.fallEntityDamage);
-        config.set(path + ".fall-player-damage", cfg.fallPlayerDamage);
-        config.set(path + ".falling-block-break", cfg.fallingBlockBreak);
-        config.set(path + ".fire-block-damage", cfg.fireBlockDamage);
-        config.set(path + ".fire-entity-damage", cfg.fireEntityDamage);
-        config.set(path + ".pvp", cfg.pvp);
-        config.set(path + ".player-damage", cfg.playerDamage);
-        config.set(path + ".player-enderpearl-interact", cfg.playerEnderpearlInteract);
-        config.set(path + ".player-entity-interact", cfg.playerEntityInteract);
-        config.set(path + ".player-itemframe-interact", cfg.playerItemframeInteract);
-        config.set(path + ".player-itemhanging-place", cfg.playerItemHangingPlace);
-        config.set(path + ".player-villager-damage", cfg.playerVillagerDamage);
-        config.set(path + ".tnt-block-explosion", cfg.tntBlockExplosion);
-        config.set(path + ".tnt-entity-explosion", cfg.tntEntityExplosion);
+        if (cfg.flagsByArea != null && !cfg.flagsByArea.isEmpty()) {
+            for (Map.Entry<Integer, AreaFlags> e : cfg.flagsByArea.entrySet()) {
+                saveAreaFlagsToConfig(config, path, e.getKey(), e.getValue());
+            }
+        }
 
         // Save script nodes
         List<Map<String, Object>> scriptsList = new ArrayList<>();
@@ -5082,11 +5191,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     private List<String> handleEditModeTabCompletion(String subcommand, String partial, List<String> completions) {
         switch (subcommand.toLowerCase(Locale.ROOT)) {
             case "settype":
-                completions.add("BOSS");
-                completions.add("TIMER");
-                completions.add("ITEM");
+                completions.add("NORMAL");
                 completions.add("SPEED");
-                completions.add("NONE");
                 return filterCompletions(completions, partial);
                 
             case "setboss":
@@ -5417,6 +5523,17 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             }
         }
         return best;
+    }
+    
+    /** Finds a SpeedTier by name (case-insensitive). Returns null if not found. */
+    private SpeedTier findSpeedTierByName(ChallengeConfig cfg, String name) {
+        if (cfg == null || cfg.speedTiers == null || cfg.speedTiers.isEmpty() || name == null) return null;
+        for (SpeedTier tier : cfg.speedTiers) {
+            if (tier != null && tier.name != null && tier.name.equalsIgnoreCase(name)) {
+                return tier;
+            }
+        }
+        return null;
     }
     
     /**
@@ -6020,19 +6137,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     
                     if (second.equals("settype")) {
                         if (inEditMode) {
-                            completions.add("BOSS");
-                            completions.add("TIMER");
-                            completions.add("ITEM");
+                            completions.add("NORMAL");
                             completions.add("SPEED");
-                            completions.add("NONE");
                             return filterCompletions(completions, args[paramIndex]);
                         }
                         // Not in edit mode - args[3] is the type parameter
-                        completions.add("BOSS");
-                        completions.add("TIMER");
-                        completions.add("ITEM");
+                        completions.add("NORMAL");
                         completions.add("SPEED");
-                        completions.add("NONE");
                         return filterCompletions(completions, args[3]);
                     }
                     
@@ -7254,6 +7365,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         SpeedTier tier = findBestSpeedTier(cfg, (int) elapsed);
                         if (tier != null) {
                             completedChallenges.put(memberUuid, challengeId);
+                            lastSpeedTierByPlayer.put(memberUuid, tier.name);
                             boolean isNewRecord = updateBestTime(challengeId, memberUuid, elapsed);
                             member.sendMessage(getMessage("completion.completed-speed", "challenge", displayName(cfg), "seconds", String.valueOf(elapsed)));
                             member.sendMessage(getMessage("completion.completed-speed-tier", "tier", tier.name));
@@ -7273,7 +7385,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     } else {
                         member.sendMessage(getMessage("completion.completed-speed-no-time"));
                     }
-                } else if (cfg.completionType == CompletionType.NONE) {
+                } else if (cfg.completionType == CompletionType.NORMAL) {
                     completedChallenges.put(memberUuid, challengeId);
                 }
 
@@ -7300,19 +7412,25 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 playerLives.remove(memberUuid);
                 clearInstanceChestDataForPlayer(memberUuid, challengeId);
                 clearCheckpointsForPlayer(memberUuid, challengeId);
-                // Open completion stats GUI for this party member (claim loot from GUI instead of Gatekeeper)
-                final Player memberForGui = member;
-                final CompletionGuiContext ctx = new CompletionGuiContext(challengeId, difficultyTier, statsSnapshot.get(memberUuid), partyMemberUuids, statsSnapshot);
+                // Store completion stats GUI context for this party member (each gets their own context with their stats)
+                CompletionGuiContext ctx = new CompletionGuiContext(challengeId, difficultyTier, statsSnapshot.get(memberUuid), partyMemberUuids, statsSnapshot);
                 completionGuiContext.put(memberUuid, ctx);
-                // Stagger delay per member (5 + index ticks) so each gets their GUI on a separate tick and teleport/chunk load can settle
+            }
+
+            // Open completion stats GUI for every party member (not just the player who ran /cc)
+            for (int memberIndex = 0; memberIndex < partySize; memberIndex++) {
+                final Player memberForGui = partyMembers.get(memberIndex);
                 final long delayTicks = 5L + memberIndex;
                 Bukkit.getScheduler().runTaskLater(this, () -> {
                     if (memberForGui.isOnline()) {
-                        openCompletionStatsGui(memberForGui, ctx);
+                        CompletionGuiContext ctx = completionGuiContext.get(memberForGui.getUniqueId());
+                        if (ctx != null) {
+                            openCompletionStatsGui(memberForGui, ctx);
+                        }
                     }
                 }, delayTicks);
             }
-            
+
             // Give rewards to dead party members (easy tier with 0.5x multiplier)
             for (Map.Entry<UUID, String> entry : new HashMap<>(deadPartyMembers).entrySet()) {
                 UUID deadPlayerUuid = entry.getKey();
@@ -8056,12 +8174,15 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             String typeStr = args[typeArgIndex].toUpperCase(Locale.ROOT);
-            try {
-                cfg.completionType = CompletionType.valueOf(typeStr);
-            } catch (IllegalArgumentException e) {
+            // Map NONE -> NORMAL for backward compatibility
+            if ("NONE".equals(typeStr)) typeStr = "NORMAL";
+            // Only allow NORMAL and SPEED going forward
+            if (!"NORMAL".equals(typeStr) && !"SPEED".equals(typeStr)) {
                 player.sendMessage(getMessage("admin.challenge-settype-invalid", "type", typeStr));
+                player.sendMessage(ChatColor.GRAY + "Valid types: NORMAL, SPEED");
                 return true;
             }
+            cfg.completionType = CompletionType.valueOf(typeStr);
             saveChallengeToConfig(cfg);
             player.sendMessage(getMessage("admin.challenge-settype-success", "id", getChallengeAlias(id), "type", String.valueOf(cfg.completionType)));
             return true;
@@ -9853,26 +9974,39 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     player.sendMessage(getMessage("admin.challenge-allowbreak-not-a-block", "material", mat.name()));
                     return true;
                 }
-                if (allow) {
-                    if (cfg.breakAllowedMaterials.add(mat)) {
-                        saveChallengeToConfig(cfg);
-                        player.sendMessage(getMessage("admin.challenge-allowbreak-added", "material", mat.name(), "id", getChallengeAlias(id)));
+                int areaIdx = getChallengeAreaIndex(cfg, player.getLocation());
+                if (areaIdx == 0) areaIdx = 1;
+                AreaFlags areaFlags = getOrCreateAreaFlags(cfg, areaIdx);
+                if (areaFlags != null) {
+                    if (allow) {
+                        if (areaFlags.breakAllowedMaterials.add(mat)) {
+                            saveChallengeToConfig(cfg);
+                            player.sendMessage(getMessage("admin.challenge-allowbreak-added", "material", mat.name(), "id", getChallengeAlias(id)));
+                            player.sendMessage(ChatColor.GRAY + "Area " + areaIdx);
+                        } else {
+                            player.sendMessage(getMessage("admin.challenge-allowbreak-already", "material", mat.name()));
+                        }
                     } else {
-                        player.sendMessage(getMessage("admin.challenge-allowbreak-already", "material", mat.name()));
-                    }
-                } else {
-                    if (cfg.breakAllowedMaterials.remove(mat)) {
-                        saveChallengeToConfig(cfg);
-                        player.sendMessage(getMessage("admin.challenge-disallowbreak-removed", "material", mat.name(), "id", getChallengeAlias(id)));
-                    } else {
-                        player.sendMessage(getMessage("admin.challenge-disallowbreak-not-in-list", "material", mat.name()));
+                        if (areaFlags.breakAllowedMaterials.remove(mat)) {
+                            saveChallengeToConfig(cfg);
+                            player.sendMessage(getMessage("admin.challenge-disallowbreak-removed", "material", mat.name(), "id", getChallengeAlias(id)));
+                            player.sendMessage(ChatColor.GRAY + "Area " + areaIdx);
+                        } else {
+                            player.sendMessage(getMessage("admin.challenge-disallowbreak-not-in-list", "material", mat.name()));
+                        }
                     }
                 }
                 return true;
             }
-            cfg.blockBreakEnabled = !cfg.blockBreakEnabled;
-            saveChallengeToConfig(cfg);
-            player.sendMessage(getMessage("admin.challenge-blockbreak-toggled", "id", getChallengeAlias(id), "status", cfg.blockBreakEnabled ? getMessage("admin.challenge-blockbreak-toggled-restricted") : getMessage("admin.challenge-blockbreak-toggled-off")));
+            int areaIndex = getChallengeAreaIndex(cfg, player.getLocation());
+            if (areaIndex == 0) areaIndex = 1;
+            AreaFlags f = getOrCreateAreaFlags(cfg, areaIndex);
+            if (f != null) {
+                f.blockBreakEnabled = !f.blockBreakEnabled;
+                saveChallengeToConfig(cfg);
+                player.sendMessage(getMessage("admin.challenge-blockbreak-toggled", "id", getChallengeAlias(id), "status", f.blockBreakEnabled ? getMessage("admin.challenge-blockbreak-toggled-restricted") : getMessage("admin.challenge-blockbreak-toggled-off")));
+                player.sendMessage(ChatColor.GRAY + "Area " + areaIndex);
+            }
             return true;
         }
 
@@ -9910,26 +10044,36 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     player.sendMessage(getMessage("admin.challenge-allowbreak-not-a-block", "material", mat.name()));
                     return true;
                 }
-                if (allow) {
-                    if (cfg.placeAllowedMaterials.add(mat)) {
-                        saveChallengeToConfig(cfg);
-                        player.sendMessage(ChatColor.GREEN + "Place allowed: " + mat.name() + " for " + getChallengeAlias(id));
+                int areaIdx = getChallengeAreaIndex(cfg, player.getLocation());
+                if (areaIdx == 0) areaIdx = 1;
+                AreaFlags areaFlags = getOrCreateAreaFlags(cfg, areaIdx);
+                if (areaFlags != null) {
+                    if (allow) {
+                        if (areaFlags.placeAllowedMaterials.add(mat)) {
+                            saveChallengeToConfig(cfg);
+                            player.sendMessage(ChatColor.GREEN + "Place allowed: " + mat.name() + " for " + getChallengeAlias(id) + " (Area " + areaIdx + ")");
+                        } else {
+                            player.sendMessage(ChatColor.GRAY + "Place already allowed for " + mat.name());
+                        }
                     } else {
-                        player.sendMessage(ChatColor.GRAY + "Place already allowed for " + mat.name());
-                    }
-                } else {
-                    if (cfg.placeAllowedMaterials.remove(mat)) {
-                        saveChallengeToConfig(cfg);
-                        player.sendMessage(ChatColor.GREEN + "Place disallowed: " + mat.name() + " for " + getChallengeAlias(id));
-                    } else {
-                        player.sendMessage(ChatColor.GRAY + "Place was not in allow list: " + mat.name());
+                        if (areaFlags.placeAllowedMaterials.remove(mat)) {
+                            saveChallengeToConfig(cfg);
+                            player.sendMessage(ChatColor.GREEN + "Place disallowed: " + mat.name() + " for " + getChallengeAlias(id) + " (Area " + areaIdx + ")");
+                        } else {
+                            player.sendMessage(ChatColor.GRAY + "Place was not in allow list: " + mat.name());
+                        }
                     }
                 }
                 return true;
             }
-            cfg.blockPlaceEnabled = !cfg.blockPlaceEnabled;
-            saveChallengeToConfig(cfg);
-            player.sendMessage(ChatColor.GREEN + "Block place: " + (cfg.blockPlaceEnabled ? "restricted (only allow list)" : "allow all") + " for " + getChallengeAlias(id));
+            int areaIndex = getChallengeAreaIndex(cfg, player.getLocation());
+            if (areaIndex == 0) areaIndex = 1;
+            AreaFlags f = getOrCreateAreaFlags(cfg, areaIndex);
+            if (f != null) {
+                f.blockPlaceEnabled = !f.blockPlaceEnabled;
+                saveChallengeToConfig(cfg);
+                player.sendMessage(ChatColor.GREEN + "Block place: " + (f.blockPlaceEnabled ? "restricted (only allow list)" : "allow all") + " for " + getChallengeAlias(id) + " (Area " + areaIndex + ")");
+            }
             return true;
         }
 
@@ -9967,26 +10111,71 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     player.sendMessage(getMessage("admin.challenge-allowbreak-not-a-block", "material", mat.name()));
                     return true;
                 }
-                if (allow) {
-                    if (cfg.interactAllowedMaterials.add(mat)) {
-                        saveChallengeToConfig(cfg);
-                        player.sendMessage(ChatColor.GREEN + "Interact allowed: " + mat.name() + " for " + getChallengeAlias(id));
+                int areaIdx = getChallengeAreaIndex(cfg, player.getLocation());
+                if (areaIdx == 0) areaIdx = 1;
+                AreaFlags areaFlags = getOrCreateAreaFlags(cfg, areaIdx);
+                if (areaFlags != null) {
+                    if (allow) {
+                        if (areaFlags.interactAllowedMaterials.add(mat)) {
+                            saveChallengeToConfig(cfg);
+                            player.sendMessage(ChatColor.GREEN + "Interact allowed: " + mat.name() + " for " + getChallengeAlias(id) + " (Area " + areaIdx + ")");
+                        } else {
+                            player.sendMessage(ChatColor.GRAY + "Interact already allowed for " + mat.name());
+                        }
                     } else {
-                        player.sendMessage(ChatColor.GRAY + "Interact already allowed for " + mat.name());
-                    }
-                } else {
-                    if (cfg.interactAllowedMaterials.remove(mat)) {
-                        saveChallengeToConfig(cfg);
-                        player.sendMessage(ChatColor.GREEN + "Interact disallowed: " + mat.name() + " for " + getChallengeAlias(id));
-                    } else {
-                        player.sendMessage(ChatColor.GRAY + "Interact was not in allow list: " + mat.name());
+                        if (areaFlags.interactAllowedMaterials.remove(mat)) {
+                            saveChallengeToConfig(cfg);
+                            player.sendMessage(ChatColor.GREEN + "Interact disallowed: " + mat.name() + " for " + getChallengeAlias(id) + " (Area " + areaIdx + ")");
+                        } else {
+                            player.sendMessage(ChatColor.GRAY + "Interact was not in allow list: " + mat.name());
+                        }
                     }
                 }
                 return true;
             }
-            cfg.blockInteractEnabled = !cfg.blockInteractEnabled;
+            int areaIndex = getChallengeAreaIndex(cfg, player.getLocation());
+            if (areaIndex == 0) areaIndex = 1;
+            AreaFlags f = getOrCreateAreaFlags(cfg, areaIndex);
+            if (f != null) {
+                f.blockInteractEnabled = !f.blockInteractEnabled;
+                saveChallengeToConfig(cfg);
+                player.sendMessage(ChatColor.GREEN + "Block interact: " + (f.blockInteractEnabled ? "restricted (only allow list)" : "allow all") + " for " + getChallengeAlias(id) + " (Area " + areaIndex + ")");
+            }
+            return true;
+        }
+
+        if (sub.equals("mergeflags")) {
+            String id = getChallengeIdForCommand(player, args, 1);
+            if (id == null) {
+                player.sendMessage(ChatColor.GRAY + "Usage: /challenge mergeflags [id]");
+                player.sendMessage(ChatColor.GRAY + "Copies all flags from challenge area 1 to every other area for this challenge.");
+                return true;
+            }
+            ChallengeConfig cfg = challenges.get(id);
+            if (cfg == null) {
+                player.sendMessage(getMessage("challenge.unknown-id", "id", getChallengeAlias(id)));
+                return true;
+            }
+            if (cfg.flagsByArea == null || cfg.flagsByArea.isEmpty()) {
+                player.sendMessage(ChatColor.YELLOW + "No area flags to merge for " + getChallengeAlias(id));
+                return true;
+            }
+            AreaFlags area1 = cfg.flagsByArea.get(1);
+            if (area1 == null) {
+                player.sendMessage(ChatColor.YELLOW + "Area 1 has no flags for " + getChallengeAlias(id));
+                return true;
+            }
+            int count = 0;
+            for (Integer areaNum : new ArrayList<>(cfg.flagsByArea.keySet())) {
+                if (areaNum == null || areaNum <= 1) continue;
+                AreaFlags target = getOrCreateAreaFlags(cfg, areaNum);
+                if (target != null) {
+                    target.copyFrom(area1);
+                    count++;
+                }
+            }
             saveChallengeToConfig(cfg);
-            player.sendMessage(ChatColor.GREEN + "Block interact: " + (cfg.blockInteractEnabled ? "restricted (only allow list)" : "allow all") + " for " + getChallengeAlias(id));
+            player.sendMessage(ChatColor.GREEN + "Merged area 1 flags to " + count + " other area(s) for " + getChallengeAlias(id));
             return true;
         }
 
@@ -10926,7 +11115,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         player.sendMessage(getMessage("admin.challenge-info-no-speed-tiers"));
                     }
                 }
-                case NONE -> {
+                case NORMAL -> {
                 }
             }
             // Show tier rewards if any exist
@@ -11727,7 +11916,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                                 p.sendMessage(getMessage("entry.speed-instruction"));
                                 p.sendMessage(getMessage("entry.speed-time-limit", "seconds", String.valueOf(cfg.timerSeconds)));
                             }
-                            case NONE -> p.sendMessage(getMessage("entry.none-instruction"));
+                            case NORMAL -> p.sendMessage(getMessage("entry.none-instruction"));
                         }
 
                         // Start time-limit watcher for this player
@@ -12302,6 +12491,321 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         Location corner1 = cfg.challengeCorner1 != null ? cfg.challengeCorner1 : cfg.regenerationCorner1;
         Location corner2 = cfg.challengeCorner2 != null ? cfg.challengeCorner2 : cfg.regenerationCorner2;
         return isLocationInBox(corner1, corner2, loc);
+    }
+
+    /**
+     * Returns the 1-based challenge area index (1, 2, 3, ...) that contains the location, or 0 if not in any area.
+     */
+    int getChallengeAreaIndex(ChallengeConfig cfg, Location loc) {
+        if (cfg == null || loc == null) return 0;
+        if (cfg.challengeAreas != null && !cfg.challengeAreas.isEmpty()) {
+            for (int i = 0; i < cfg.challengeAreas.size(); i++) {
+                Location[] corners = cfg.challengeAreas.get(i);
+                if (corners != null && corners.length >= 2 && isLocationInBox(corners[0], corners[1], loc))
+                    return i + 1;
+            }
+            return 0;
+        }
+        if (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null && isLocationInBox(cfg.challengeCorner1, cfg.challengeCorner2, loc))
+            return 1;
+        if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null && isLocationInBox(cfg.regenerationCorner1, cfg.regenerationCorner2, loc))
+            return 1;
+        return 0;
+    }
+
+    /**
+     * Returns the AreaFlags for the challenge area containing the location. Uses area 1 if location is not in any area.
+     * Never returns null; creates area flags from defaults or area 1 if missing.
+     */
+    AreaFlags getFlagsForLocation(ChallengeConfig cfg, Location loc) {
+        if (cfg == null) return null;
+        if (cfg.flagsByArea == null) cfg.flagsByArea = new HashMap<>();
+        int areaIndex = getChallengeAreaIndex(cfg, loc);
+        if (areaIndex == 0) areaIndex = 1;
+        return getOrCreateAreaFlags(cfg, areaIndex);
+    }
+
+    /**
+     * Returns AreaFlags for the given 1-based area index, creating from defaults or cloning area 1 if missing.
+     */
+    AreaFlags getOrCreateAreaFlags(ChallengeConfig cfg, int areaIndex) {
+        if (cfg == null || areaIndex < 1) return null;
+        if (cfg.flagsByArea == null) cfg.flagsByArea = new HashMap<>();
+        AreaFlags f = cfg.flagsByArea.get(areaIndex);
+        if (f != null) return f;
+        f = new AreaFlags();
+        AreaFlags area1 = cfg.flagsByArea.get(1);
+        if (area1 != null) {
+            f.copyFrom(area1);
+        } else {
+            applyDefaultAreaFlags(f);
+        }
+        cfg.flagsByArea.put(areaIndex, f);
+        return f;
+    }
+
+    /** Applies default flag values to an AreaFlags instance (used for new area 1 or when no area 1 exists). */
+    private void applyDefaultAreaFlags(AreaFlags f) {
+        if (f == null) return;
+        f.blockBreakEnabled = getFlagDefault("block-break-enabled");
+        f.blockPlaceEnabled = getFlagDefault("block-place-enabled");
+        f.blockInteractEnabled = getFlagDefault("block-interact-enabled");
+        f.entitySpawnEnabled = getFlagDefault("entity-spawn-enabled");
+        f.entityDamageEnabled = getFlagDefault("entity-damage-enabled");
+        f.itemDropEnabled = getFlagDefault("item-drop-enabled");
+        f.itemPickupEnabled = getFlagDefault("item-pickup-enabled");
+        f.portalUseEnabled = getFlagDefault("portal-use-enabled");
+        f.interactInventoryEnabled = getFlagDefault("interact-inventory-enabled");
+        f.cropGrowth = getFlagDefault("crop-growth");
+        f.endermanGrief = getFlagDefault("enderman-grief");
+        f.fireSpread = getFlagDefault("fire-spread");
+        f.grassGrowth = getFlagDefault("grass-growth");
+        f.iceForm = getFlagDefault("ice-form");
+        f.iceMelt = getFlagDefault("ice-melt");
+        f.lavaFlow = getFlagDefault("lava-flow");
+        f.leafDecay = getFlagDefault("leaf-decay");
+        f.lighter = getFlagDefault("lighter");
+        f.paintingDamage = getFlagDefault("painting-damage");
+        f.ride = getFlagDefault("ride");
+        f.signEdit = getFlagDefault("sign-edit");
+        f.signUse = getFlagDefault("sign-use");
+        f.snowFall = getFlagDefault("snow-fall");
+        f.snowMelt = getFlagDefault("snow-melt");
+        f.snowmanTrail = getFlagDefault("snowman-trail");
+        f.vehicleUse = getFlagDefault("vehicle-use");
+        f.villagerTrade = getFlagDefault("villager-trade");
+        f.vineGrowth = getFlagDefault("vine-growth");
+        f.waterFlow = getFlagDefault("water-flow");
+        f.ambientSpawn = getFlagDefault("ambient-spawn");
+        f.animalSpawn = getFlagDefault("animal-spawn");
+        f.aquaticSpawn = getFlagDefault("aquatic-spawn");
+        f.monsterSpawn = getFlagDefault("monster-spawn");
+        f.armorstandUse = getFlagDefault("armorstand-use");
+        f.chorusFruitTeleport = getFlagDefault("chorus-fruit-teleport");
+        f.creeperBlockExplosion = getFlagDefault("creeper-block-explosion");
+        f.endcrystalUse = getFlagDefault("endcrystal-use");
+        f.entityArmorstandDamage = getFlagDefault("entity-armorstand-damage");
+        f.entityItemframeDamage = getFlagDefault("entity-itemframe-damage");
+        f.expDrop = getFlagDefault("exp-drop");
+        f.fallEntityDamage = getFlagDefault("fall-entity-damage");
+        f.fallPlayerDamage = getFlagDefault("fall-player-damage");
+        f.fallingBlockBreak = getFlagDefault("falling-block-break");
+        f.fireBlockDamage = getFlagDefault("fire-block-damage");
+        f.fireEntityDamage = getFlagDefault("fire-entity-damage");
+        f.pvp = getFlagDefault("pvp");
+        f.playerDamage = getFlagDefault("player-damage");
+        f.playerEnderpearlInteract = getFlagDefault("player-enderpearl-interact");
+        f.playerEntityInteract = getFlagDefault("player-entity-interact");
+        f.playerItemframeInteract = getFlagDefault("player-itemframe-interact");
+        f.playerItemHangingPlace = getFlagDefault("player-itemhanging-place");
+        f.playerVillagerDamage = getFlagDefault("player-villager-damage");
+        f.tntBlockExplosion = getFlagDefault("tnt-block-explosion");
+        f.tntEntityExplosion = getFlagDefault("tnt-entity-explosion");
+    }
+
+    /** Copies current flat flag fields from cfg into f (used when migrating flat config to area 1). */
+    private void copyFromConfigToAreaFlags(ChallengeConfig cfg, AreaFlags f) {
+        if (cfg == null || f == null) return;
+        f.blockBreakEnabled = cfg.blockBreakEnabled;
+        f.breakAllowedMaterials.clear();
+        if (cfg.breakAllowedMaterials != null) f.breakAllowedMaterials.addAll(cfg.breakAllowedMaterials);
+        f.blockPlaceEnabled = cfg.blockPlaceEnabled;
+        f.placeAllowedMaterials.clear();
+        if (cfg.placeAllowedMaterials != null) f.placeAllowedMaterials.addAll(cfg.placeAllowedMaterials);
+        f.blockInteractEnabled = cfg.blockInteractEnabled;
+        f.interactAllowedMaterials.clear();
+        if (cfg.interactAllowedMaterials != null) f.interactAllowedMaterials.addAll(cfg.interactAllowedMaterials);
+        f.entitySpawnEnabled = cfg.entitySpawnEnabled;
+        f.entityDamageEnabled = cfg.entityDamageEnabled;
+        f.itemDropEnabled = cfg.itemDropEnabled;
+        f.itemPickupEnabled = cfg.itemPickupEnabled;
+        f.portalUseEnabled = cfg.portalUseEnabled;
+        f.interactInventoryEnabled = cfg.interactInventoryEnabled;
+        f.cropGrowth = cfg.cropGrowth;
+        f.endermanGrief = cfg.endermanGrief;
+        f.fireSpread = cfg.fireSpread;
+        f.grassGrowth = cfg.grassGrowth;
+        f.iceForm = cfg.iceForm;
+        f.iceMelt = cfg.iceMelt;
+        f.lavaFlow = cfg.lavaFlow;
+        f.leafDecay = cfg.leafDecay;
+        f.lighter = cfg.lighter;
+        f.paintingDamage = cfg.paintingDamage;
+        f.ride = cfg.ride;
+        f.signEdit = cfg.signEdit;
+        f.signUse = cfg.signUse;
+        f.snowFall = cfg.snowFall;
+        f.snowMelt = cfg.snowMelt;
+        f.snowmanTrail = cfg.snowmanTrail;
+        f.vehicleUse = cfg.vehicleUse;
+        f.villagerTrade = cfg.villagerTrade;
+        f.vineGrowth = cfg.vineGrowth;
+        f.waterFlow = cfg.waterFlow;
+        f.ambientSpawn = cfg.ambientSpawn;
+        f.animalSpawn = cfg.animalSpawn;
+        f.aquaticSpawn = cfg.aquaticSpawn;
+        f.monsterSpawn = cfg.monsterSpawn;
+        f.armorstandUse = cfg.armorstandUse;
+        f.chorusFruitTeleport = cfg.chorusFruitTeleport;
+        f.creeperBlockExplosion = cfg.creeperBlockExplosion;
+        f.endcrystalUse = cfg.endcrystalUse;
+        f.entityArmorstandDamage = cfg.entityArmorstandDamage;
+        f.entityItemframeDamage = cfg.entityItemframeDamage;
+        f.expDrop = cfg.expDrop;
+        f.fallEntityDamage = cfg.fallEntityDamage;
+        f.fallPlayerDamage = cfg.fallPlayerDamage;
+        f.fallingBlockBreak = cfg.fallingBlockBreak;
+        f.fireBlockDamage = cfg.fireBlockDamage;
+        f.fireEntityDamage = cfg.fireEntityDamage;
+        f.pvp = cfg.pvp;
+        f.playerDamage = cfg.playerDamage;
+        f.playerEnderpearlInteract = cfg.playerEnderpearlInteract;
+        f.playerEntityInteract = cfg.playerEntityInteract;
+        f.playerItemframeInteract = cfg.playerItemframeInteract;
+        f.playerItemHangingPlace = cfg.playerItemHangingPlace;
+        f.playerVillagerDamage = cfg.playerVillagerDamage;
+        f.tntBlockExplosion = cfg.tntBlockExplosion;
+        f.tntEntityExplosion = cfg.tntEntityExplosion;
+    }
+
+    /** Loads AreaFlags from a config section (e.g. flags-by-area.1). */
+    private AreaFlags loadAreaFlagsFromSection(ConfigurationSection sec, String challengeId) {
+        if (sec == null) return null;
+        AreaFlags f = new AreaFlags();
+        f.blockBreakEnabled = sec.getBoolean("block-break-enabled", getFlagDefault("block-break-enabled"));
+        loadMaterialSet(sec.getStringList("break-allowed-blocks"), f.breakAllowedMaterials, challengeId, "break-allowed");
+        f.blockPlaceEnabled = sec.getBoolean("block-place-enabled", getFlagDefault("block-place-enabled"));
+        loadMaterialSet(sec.getStringList("place-allowed-blocks"), f.placeAllowedMaterials, challengeId, "place-allowed");
+        f.blockInteractEnabled = sec.getBoolean("block-interact-enabled", getFlagDefault("block-interact-enabled"));
+        loadMaterialSet(sec.getStringList("interact-allowed-blocks"), f.interactAllowedMaterials, challengeId, "interact-allowed");
+        f.entitySpawnEnabled = sec.getBoolean("entity-spawn-enabled", getFlagDefault("entity-spawn-enabled"));
+        f.entityDamageEnabled = sec.getBoolean("entity-damage-enabled", getFlagDefault("entity-damage-enabled"));
+        f.itemDropEnabled = sec.getBoolean("item-drop-enabled", getFlagDefault("item-drop-enabled"));
+        f.itemPickupEnabled = sec.getBoolean("item-pickup-enabled", getFlagDefault("item-pickup-enabled"));
+        f.portalUseEnabled = sec.getBoolean("portal-use-enabled", getFlagDefault("portal-use-enabled"));
+        f.interactInventoryEnabled = sec.getBoolean("interact-inventory-enabled", getFlagDefault("interact-inventory-enabled"));
+        f.cropGrowth = sec.getBoolean("crop-growth", getFlagDefault("crop-growth"));
+        f.endermanGrief = sec.getBoolean("enderman-grief", getFlagDefault("enderman-grief"));
+        f.fireSpread = sec.getBoolean("fire-spread", getFlagDefault("fire-spread"));
+        f.grassGrowth = sec.getBoolean("grass-growth", getFlagDefault("grass-growth"));
+        f.iceForm = sec.getBoolean("ice-form", getFlagDefault("ice-form"));
+        f.iceMelt = sec.getBoolean("ice-melt", getFlagDefault("ice-melt"));
+        f.lavaFlow = sec.getBoolean("lava-flow", getFlagDefault("lava-flow"));
+        f.leafDecay = sec.getBoolean("leaf-decay", getFlagDefault("leaf-decay"));
+        f.lighter = sec.getBoolean("lighter", getFlagDefault("lighter"));
+        f.paintingDamage = sec.getBoolean("painting-damage", getFlagDefault("painting-damage"));
+        f.ride = sec.getBoolean("ride", getFlagDefault("ride"));
+        f.signEdit = sec.getBoolean("sign-edit", getFlagDefault("sign-edit"));
+        f.signUse = sec.getBoolean("sign-use", getFlagDefault("sign-use"));
+        f.snowFall = sec.getBoolean("snow-fall", getFlagDefault("snow-fall"));
+        f.snowMelt = sec.getBoolean("snow-melt", getFlagDefault("snow-melt"));
+        f.snowmanTrail = sec.getBoolean("snowman-trail", getFlagDefault("snowman-trail"));
+        f.vehicleUse = sec.getBoolean("vehicle-use", getFlagDefault("vehicle-use"));
+        f.villagerTrade = sec.getBoolean("villager-trade", getFlagDefault("villager-trade"));
+        f.vineGrowth = sec.getBoolean("vine-growth", getFlagDefault("vine-growth"));
+        f.waterFlow = sec.getBoolean("water-flow", getFlagDefault("water-flow"));
+        f.ambientSpawn = sec.getBoolean("ambient-spawn", getFlagDefault("ambient-spawn"));
+        f.animalSpawn = sec.getBoolean("animal-spawn", getFlagDefault("animal-spawn"));
+        f.aquaticSpawn = sec.getBoolean("aquatic-spawn", getFlagDefault("aquatic-spawn"));
+        f.monsterSpawn = sec.getBoolean("monster-spawn", getFlagDefault("monster-spawn"));
+        f.armorstandUse = sec.getBoolean("armorstand-use", getFlagDefault("armorstand-use"));
+        f.chorusFruitTeleport = sec.getBoolean("chorus-fruit-teleport", getFlagDefault("chorus-fruit-teleport"));
+        f.creeperBlockExplosion = sec.getBoolean("creeper-block-explosion", getFlagDefault("creeper-block-explosion"));
+        f.endcrystalUse = sec.getBoolean("endcrystal-use", getFlagDefault("endcrystal-use"));
+        f.entityArmorstandDamage = sec.getBoolean("entity-armorstand-damage", getFlagDefault("entity-armorstand-damage"));
+        f.entityItemframeDamage = sec.getBoolean("entity-itemframe-damage", getFlagDefault("entity-itemframe-damage"));
+        f.expDrop = sec.getBoolean("exp-drop", getFlagDefault("exp-drop"));
+        f.fallEntityDamage = sec.getBoolean("fall-entity-damage", getFlagDefault("fall-entity-damage"));
+        f.fallPlayerDamage = sec.getBoolean("fall-player-damage", getFlagDefault("fall-player-damage"));
+        f.fallingBlockBreak = sec.getBoolean("falling-block-break", getFlagDefault("falling-block-break"));
+        f.fireBlockDamage = sec.getBoolean("fire-block-damage", getFlagDefault("fire-block-damage"));
+        f.fireEntityDamage = sec.getBoolean("fire-entity-damage", getFlagDefault("fire-entity-damage"));
+        f.pvp = sec.getBoolean("pvp", getFlagDefault("pvp"));
+        f.playerDamage = sec.getBoolean("player-damage", getFlagDefault("player-damage"));
+        f.playerEnderpearlInteract = sec.getBoolean("player-enderpearl-interact", getFlagDefault("player-enderpearl-interact"));
+        f.playerEntityInteract = sec.getBoolean("player-entity-interact", getFlagDefault("player-entity-interact"));
+        f.playerItemframeInteract = sec.getBoolean("player-itemframe-interact", getFlagDefault("player-itemframe-interact"));
+        f.playerItemHangingPlace = sec.getBoolean("player-itemhanging-place", getFlagDefault("player-itemhanging-place"));
+        f.playerVillagerDamage = sec.getBoolean("player-villager-damage", getFlagDefault("player-villager-damage"));
+        f.tntBlockExplosion = sec.getBoolean("tnt-block-explosion", getFlagDefault("tnt-block-explosion"));
+        f.tntEntityExplosion = sec.getBoolean("tnt-entity-explosion", getFlagDefault("tnt-entity-explosion"));
+        return f;
+    }
+
+    private void loadMaterialSet(List<String> names, Set<Material> out, String challengeId, String logLabel) {
+        if (names == null || out == null) return;
+        out.clear();
+        for (String name : names) {
+            try {
+                Material mat = Material.valueOf(name.toUpperCase(Locale.ROOT));
+                if (mat != null && mat.isBlock()) out.add(mat);
+            } catch (IllegalArgumentException ignored) {
+                getLogger().warning("Challenge '" + challengeId + "' has invalid " + logLabel + " block: " + name);
+            }
+        }
+    }
+
+    /** Saves one area's flags to config under path.flags-by-area.<areaIndex>. */
+    private void saveAreaFlagsToConfig(FileConfiguration config, String path, int areaIndex, AreaFlags f) {
+        if (f == null) return;
+        String base = path + ".flags-by-area." + areaIndex + ".";
+        config.set(base + "block-break-enabled", f.blockBreakEnabled);
+        config.set(base + "break-allowed-blocks", f.breakAllowedMaterials != null ? f.breakAllowedMaterials.stream().map(Material::name).collect(Collectors.toList()) : new ArrayList<String>());
+        config.set(base + "block-place-enabled", f.blockPlaceEnabled);
+        config.set(base + "place-allowed-blocks", f.placeAllowedMaterials != null ? f.placeAllowedMaterials.stream().map(Material::name).collect(Collectors.toList()) : new ArrayList<String>());
+        config.set(base + "block-interact-enabled", f.blockInteractEnabled);
+        config.set(base + "interact-allowed-blocks", f.interactAllowedMaterials != null ? f.interactAllowedMaterials.stream().map(Material::name).collect(Collectors.toList()) : new ArrayList<String>());
+        config.set(base + "entity-spawn-enabled", f.entitySpawnEnabled);
+        config.set(base + "entity-damage-enabled", f.entityDamageEnabled);
+        config.set(base + "item-drop-enabled", f.itemDropEnabled);
+        config.set(base + "item-pickup-enabled", f.itemPickupEnabled);
+        config.set(base + "portal-use-enabled", f.portalUseEnabled);
+        config.set(base + "interact-inventory-enabled", f.interactInventoryEnabled);
+        config.set(base + "crop-growth", f.cropGrowth);
+        config.set(base + "enderman-grief", f.endermanGrief);
+        config.set(base + "fire-spread", f.fireSpread);
+        config.set(base + "grass-growth", f.grassGrowth);
+        config.set(base + "ice-form", f.iceForm);
+        config.set(base + "ice-melt", f.iceMelt);
+        config.set(base + "lava-flow", f.lavaFlow);
+        config.set(base + "leaf-decay", f.leafDecay);
+        config.set(base + "lighter", f.lighter);
+        config.set(base + "painting-damage", f.paintingDamage);
+        config.set(base + "ride", f.ride);
+        config.set(base + "sign-edit", f.signEdit);
+        config.set(base + "sign-use", f.signUse);
+        config.set(base + "snow-fall", f.snowFall);
+        config.set(base + "snow-melt", f.snowMelt);
+        config.set(base + "snowman-trail", f.snowmanTrail);
+        config.set(base + "vehicle-use", f.vehicleUse);
+        config.set(base + "villager-trade", f.villagerTrade);
+        config.set(base + "vine-growth", f.vineGrowth);
+        config.set(base + "water-flow", f.waterFlow);
+        config.set(base + "ambient-spawn", f.ambientSpawn);
+        config.set(base + "animal-spawn", f.animalSpawn);
+        config.set(base + "aquatic-spawn", f.aquaticSpawn);
+        config.set(base + "monster-spawn", f.monsterSpawn);
+        config.set(base + "armorstand-use", f.armorstandUse);
+        config.set(base + "chorus-fruit-teleport", f.chorusFruitTeleport);
+        config.set(base + "creeper-block-explosion", f.creeperBlockExplosion);
+        config.set(base + "endcrystal-use", f.endcrystalUse);
+        config.set(base + "entity-armorstand-damage", f.entityArmorstandDamage);
+        config.set(base + "entity-itemframe-damage", f.entityItemframeDamage);
+        config.set(base + "exp-drop", f.expDrop);
+        config.set(base + "fall-entity-damage", f.fallEntityDamage);
+        config.set(base + "fall-player-damage", f.fallPlayerDamage);
+        config.set(base + "falling-block-break", f.fallingBlockBreak);
+        config.set(base + "fire-block-damage", f.fireBlockDamage);
+        config.set(base + "fire-entity-damage", f.fireEntityDamage);
+        config.set(base + "pvp", f.pvp);
+        config.set(base + "player-damage", f.playerDamage);
+        config.set(base + "player-enderpearl-interact", f.playerEnderpearlInteract);
+        config.set(base + "player-entity-interact", f.playerEntityInteract);
+        config.set(base + "player-itemframe-interact", f.playerItemframeInteract);
+        config.set(base + "player-itemhanging-place", f.playerItemHangingPlace);
+        config.set(base + "player-villager-damage", f.playerVillagerDamage);
+        config.set(base + "tnt-block-explosion", f.tntBlockExplosion);
+        config.set(base + "tnt-entity-explosion", f.tntEntityExplosion);
     }
     
     /**
@@ -13200,7 +13704,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(getMessage("entry.speed-instruction"));
                 player.sendMessage(getMessage("entry.speed-time-limit", "seconds", String.valueOf(cfg.timerSeconds)));
             }
-            case NONE -> player.sendMessage(getMessage("entry.none-instruction"));
+            case NORMAL -> player.sendMessage(getMessage("entry.none-instruction"));
         }
         startTimeLimitWatcher(player, cfg);
         sendOpenChallengeJoinTitles(joinChallengeId, player.getName(), uuid);
@@ -13502,8 +14006,10 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         blocks.removeIf(block -> {
             ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
             if (cfg == null || !cfg.flagsApplied) return false;
-            if (isCreeper && !cfg.creeperBlockExplosion) return true;  // deny = remove from list
-            if (isTnt && !cfg.tntBlockExplosion) return true;
+            AreaFlags f = getFlagsForLocation(cfg, block.getLocation());
+            if (f == null) return false;
+            if (isCreeper && !f.creeperBlockExplosion) return true;
+            if (isTnt && !f.tntBlockExplosion) return true;
             return false;
         });
     }
@@ -13517,7 +14023,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (blocks == null || blocks.isEmpty()) return;
         blocks.removeIf(block -> {
             ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
-            return cfg != null && cfg.flagsApplied && !cfg.tntBlockExplosion;
+            if (cfg == null || !cfg.flagsApplied) return false;
+            AreaFlags f = getFlagsForLocation(cfg, block.getLocation());
+            return f != null && !f.tntBlockExplosion;
         });
     }
 
@@ -13525,72 +14033,96 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockGrowFlag(BlockGrowEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
         Material m = event.getNewState().getType();
-        if (m == Material.VINE) { if (!cfg.vineGrowth) event.setCancelled(true); return; }
+        if (m == Material.VINE) { if (!f.vineGrowth) event.setCancelled(true); return; }
         if (m == Material.TALL_GRASS || m == Material.SHORT_GRASS || m == Material.FERN || m == Material.LARGE_FERN
-            || m == Material.SEAGRASS || m == Material.TALL_SEAGRASS) { if (!cfg.grassGrowth) event.setCancelled(true); return; }
-        if (!cfg.cropGrowth) event.setCancelled(true);
+            || m == Material.SEAGRASS || m == Material.TALL_SEAGRASS) { if (!f.grassGrowth) event.setCancelled(true); return; }
+        if (!f.cropGrowth) event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockSpreadFlag(BlockSpreadEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
         Material m = event.getNewState().getType();
-        if (m == Material.FIRE) { if (!cfg.fireSpread) event.setCancelled(true); return; }
-        if (m == Material.GRASS_BLOCK || m == Material.MYCELIUM) { if (!cfg.grassGrowth) event.setCancelled(true); }
+        if (m == Material.FIRE) { if (!f.fireSpread) event.setCancelled(true); return; }
+        if (m == Material.GRASS_BLOCK || m == Material.MYCELIUM) { if (!f.grassGrowth) event.setCancelled(true); }
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockFormFlag(BlockFormEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
         Material m = event.getNewState().getType();
-        if (m == Material.ICE || m == Material.PACKED_ICE || m == Material.BLUE_ICE) { if (!cfg.iceForm) event.setCancelled(true); return; }
-        if (m == Material.SNOW || m == Material.SNOW_BLOCK) { if (!cfg.snowFall) event.setCancelled(true); }
+        if (m == Material.ICE || m == Material.PACKED_ICE || m == Material.BLUE_ICE) { if (!f.iceForm) event.setCancelled(true); return; }
+        if (m == Material.SNOW || m == Material.SNOW_BLOCK) { if (!f.snowFall) event.setCancelled(true); }
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockFadeFlag(BlockFadeEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
         Material m = event.getBlock().getType();
-        if (m == Material.ICE || m == Material.PACKED_ICE || m == Material.BLUE_ICE) { if (!cfg.iceMelt) event.setCancelled(true); return; }
-        if (m == Material.SNOW || m == Material.SNOW_BLOCK) { if (!cfg.snowMelt) event.setCancelled(true); }
+        if (m == Material.ICE || m == Material.PACKED_ICE || m == Material.BLUE_ICE) { if (!f.iceMelt) event.setCancelled(true); return; }
+        if (m == Material.SNOW || m == Material.SNOW_BLOCK) { if (!f.snowMelt) event.setCancelled(true); }
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockFromToFlag(BlockFromToEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getToBlock().getLocation());
+        Location loc = event.getToBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
         Material from = event.getBlock().getType();
-        if (from == Material.WATER) { if (!cfg.waterFlow) event.setCancelled(true); return; }
-        if (from == Material.LAVA) { if (!cfg.lavaFlow) event.setCancelled(true); }
+        if (from == Material.WATER) { if (!f.waterFlow) event.setCancelled(true); return; }
+        if (from == Material.LAVA) { if (!f.lavaFlow) event.setCancelled(true); }
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onLeavesDecayFlag(LeavesDecayEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
-        if (cfg == null || !cfg.flagsApplied || cfg.leafDecay) return;
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.leafDecay) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBurnFlag(BlockBurnEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
-        if (cfg == null || !cfg.flagsApplied || cfg.fireBlockDamage) return;
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.fireBlockDamage) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityChangeBlockFlag(EntityChangeBlockEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
-        if (event.getEntityType() == EntityType.ENDERMAN) { if (!cfg.endermanGrief) event.setCancelled(true); return; }
-        if (event.getEntityType() == EntityType.FALLING_BLOCK) { if (!cfg.fallingBlockBreak) event.setCancelled(true); return; }
-        if (event.getEntityType() == EntityType.SNOW_GOLEM) { if (!cfg.snowmanTrail) event.setCancelled(true); }
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
+        if (event.getEntityType() == EntityType.ENDERMAN) { if (!f.endermanGrief) event.setCancelled(true); return; }
+        if (event.getEntityType() == EntityType.FALLING_BLOCK) { if (!f.fallingBlockBreak) event.setCancelled(true); return; }
+        if (event.getEntityType() == EntityType.SNOW_GOLEM) { if (!f.snowmanTrail) event.setCancelled(true); }
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -13599,15 +14131,21 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (event.getItem() == null || event.getItem().getType() != Material.FLINT_AND_STEEL) return;
         Block block = event.getClickedBlock();
         if (block == null) return;
-        ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
-        if (cfg == null || !cfg.flagsApplied || cfg.lighter) return;
+        Location loc = block.getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.lighter) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onSignChangeFlag(SignChangeEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getBlock().getLocation());
-        if (cfg == null || !cfg.flagsApplied || cfg.signEdit) return;
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.signEdit) return;
         event.setCancelled(true);
     }
 
@@ -13618,11 +14156,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (block == null) return;
         String name = block.getType().name();
         if (!name.endsWith("_SIGN") && !name.endsWith("_WALL_SIGN")) return;
-        String challengeId = activeChallenges.get(event.getPlayer().getUniqueId());
-        if (challengeId == null) return;
-        ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || cfg.signUse) return;
-        if (!isLocationInChallengeArea(cfg, block.getLocation())) return;
+        Location loc = block.getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        if (!isLocationInChallengeArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.signUse) return;
         event.setCancelled(true);
     }
 
@@ -13632,8 +14171,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String challengeId = activeChallenges.get(player.getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || cfg.ride) return;
-        if (!isLocationInChallengeArea(cfg, event.getMount().getLocation())) return;
+        if (cfg == null || !cfg.flagsApplied) return;
+        Location loc = event.getMount().getLocation();
+        if (!isLocationInChallengeArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.ride) return;
         event.setCancelled(true);
     }
 
@@ -13643,36 +14185,40 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String challengeId = activeChallenges.get(player.getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || cfg.vehicleUse) return;
-        if (!isLocationInChallengeArea(cfg, event.getVehicle().getLocation())) return;
+        if (cfg == null || !cfg.flagsApplied) return;
+        Location loc = event.getVehicle().getLocation();
+        if (!isLocationInChallengeArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.vehicleUse) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onPlayerInteractEntityFlag(PlayerInteractEntityEvent event) {
-        Player player = event.getPlayer();
-        String challengeId = activeChallenges.get(player.getUniqueId());
-        if (challengeId == null) return;
-        ChallengeConfig cfg = challenges.get(challengeId);
+        Location loc = event.getRightClicked().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
-        if (!isLocationInChallengeArea(cfg, event.getRightClicked().getLocation())) return;
+        if (!isLocationInChallengeArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
         EntityType t = event.getRightClicked().getType();
-        if (t == EntityType.VILLAGER) { if (!cfg.villagerTrade) event.setCancelled(true); return; }
-        if (t == EntityType.ARMOR_STAND) { if (!cfg.armorstandUse) event.setCancelled(true); return; }
-        if (t == EntityType.ITEM_FRAME || t == EntityType.GLOW_ITEM_FRAME) { if (!cfg.playerItemframeInteract) event.setCancelled(true); return; }
-        if (t == EntityType.END_CRYSTAL) { if (!cfg.endcrystalUse) event.setCancelled(true); return; }
-        if (!cfg.playerEntityInteract) event.setCancelled(true);
+        if (t == EntityType.VILLAGER) { if (!f.villagerTrade) event.setCancelled(true); return; }
+        if (t == EntityType.ARMOR_STAND) { if (!f.armorstandUse) event.setCancelled(true); return; }
+        if (t == EntityType.ITEM_FRAME || t == EntityType.GLOW_ITEM_FRAME) { if (!f.playerItemframeInteract) event.setCancelled(true); return; }
+        if (t == EntityType.END_CRYSTAL) { if (!f.endcrystalUse) event.setCancelled(true); return; }
+        if (!f.playerEntityInteract) event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onHangingPlaceFlag(HangingPlaceEvent event) {
         Player player = event.getPlayer();
         if (player == null) return;
-        String challengeId = activeChallenges.get(player.getUniqueId());
-        if (challengeId == null) return;
-        ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || cfg.playerItemHangingPlace) return;
-        if (!isLocationInChallengeArea(cfg, event.getBlock().getLocation())) return;
+        Location loc = event.getBlock().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        if (!isLocationInChallengeArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.playerItemHangingPlace) return;
         event.setCancelled(true);
     }
 
@@ -13682,8 +14228,11 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String challengeId = activeChallenges.get(event.getPlayer().getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || cfg.chorusFruitTeleport) return;
-        if (!isLocationInChallengeArea(cfg, event.getFrom())) return;
+        if (cfg == null || !cfg.flagsApplied) return;
+        Location loc = event.getFrom();
+        if (!isLocationInChallengeArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.chorusFruitTeleport) return;
         event.setCancelled(true);
     }
 
@@ -13694,20 +14243,26 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String challengeId = activeChallenges.get(event.getPlayer().getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || cfg.playerEnderpearlInteract) return;
-        if (!isLocationInChallengeArea(cfg, event.getPlayer().getLocation())) return;
+        if (cfg == null || !cfg.flagsApplied) return;
+        Location loc = event.getPlayer().getLocation();
+        if (!isLocationInChallengeArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.playerEnderpearlInteract) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onCreatureSpawnFlag(CreatureSpawnEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getLocation());
-        if (cfg == null || !cfg.flagsApplied || cfg.entitySpawnEnabled) return; // entitySpawnEnabled handled by onEntitySpawnInChallenge
+        Location loc = event.getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.entitySpawnEnabled) return;
         switch (event.getEntityType()) {
-            case BAT, SILVERFISH, ENDERMITE -> { if (!cfg.ambientSpawn) event.setCancelled(true); }
-            case COD, SALMON, PUFFERFISH, TROPICAL_FISH, SQUID, GLOW_SQUID, DOLPHIN, TADPOLE, AXOLOTL -> { if (!cfg.aquaticSpawn) event.setCancelled(true); }
-            case COW, PIG, SHEEP, CHICKEN, RABBIT, WOLF, CAT, MOOSHROOM, FOX, BEE, POLAR_BEAR, PANDA, GOAT, SNIFFER, CAMEL, DONKEY, HORSE, MULE, LLAMA, TRADER_LLAMA, PARROT, TURTLE, OCELOT, FROG, ALLAY -> { if (!cfg.animalSpawn) event.setCancelled(true); }
-            default -> { if (!cfg.monsterSpawn) event.setCancelled(true); }
+            case BAT, SILVERFISH, ENDERMITE -> { if (!f.ambientSpawn) event.setCancelled(true); }
+            case COD, SALMON, PUFFERFISH, TROPICAL_FISH, SQUID, GLOW_SQUID, DOLPHIN, TADPOLE, AXOLOTL -> { if (!f.aquaticSpawn) event.setCancelled(true); }
+            case COW, PIG, SHEEP, CHICKEN, RABBIT, WOLF, CAT, MOOSHROOM, FOX, BEE, POLAR_BEAR, PANDA, GOAT, SNIFFER, CAMEL, DONKEY, HORSE, MULE, LLAMA, TRADER_LLAMA, PARROT, TURTLE, OCELOT, FROG, ALLAY -> { if (!f.animalSpawn) event.setCancelled(true); }
+            default -> { if (!f.monsterSpawn) event.setCancelled(true); }
         }
     }
 
@@ -13716,15 +14271,18 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         Entity victim = event.getEntity();
         Entity damager = event.getDamager();
         if (damager instanceof Projectile proj && proj.getShooter() instanceof Entity e) damager = e;
-        ChallengeConfig cfg = getChallengeForLocation(victim.getLocation());
+        Location loc = victim.getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
-        if (victim.getType() == EntityType.ARMOR_STAND && !cfg.entityArmorstandDamage) { event.setCancelled(true); return; }
-        if ((victim.getType() == EntityType.ITEM_FRAME || victim.getType() == EntityType.GLOW_ITEM_FRAME) && !cfg.entityItemframeDamage) { event.setCancelled(true); return; }
-        if (victim.getType() == EntityType.VILLAGER && damager instanceof Player && !cfg.playerVillagerDamage) event.setCancelled(true);
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
+        if (victim.getType() == EntityType.ARMOR_STAND && !f.entityArmorstandDamage) { event.setCancelled(true); return; }
+        if ((victim.getType() == EntityType.ITEM_FRAME || victim.getType() == EntityType.GLOW_ITEM_FRAME) && !f.entityItemframeDamage) { event.setCancelled(true); return; }
+        if (victim.getType() == EntityType.VILLAGER && damager instanceof Player && !f.playerVillagerDamage) event.setCancelled(true);
         if (victim instanceof Player) {
             if (damager instanceof Player) {
-                if (!cfg.pvp) event.setCancelled(true);
-            } else if (damager instanceof LivingEntity && !cfg.playerDamage) {
+                if (!f.pvp) event.setCancelled(true);
+            } else if (damager instanceof LivingEntity && !f.playerDamage) {
                 event.setCancelled(true);
             }
         }
@@ -13733,16 +14291,19 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityDamageFlags(EntityDamageEvent event) {
         Entity entity = event.getEntity();
-        ChallengeConfig cfg = getChallengeForLocation(entity.getLocation());
+        Location loc = entity.getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null) return;
         EntityDamageEvent.DamageCause cause = event.getCause();
         if (cause == EntityDamageEvent.DamageCause.FALL) {
-            if (entity instanceof Player && !cfg.fallPlayerDamage) event.setCancelled(true);
-            else if (!cfg.fallEntityDamage) event.setCancelled(true);
+            if (entity instanceof Player && !f.fallPlayerDamage) event.setCancelled(true);
+            else if (!f.fallEntityDamage) event.setCancelled(true);
             return;
         }
         if (cause == EntityDamageEvent.DamageCause.FIRE || cause == EntityDamageEvent.DamageCause.FIRE_TICK || cause == EntityDamageEvent.DamageCause.LAVA) {
-            if (!cfg.fireEntityDamage) event.setCancelled(true);
+            if (!f.fireEntityDamage) event.setCancelled(true);
             return;
         }
     }
@@ -13750,28 +14311,37 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityDamagePaintingFlag(EntityDamageEvent event) {
         if (event.getEntityType() != EntityType.PAINTING) return;
-        ChallengeConfig cfg = getChallengeForLocation(event.getEntity().getLocation());
-        if (cfg == null || !cfg.flagsApplied || cfg.paintingDamage) return;
+        Location loc = event.getEntity().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.paintingDamage) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onTntEntityExplosionFlag(EntityDamageEvent event) {
         if (event.getCause() != EntityDamageEvent.DamageCause.ENTITY_EXPLOSION && event.getCause() != EntityDamageEvent.DamageCause.BLOCK_EXPLOSION) return;
-        ChallengeConfig cfg = getChallengeForLocation(event.getEntity().getLocation());
-        if (cfg == null || !cfg.flagsApplied || cfg.tntEntityExplosion) return;
+        Location loc = event.getEntity().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.tntEntityExplosion) return;
         event.setCancelled(true);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityDeathExpDropFlag(EntityDeathEvent event) {
-        ChallengeConfig cfg = getChallengeForLocation(event.getEntity().getLocation());
-        if (cfg == null || !cfg.flagsApplied || cfg.expDrop) return;
+        Location loc = event.getEntity().getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || f.expDrop) return;
         event.setDroppedExp(0);
     }
 
     /**
-     * Block break rules: same in regen and challenge area.
+     * Block break rules: same in regen and challenge area. Uses flags for the block's area.
      * - Edit mode for this challenge: can always break.
      * - Active challengers (incl. test mode): blockBreakEnabled off = can break any block; on = only blocks they placed or in allow list.
      * - Others: cancel and "Enter edit mode to make changes to this area."
@@ -13779,7 +14349,8 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBlockBreakInChallenge(BlockBreakEvent event) {
         Block block = event.getBlock();
-        ChallengeConfig cfg = getChallengeForLocation(block.getLocation());
+        Location loc = block.getLocation();
+        ChallengeConfig cfg = getChallengeForLocation(loc);
         if (cfg == null) return;
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
@@ -13789,21 +14360,21 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
 
         String activeId = activeChallenges.get(uuid);
         if (cfg.id.equals(activeId)) {
-            // Challenger or test mode: same rules in regen and challenge area
-            if (!cfg.flagsApplied) return; // Flags disabled = no restriction
-            if (!cfg.blockBreakEnabled) return; // Off = can break any block
-            String key = blockKey(block.getLocation());
+            if (!cfg.flagsApplied) return;
+            AreaFlags f = getFlagsForLocation(cfg, loc);
+            if (f == null || !f.blockBreakEnabled) return; // Off = can break any block
+            String key = blockKey(loc);
             Map<String, UUID> placed = challengePlacedBlocks.get(cfg.id);
             boolean placedBySelf = placed != null && uuid.equals(placed.get(key));
             boolean placedByPartyMember = placed != null && placed.containsKey(key)
                 && activeChallenges.values().stream().filter(cfg.id::equals).count() >= 2;
-            boolean inAllowList = cfg.breakAllowedMaterials != null && cfg.breakAllowedMaterials.contains(block.getType());
+            boolean inAllowList = f.breakAllowedMaterials != null && f.breakAllowedMaterials.contains(block.getType());
             if (placedBySelf || placedByPartyMember || inAllowList) {
                 if (placed != null && key != null) placed.remove(key);
                 return;
             }
             event.setCancelled(true);
-            return; // Restricted break: just block, no message
+            return;
         }
 
         event.setCancelled(true);
@@ -13855,8 +14426,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     /**
-     * When blockPlaceEnabled is true, challengers can only place blocks in placeAllowedMaterials.
-     * Edit mode is always allowed to place.
+     * When blockPlaceEnabled is true, challengers can only place blocks in placeAllowedMaterials (per area).
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockPlaceRestrictByFlag(BlockPlaceEvent event) {
@@ -13864,18 +14434,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String challengeId = activeChallenges.get(player.getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || !cfg.blockPlaceEnabled) return;
+        if (cfg == null || !cfg.flagsApplied) return;
+        Location loc = event.getBlock().getLocation();
+        if (!isLocationInChallengeArea(cfg, loc) && !isLocationInRegenArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || !f.blockPlaceEnabled) return;
         String editingIdPlace = getPlayerEditingChallenge(player);
         if (editingIdPlace != null && editingIdPlace.equals(challengeId)) return;
-        if (!isLocationInChallengeArea(cfg, event.getBlock().getLocation()) && !isLocationInRegenArea(cfg, event.getBlock().getLocation())) return;
         Material placed = event.getBlockPlaced().getType();
-        if (cfg.placeAllowedMaterials != null && cfg.placeAllowedMaterials.contains(placed)) return;
+        if (f.placeAllowedMaterials != null && f.placeAllowedMaterials.contains(placed)) return;
         event.setCancelled(true);
     }
 
     /**
-     * When blockInteractEnabled is true, challengers can only right-click blocks in interactAllowedMaterials.
-     * Edit mode is always allowed. Runs at HIGH so scripts (HIGHEST) still see the event when we don't cancel.
+     * When blockInteractEnabled is true, challengers can only right-click blocks in interactAllowedMaterials (per area).
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockInteractRestrictByFlag(PlayerInteractEvent event) {
@@ -13885,26 +14457,30 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String challengeId = activeChallenges.get(player.getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || !cfg.blockInteractEnabled) return;
+        if (cfg == null || !cfg.flagsApplied) return;
+        Location loc = event.getClickedBlock().getLocation();
+        if (!isLocationInChallengeArea(cfg, loc) && !isLocationInRegenArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || !f.blockInteractEnabled) return;
         String editingIdInteract = getPlayerEditingChallenge(player);
         if (editingIdInteract != null && editingIdInteract.equals(challengeId)) return;
-        if (!isLocationInChallengeArea(cfg, event.getClickedBlock().getLocation()) && !isLocationInRegenArea(cfg, event.getClickedBlock().getLocation())) return;
         Material clicked = event.getClickedBlock().getType();
-        if (cfg.interactAllowedMaterials != null && cfg.interactAllowedMaterials.contains(clicked)) return;
+        if (f.interactAllowedMaterials != null && f.interactAllowedMaterials.contains(clicked)) return;
         event.setCancelled(true);
     }
 
     /**
-     * When entitySpawnEnabled is true, deny entity (mob) spawning in challenge/regen areas while the challenge is active.
-     * GriefDefender: entity-spawn.
+     * When entitySpawnEnabled is true (per area), deny entity spawning in that challenge area while active.
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntitySpawnInChallenge(CreatureSpawnEvent event) {
         Location loc = event.getEntity().getLocation();
         for (ChallengeConfig cfg : challenges.values()) {
-            if (!cfg.flagsApplied || !cfg.entitySpawnEnabled) continue;
+            if (!cfg.flagsApplied) continue;
             boolean inArea = isLocationInChallengeArea(cfg, loc) || isLocationInRegenArea(cfg, loc);
             if (!inArea) continue;
+            AreaFlags f = getFlagsForLocation(cfg, loc);
+            if (f == null || !f.entitySpawnEnabled) continue;
             boolean challengeActive = activeChallenges.values().stream().anyMatch(cfg.id::equals);
             if (challengeActive) {
                 event.setCancelled(true);
@@ -13914,8 +14490,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     /**
-     * When entityDamageEnabled is true, deny entity damage (PvP, mob damage to players, player damage to mobs) in that challenge.
-     * GriefDefender: entity-damage.
+     * When entityDamageEnabled is true (per area), deny entity damage in that area.
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityDamageFlagInChallenge(EntityDamageByEntityEvent event) {
@@ -13925,18 +14500,22 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         if (damagerEntity instanceof Player p) damagerPlayer = p;
         else if (damagerEntity instanceof Projectile proj && proj.getShooter() instanceof Player p) damagerPlayer = p;
 
+        Location victimLoc = victim.getLocation();
         if (victim instanceof Player victimPlayer) {
             String victimChallengeId = activeChallenges.get(victimPlayer.getUniqueId());
             if (victimChallengeId != null) {
                 ChallengeConfig cfg = challenges.get(victimChallengeId);
-                if (cfg != null && cfg.flagsApplied && cfg.entityDamageEnabled) {
-                    if (damagerPlayer != null && victimChallengeId.equals(activeChallenges.get(damagerPlayer.getUniqueId()))) {
-                        event.setCancelled(true);
-                        return;
-                    }
-                    if (damagerEntity instanceof LivingEntity) {
-                        event.setCancelled(true);
-                        return;
+                if (cfg != null && cfg.flagsApplied) {
+                    AreaFlags f = getFlagsForLocation(cfg, victimLoc);
+                    if (f != null && f.entityDamageEnabled) {
+                        if (damagerPlayer != null && victimChallengeId.equals(activeChallenges.get(damagerPlayer.getUniqueId()))) {
+                            event.setCancelled(true);
+                            return;
+                        }
+                        if (damagerEntity instanceof LivingEntity) {
+                            event.setCancelled(true);
+                            return;
+                        }
                     }
                 }
             }
@@ -13945,39 +14524,46 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             String damagerChallengeId = activeChallenges.get(damagerPlayer.getUniqueId());
             if (damagerChallengeId != null) {
                 ChallengeConfig cfg = challenges.get(damagerChallengeId);
-                if (cfg != null && cfg.flagsApplied && cfg.entityDamageEnabled) {
-                    event.setCancelled(true);
+                if (cfg != null && cfg.flagsApplied) {
+                    AreaFlags f = getFlagsForLocation(cfg, damagerPlayer.getLocation());
+                    if (f != null && f.entityDamageEnabled) event.setCancelled(true);
                 }
             }
         }
     }
 
-    /** When itemDropEnabled, deny players in that challenge from dropping items. GriefDefender: item-drop. */
+    /** When itemDropEnabled (per area), deny players from dropping items in that area. */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onItemDropFlagInChallenge(PlayerDropItemEvent event) {
         String challengeId = activeChallenges.get(event.getPlayer().getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg != null && cfg.flagsApplied && cfg.itemDropEnabled) event.setCancelled(true);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, event.getPlayer().getLocation());
+        if (f != null && f.itemDropEnabled) event.setCancelled(true);
     }
 
-    /** When itemPickupEnabled, deny players in that challenge from picking up items. GriefDefender: item-pickup. */
+    /** When itemPickupEnabled (per area), deny players from picking up items in that area. */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onItemPickupFlagInChallenge(EntityPickupItemEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         String challengeId = activeChallenges.get(player.getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg != null && cfg.flagsApplied && cfg.itemPickupEnabled) event.setCancelled(true);
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, player.getLocation());
+        if (f != null && f.itemPickupEnabled) event.setCancelled(true);
     }
 
-    /** When portalUseEnabled, deny using nether/end portals in challenge. GriefDefender: portal-use. */
+    /** When portalUseEnabled (per area), deny using nether/end portals in that area. */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onPortalUseFlagInChallenge(PlayerPortalEvent event) {
         String challengeId = activeChallenges.get(event.getPlayer().getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || !cfg.portalUseEnabled) return;
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, event.getPlayer().getLocation());
+        if (f == null || !f.portalUseEnabled) return;
         if (event.getCause() == PlayerTeleportEvent.TeleportCause.NETHER_PORTAL || event.getCause() == PlayerTeleportEvent.TeleportCause.END_PORTAL) {
             event.setCancelled(true);
         }
@@ -13992,9 +14578,12 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String challengeId = activeChallenges.get(player.getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.blockBreakEnabled) return;
-        if (!isLocationInChallengeArea(cfg, event.getBlock().getLocation())) return;
-        String key = blockKey(event.getBlock().getLocation());
+        if (cfg == null) return;
+        Location loc = event.getBlock().getLocation();
+        if (!isLocationInChallengeArea(cfg, loc)) return;
+        AreaFlags f = getFlagsForLocation(cfg, loc);
+        if (f == null || !f.blockBreakEnabled) return;
+        String key = blockKey(loc);
         if (key == null) return;
         challengePlacedBlocks.computeIfAbsent(challengeId, k -> new HashMap<>()).put(key, player.getUniqueId());
         scriptManager.runScriptsForTrigger(cfg, key, ScriptTrigger.BLOCK_PLACE, player, event.getBlock().getLocation(), null);
@@ -14538,25 +15127,35 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         player.openInventory(inv);
     }
 
-    /** Opens Flags sub-GUI for a challenge. Order: break, place, interact, then user list (chest-access … tnt-entity-explosion). Nav bar: Prev / Back / Next. */
+    /** Opens Flags sub-GUI for the challenge area the player is standing in (area-exclusive flags). */
     private void openChallengeFlagsGui(Player player, String challengeId) {
-        openChallengeFlagsGui(player, challengeId, 0);
+        ChallengeConfig cfg = challenges.get(challengeId);
+        int areaIndex = (cfg != null) ? getChallengeAreaIndex(cfg, player.getLocation()) : 1;
+        if (areaIndex == 0) areaIndex = 1;
+        openChallengeFlagsGui(player, challengeId, areaIndex, 0);
     }
 
     private void openChallengeFlagsGui(Player player, String challengeId, int page) {
+        int areaIndex = flagsGuiAreaIndex.getOrDefault(player.getUniqueId(), 1);
+        openChallengeFlagsGui(player, challengeId, areaIndex, page);
+    }
+
+    private void openChallengeFlagsGui(Player player, String challengeId, int areaIndex, int page) {
         ChallengeConfig cfg = challenges.get(challengeId);
         if (cfg == null) {
             player.closeInventory();
             return;
         }
+        if (areaIndex < 1) areaIndex = 1;
         lastFlagsGuiPage.put(player.getUniqueId(), page);
-        String title = CHALLENGE_FLAGS_GUI_TITLE_PREFIX + getChallengeAlias(challengeId);
+        flagsGuiAreaIndex.put(player.getUniqueId(), areaIndex);
+        String title = CHALLENGE_FLAGS_GUI_TITLE_PREFIX + getChallengeAlias(challengeId) + " §8(Area " + areaIndex + ")";
         Inventory inv = Bukkit.createInventory(null, CHALLENGE_FLAGS_GUI_SIZE, title);
         int contentSlots = page == 0 ? CHALLENGE_FLAGS_CONTENT_PER_PAGE : (CHALLENGE_FLAGS_TOTAL - CHALLENGE_FLAGS_CONTENT_PER_PAGE);
         for (int s = 0; s < contentSlots; s++) {
             int flagIndex = page * CHALLENGE_FLAGS_CONTENT_PER_PAGE + s;
             if (flagIndex >= CHALLENGE_FLAGS_TOTAL) break;
-            boolean value = getFlagValue(cfg, flagIndex);
+            boolean value = getFlagValue(cfg, areaIndex, flagIndex);
             Material icon = getFlagIcon(flagIndex);
             String name = getFlagDisplayName(flagIndex);
             String configKey = getFlagConfigKey(flagIndex);
@@ -14576,118 +15175,122 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         player.openInventory(inv);
     }
 
-    private boolean getFlagValue(ChallengeConfig cfg, int index) {
+    private boolean getFlagValue(ChallengeConfig cfg, int areaIndex, int index) {
+        AreaFlags f = getOrCreateAreaFlags(cfg, areaIndex);
+        if (f == null) return false;
         switch (index) {
-            case 0: return cfg.blockBreakEnabled;
-            case 1: return cfg.blockPlaceEnabled;
-            case 2: return cfg.blockInteractEnabled;
-            case 3: return !cfg.interactInventoryEnabled;
-            case 4: return cfg.cropGrowth;
-            case 5: return cfg.endermanGrief;
-            case 6: return cfg.fireSpread;
-            case 7: return cfg.grassGrowth;
-            case 8: return cfg.iceForm;
-            case 9: return cfg.iceMelt;
-            case 10: return cfg.lavaFlow;
-            case 11: return cfg.leafDecay;
-            case 12: return cfg.lighter;
-            case 13: return cfg.paintingDamage;
-            case 14: return !cfg.entityDamageEnabled;
-            case 15: return cfg.ride;
-            case 16: return cfg.signEdit;
-            case 17: return cfg.signUse;
-            case 18: return cfg.snowFall;
-            case 19: return cfg.snowMelt;
-            case 20: return cfg.snowmanTrail;
-            case 21: return cfg.vehicleUse;
-            case 22: return cfg.villagerTrade;
-            case 23: return cfg.vineGrowth;
-            case 24: return cfg.waterFlow;
-            case 25: return cfg.ambientSpawn;
-            case 26: return cfg.animalSpawn;
-            case 27: return cfg.aquaticSpawn;
-            case 28: return cfg.armorstandUse;
-            case 29: return cfg.chorusFruitTeleport;
-            case 30: return cfg.creeperBlockExplosion;
-            case 31: return cfg.endcrystalUse;
-            case 32: return cfg.entityArmorstandDamage;
-            case 33: return cfg.entityItemframeDamage;
-            case 34: return cfg.expDrop;
-            case 35: return cfg.fallEntityDamage;
-            case 36: return cfg.fallPlayerDamage;
-            case 37: return cfg.fallingBlockBreak;
-            case 38: return cfg.fireBlockDamage;
-            case 39: return cfg.fireEntityDamage;
-            case 40: return cfg.monsterSpawn;
-            case 41: return cfg.pvp;
-            case 42: return cfg.playerDamage;
-            case 43: return cfg.playerEnderpearlInteract;
-            case 44: return cfg.playerEntityInteract;
-            case 45: return !cfg.itemDropEnabled;
-            case 46: return !cfg.itemPickupEnabled;
-            case 47: return cfg.playerItemframeInteract;
-            case 48: return cfg.playerItemHangingPlace;
-            case 49: return cfg.playerVillagerDamage;
-            case 50: return cfg.tntBlockExplosion;
-            case 51: return cfg.tntEntityExplosion;
+            case 0: return f.blockBreakEnabled;
+            case 1: return f.blockPlaceEnabled;
+            case 2: return f.blockInteractEnabled;
+            case 3: return !f.interactInventoryEnabled;
+            case 4: return f.cropGrowth;
+            case 5: return f.endermanGrief;
+            case 6: return f.fireSpread;
+            case 7: return f.grassGrowth;
+            case 8: return f.iceForm;
+            case 9: return f.iceMelt;
+            case 10: return f.lavaFlow;
+            case 11: return f.leafDecay;
+            case 12: return f.lighter;
+            case 13: return f.paintingDamage;
+            case 14: return !f.entityDamageEnabled;
+            case 15: return f.ride;
+            case 16: return f.signEdit;
+            case 17: return f.signUse;
+            case 18: return f.snowFall;
+            case 19: return f.snowMelt;
+            case 20: return f.snowmanTrail;
+            case 21: return f.vehicleUse;
+            case 22: return f.villagerTrade;
+            case 23: return f.vineGrowth;
+            case 24: return f.waterFlow;
+            case 25: return f.ambientSpawn;
+            case 26: return f.animalSpawn;
+            case 27: return f.aquaticSpawn;
+            case 28: return f.armorstandUse;
+            case 29: return f.chorusFruitTeleport;
+            case 30: return f.creeperBlockExplosion;
+            case 31: return f.endcrystalUse;
+            case 32: return f.entityArmorstandDamage;
+            case 33: return f.entityItemframeDamage;
+            case 34: return f.expDrop;
+            case 35: return f.fallEntityDamage;
+            case 36: return f.fallPlayerDamage;
+            case 37: return f.fallingBlockBreak;
+            case 38: return f.fireBlockDamage;
+            case 39: return f.fireEntityDamage;
+            case 40: return f.monsterSpawn;
+            case 41: return f.pvp;
+            case 42: return f.playerDamage;
+            case 43: return f.playerEnderpearlInteract;
+            case 44: return f.playerEntityInteract;
+            case 45: return !f.itemDropEnabled;
+            case 46: return !f.itemPickupEnabled;
+            case 47: return f.playerItemframeInteract;
+            case 48: return f.playerItemHangingPlace;
+            case 49: return f.playerVillagerDamage;
+            case 50: return f.tntBlockExplosion;
+            case 51: return f.tntEntityExplosion;
             default: return false;
         }
     }
 
-    private void setFlagValue(ChallengeConfig cfg, int index, boolean value) {
+    private void setFlagValue(ChallengeConfig cfg, int areaIndex, int index, boolean value) {
+        AreaFlags f = getOrCreateAreaFlags(cfg, areaIndex);
+        if (f == null) return;
         switch (index) {
-            case 0: cfg.blockBreakEnabled = value; break;
-            case 1: cfg.blockPlaceEnabled = value; break;
-            case 2: cfg.blockInteractEnabled = value; break;
-            case 3: cfg.interactInventoryEnabled = !value; break;
-            case 4: cfg.cropGrowth = value; break;
-            case 5: cfg.endermanGrief = value; break;
-            case 6: cfg.fireSpread = value; break;
-            case 7: cfg.grassGrowth = value; break;
-            case 8: cfg.iceForm = value; break;
-            case 9: cfg.iceMelt = value; break;
-            case 10: cfg.lavaFlow = value; break;
-            case 11: cfg.leafDecay = value; break;
-            case 12: cfg.lighter = value; break;
-            case 13: cfg.paintingDamage = value; break;
-            case 14: cfg.entityDamageEnabled = !value; break;
-            case 15: cfg.ride = value; break;
-            case 16: cfg.signEdit = value; break;
-            case 17: cfg.signUse = value; break;
-            case 18: cfg.snowFall = value; break;
-            case 19: cfg.snowMelt = value; break;
-            case 20: cfg.snowmanTrail = value; break;
-            case 21: cfg.vehicleUse = value; break;
-            case 22: cfg.villagerTrade = value; break;
-            case 23: cfg.vineGrowth = value; break;
-            case 24: cfg.waterFlow = value; break;
-            case 25: cfg.ambientSpawn = value; break;
-            case 26: cfg.animalSpawn = value; break;
-            case 27: cfg.aquaticSpawn = value; break;
-            case 28: cfg.armorstandUse = value; break;
-            case 29: cfg.chorusFruitTeleport = value; break;
-            case 30: cfg.creeperBlockExplosion = value; break;
-            case 31: cfg.endcrystalUse = value; break;
-            case 32: cfg.entityArmorstandDamage = value; break;
-            case 33: cfg.entityItemframeDamage = value; break;
-            case 34: cfg.expDrop = value; break;
-            case 35: cfg.fallEntityDamage = value; break;
-            case 36: cfg.fallPlayerDamage = value; break;
-            case 37: cfg.fallingBlockBreak = value; break;
-            case 38: cfg.fireBlockDamage = value; break;
-            case 39: cfg.fireEntityDamage = value; break;
-            case 40: cfg.monsterSpawn = value; break;
-            case 41: cfg.pvp = value; break;
-            case 42: cfg.playerDamage = value; break;
-            case 43: cfg.playerEnderpearlInteract = value; break;
-            case 44: cfg.playerEntityInteract = value; break;
-            case 45: cfg.itemDropEnabled = !value; break;
-            case 46: cfg.itemPickupEnabled = !value; break;
-            case 47: cfg.playerItemframeInteract = value; break;
-            case 48: cfg.playerItemHangingPlace = value; break;
-            case 49: cfg.playerVillagerDamage = value; break;
-            case 50: cfg.tntBlockExplosion = value; break;
-            case 51: cfg.tntEntityExplosion = value; break;
+            case 0: f.blockBreakEnabled = value; break;
+            case 1: f.blockPlaceEnabled = value; break;
+            case 2: f.blockInteractEnabled = value; break;
+            case 3: f.interactInventoryEnabled = !value; break;
+            case 4: f.cropGrowth = value; break;
+            case 5: f.endermanGrief = value; break;
+            case 6: f.fireSpread = value; break;
+            case 7: f.grassGrowth = value; break;
+            case 8: f.iceForm = value; break;
+            case 9: f.iceMelt = value; break;
+            case 10: f.lavaFlow = value; break;
+            case 11: f.leafDecay = value; break;
+            case 12: f.lighter = value; break;
+            case 13: f.paintingDamage = value; break;
+            case 14: f.entityDamageEnabled = !value; break;
+            case 15: f.ride = value; break;
+            case 16: f.signEdit = value; break;
+            case 17: f.signUse = value; break;
+            case 18: f.snowFall = value; break;
+            case 19: f.snowMelt = value; break;
+            case 20: f.snowmanTrail = value; break;
+            case 21: f.vehicleUse = value; break;
+            case 22: f.villagerTrade = value; break;
+            case 23: f.vineGrowth = value; break;
+            case 24: f.waterFlow = value; break;
+            case 25: f.ambientSpawn = value; break;
+            case 26: f.animalSpawn = value; break;
+            case 27: f.aquaticSpawn = value; break;
+            case 28: f.armorstandUse = value; break;
+            case 29: f.chorusFruitTeleport = value; break;
+            case 30: f.creeperBlockExplosion = value; break;
+            case 31: f.endcrystalUse = value; break;
+            case 32: f.entityArmorstandDamage = value; break;
+            case 33: f.entityItemframeDamage = value; break;
+            case 34: f.expDrop = value; break;
+            case 35: f.fallEntityDamage = value; break;
+            case 36: f.fallPlayerDamage = value; break;
+            case 37: f.fallingBlockBreak = value; break;
+            case 38: f.fireBlockDamage = value; break;
+            case 39: f.fireEntityDamage = value; break;
+            case 40: f.monsterSpawn = value; break;
+            case 41: f.pvp = value; break;
+            case 42: f.playerDamage = value; break;
+            case 43: f.playerEnderpearlInteract = value; break;
+            case 44: f.playerEntityInteract = value; break;
+            case 45: f.itemDropEnabled = !value; break;
+            case 46: f.itemPickupEnabled = !value; break;
+            case 47: f.playerItemframeInteract = value; break;
+            case 48: f.playerItemHangingPlace = value; break;
+            case 49: f.playerVillagerDamage = value; break;
+            case 50: f.tntBlockExplosion = value; break;
+            case 51: f.tntEntityExplosion = value; break;
             default: break;
         }
     }
@@ -16098,31 +16701,33 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             if (flagsChallengeId == null) return;
             ChallengeConfig flagsCfg = challenges.get(flagsChallengeId);
             if (flagsCfg == null) return;
+            int areaIndex = flagsGuiAreaIndex.getOrDefault(player.getUniqueId(), 1);
             int page = lastFlagsGuiPage.getOrDefault(player.getUniqueId(), 0);
             if (slot == CHALLENGE_FLAGS_NAV_BACK) {
+                flagsGuiAreaIndex.remove(player.getUniqueId());
                 openChallengeOptionsGui(player, flagsChallengeId);
                 return;
             }
             if (slot == CHALLENGE_FLAGS_NAV_PREV && page > 0) {
-                openChallengeFlagsGui(player, flagsChallengeId, page - 1);
+                openChallengeFlagsGui(player, flagsChallengeId, areaIndex, page - 1);
                 return;
             }
             if (slot == CHALLENGE_FLAGS_NAV_NEXT && page < (CHALLENGE_FLAGS_TOTAL - 1) / CHALLENGE_FLAGS_CONTENT_PER_PAGE) {
-                openChallengeFlagsGui(player, flagsChallengeId, page + 1);
+                openChallengeFlagsGui(player, flagsChallengeId, areaIndex, page + 1);
                 return;
             }
             if (slot >= 0 && slot < CHALLENGE_FLAGS_CONTENT_PER_PAGE) {
                 int flagIndex = page * CHALLENGE_FLAGS_CONTENT_PER_PAGE + slot;
                 if (flagIndex < CHALLENGE_FLAGS_TOTAL) {
-                    boolean current = getFlagValue(flagsCfg, flagIndex);
+                    boolean current = getFlagValue(flagsCfg, areaIndex, flagIndex);
                     boolean newValue = !current;
-                    setFlagValue(flagsCfg, flagIndex, newValue);
+                    setFlagValue(flagsCfg, areaIndex, flagIndex, newValue);
                     saveChallengeToConfig(flagsCfg);
                     String name = getFlagDisplayName(flagIndex);
                     boolean isRestrictType = (flagIndex <= 2);
                     String status = isRestrictType ? (newValue ? "restricted" : "allow all") : (newValue ? "allow" : "deny");
-                    player.sendMessage(ChatColor.GREEN + name + ": " + status);
-                    openChallengeFlagsGui(player, flagsChallengeId, page);
+                    player.sendMessage(ChatColor.GREEN + name + ": " + status + " §7(Area " + areaIndex + ")");
+                    openChallengeFlagsGui(player, flagsChallengeId, areaIndex, page);
                 }
             }
             return;
@@ -16308,14 +16913,16 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    /** When interactInventoryEnabled, deny opening containers (chests, barrels, etc.) in challenge. GriefDefender: interact-inventory. */
+    /** When interactInventoryEnabled (per area), deny opening containers in that area. */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onInteractInventoryFlagInChallenge(InventoryOpenEvent event) {
         if (!(event.getPlayer() instanceof Player player)) return;
         String challengeId = activeChallenges.get(player.getUniqueId());
         if (challengeId == null) return;
         ChallengeConfig cfg = challenges.get(challengeId);
-        if (cfg == null || !cfg.flagsApplied || !cfg.interactInventoryEnabled) return;
+        if (cfg == null || !cfg.flagsApplied) return;
+        AreaFlags f = getFlagsForLocation(cfg, player.getLocation());
+        if (f == null || !f.interactInventoryEnabled) return;
         InventoryType type = event.getInventory().getType();
         if (type == InventoryType.CHEST || type == InventoryType.BARREL || type == InventoryType.ENDER_CHEST
             || type == InventoryType.HOPPER || type == InventoryType.DROPPER || type == InventoryType.DISPENSER
@@ -17473,7 +18080,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         }
                         return;
                     }
-                    case NONE -> {
+                    case NORMAL -> {
                         player.sendMessage(getMessage("admin.challenge-returned", "challenge", displayName(cfg)));
                         // Capture difficulty tier BEFORE removing player from activeChallenges
                         String difficultyTier3 = activeChallengeDifficulties.getOrDefault(activeId, "easy");
@@ -18365,13 +18972,39 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         runRewardCommands(player, cfg, challengeId, difficultyTier);
     }
     
+    /**
+     * SPEED completion path: run only the reward-commands configured on the achieved SpeedTier.
+     * No difficulty or speed multipliers are applied here.
+     */
+    private void runSpeedTierRewardsOnly(Player player, ChallengeConfig cfg, String challengeId, UUID uuid) {
+        String lastTierName = lastSpeedTierByPlayer.get(uuid);
+        // Best-effort: if we don't know the last tier, fall back to legacy logic
+        if (lastTierName == null) return;
+        
+        SpeedTier tier = findSpeedTierByName(cfg, lastTierName);
+        if (tier == null || tier.rewardCommands == null || tier.rewardCommands.isEmpty()) return;
+        
+        for (String cmdRaw : tier.rewardCommands) {
+            if (cmdRaw == null || cmdRaw.trim().isEmpty()) continue;
+            String cmd = cmdRaw.replace("%player%", player.getName());
+            if (cmd.startsWith("/")) cmd = cmd.substring(1);
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
+        }
+        
+        lastSpeedTierByPlayer.remove(uuid);
+    }
+    
     private void runRewardCommands(Player player, ChallengeConfig cfg, String challengeId, String difficultyTier) {
         UUID uuid = player.getUniqueId();
-        
+
+        // SPEED completion with configured speed tiers: use only SpeedTier.rewardCommands (no difficulty/speed multipliers)
+        if (cfg.completionType == CompletionType.SPEED && cfg.speedTiers != null && !cfg.speedTiers.isEmpty()) {
+            runSpeedTierRewardsOnly(player, cfg, challengeId, uuid);
+            return;
+        }
+
         // Use the provided difficulty tier (captured before cleanup)
         double difficultyMultiplier = cumulativeRewardMultipliers.getOrDefault(difficultyTier, 1.0);
-        
-        // Calculate speed multiplier (for SPEED challenges)
         double speedMultiplier = 1.0;
         final boolean[] isNewRecord = {false};
         if (cfg.completionType == CompletionType.SPEED) {
@@ -18385,7 +19018,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 }
             }
         }
-        
+
         // Collect tier rewards (with inheritance)
         List<TierReward> tierRewards = collectTierRewards(cfg, difficultyTier);
         
@@ -18475,7 +19108,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             player.sendMessage(getMessage("admin.challenge-no-rewards"));
             return;
         }
-        
+
         // Schedule balance check after 1 tick to ensure economy plugin has processed commands
         new BukkitRunnable() {
             @Override
@@ -20125,39 +20758,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                             }.runTask(ConradChallengesPlugin.this);
                         }
                     } else {
-                        // Start restoration phase. Sort so bisected blocks (doors, beds, etc.) restore bottom half before top half – otherwise the top can fail to link.
-                        // Also sort gravity-affected blocks (gravel, sand, etc.) last so pistons/support blocks restore first and have a tick to settle.
-                        // Comparator must be transitive: use a total order (BOTTOM=0, TOP=1, non-Bisected=2) to avoid "Comparison method violates its general contract".
-                        blocksToRestore.sort((a, b) -> {
-                            // Gravity-affected blocks last (so pistons below can retract before gravel above is placed)
-                            boolean gravityA = isGravityAffectedBlock(a.getType());
-                            boolean gravityB = isGravityAffectedBlock(b.getType());
-                            int cmp = Boolean.compare(gravityA, gravityB);
-                            if (cmp != 0) return cmp;
-                            BlockData ad = a.getBlockData();
-                            BlockData bd = b.getBlockData();
-                            int keyA = (ad instanceof Bisected aa) ? (aa.getHalf() == Bisected.Half.BOTTOM ? 0 : 1) : 2;
-                            int keyB = (bd instanceof Bisected bb) ? (bb.getHalf() == Bisected.Half.BOTTOM ? 0 : 1) : 2;
-                            cmp = Integer.compare(keyA, keyB);
-                            if (cmp != 0) return cmp;
-                            // Tie-break by location so order is deterministic and transitive
-                            Location la = a.getLocation();
-                            Location lb = b.getLocation();
-                            if (la.getBlockY() != lb.getBlockY()) return Integer.compare(la.getBlockY(), lb.getBlockY());
-                            if (la.getBlockX() != lb.getBlockX()) return Integer.compare(la.getBlockX(), lb.getBlockX());
-                            return Integer.compare(la.getBlockZ(), lb.getBlockZ());
-                        });
-                        final int[] restored = {0};
-                        final int[] restoreIndex = {0};
-                        final java.util.Set<String> restoreChunkSkipRetried = new java.util.HashSet<>();
-                        final java.util.List<BlockState> deferredGravityBlocks = new java.util.ArrayList<>();
-                        // Scale time budget for very large restorations (e.g. 30M blocks with lots of fire→air) to reduce total ticks
-                        int toRestore = blocksToRestore.size();
-                        long restoreTimeBudget = 15_000_000L; // 15ms default
-                        if (toRestore > 2_000_000) restoreTimeBudget = 35_000_000L;  // 35ms for huge regens
-                        else if (toRestore > 500_000) restoreTimeBudget = 25_000_000L; // 25ms for large
-                        else if (toRestore > 100_000) restoreTimeBudget = 20_000_000L; // 20ms for medium-large
-                        scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, restoreIndex, restoreTimeBudget, blocksToRestore.size(), restoreChunkSkipRetried, deferredGravityBlocks);
+                        // Offload the expensive sort of blocksToRestore to an async task,
+                        // then resume on the main thread to schedule batched restoration.
+                        startAsyncSortAndRestoreBlocks(challengeId, world, blocksToRestore);
                     }
                 } else {
                     // More blocks to compare, schedule next tick
@@ -20176,6 +20779,88 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         String name = m.name();
         return name.equals("GRAVEL") || name.equals("SAND") || name.equals("RED_SAND") || name.equals("DRAGON_EGG")
             || name.endsWith("_CONCRETE_POWDER") || name.equals("ANVIL") || name.equals("CHIPPED_ANVIL") || name.equals("DAMAGED_ANVIL");
+    }
+
+    /**
+     * Sorts blocksToRestore off the main thread using a precomputed sort key, then
+     * resumes on the main thread to schedule the restore batches.
+     * The sort preserves the previous ordering rules:
+     * - gravity-affected blocks last
+     * - bisected blocks: bottom half before top half
+     * - tie-break by Y, then X, then Z for determinism
+     */
+    private void startAsyncSortAndRestoreBlocks(String challengeId, World world, java.util.List<BlockState> blocksToRestore) {
+        final int size = blocksToRestore.size();
+        if (size <= 1) {
+            // Nothing to sort, go straight to restore
+            final int[] restored = {0};
+            final int[] restoreIndex = {0};
+            final java.util.Set<String> restoreChunkSkipRetried = new java.util.HashSet<>();
+            final java.util.List<BlockState> deferredGravityBlocks = new java.util.ArrayList<>();
+            long restoreTimeBudget = 15_000_000L; // 15ms default
+            if (size > 2_000_000) restoreTimeBudget = 35_000_000L;
+            else if (size > 500_000) restoreTimeBudget = 25_000_000L;
+            else if (size > 100_000) restoreTimeBudget = 20_000_000L;
+            scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, restoreIndex, restoreTimeBudget, size, restoreChunkSkipRetried, deferredGravityBlocks);
+            return;
+        }
+
+        // Precompute sort keys on the main thread from the BlockState snapshots (no world access).
+        final int[] gravityKey = new int[size];
+        final int[] halfKey = new int[size];
+        final int[] yKey = new int[size];
+        final int[] xKey = new int[size];
+        final int[] zKey = new int[size];
+        final java.util.List<Integer> indices = new java.util.ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            BlockState state = blocksToRestore.get(i);
+            gravityKey[i] = isGravityAffectedBlock(state.getType()) ? 1 : 0;
+            BlockData data = state.getBlockData();
+            if (data instanceof Bisected bisected) {
+                halfKey[i] = (bisected.getHalf() == Bisected.Half.BOTTOM ? 0 : 1);
+            } else {
+                halfKey[i] = 2;
+            }
+            Location loc = state.getLocation();
+            yKey[i] = loc.getBlockY();
+            xKey[i] = loc.getBlockX();
+            zKey[i] = loc.getBlockZ();
+            indices.add(i);
+        }
+
+        // Sort indices asynchronously using the precomputed keys (pure CPU work off the main thread).
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            indices.sort((ia, ib) -> {
+                int cmp = Integer.compare(gravityKey[ia], gravityKey[ib]);
+                if (cmp != 0) return cmp;
+                cmp = Integer.compare(halfKey[ia], halfKey[ib]);
+                if (cmp != 0) return cmp;
+                if (yKey[ia] != yKey[ib]) return Integer.compare(yKey[ia], yKey[ib]);
+                if (xKey[ia] != xKey[ib]) return Integer.compare(xKey[ia], xKey[ib]);
+                return Integer.compare(zKey[ia], zKey[ib]);
+            });
+
+            // Back on main thread: rebuild blocksToRestore in the sorted order, then schedule restore batches.
+            Bukkit.getScheduler().runTask(ConradChallengesPlugin.this, () -> {
+                java.util.List<BlockState> sorted = new java.util.ArrayList<>(size);
+                for (int idx : indices) {
+                    sorted.add(blocksToRestore.get(idx));
+                }
+                blocksToRestore.clear();
+                blocksToRestore.addAll(sorted);
+
+                final int[] restored = {0};
+                final int[] restoreIndex = {0};
+                final java.util.Set<String> restoreChunkSkipRetried = new java.util.HashSet<>();
+                final java.util.List<BlockState> deferredGravityBlocks = new java.util.ArrayList<>();
+                int toRestore = blocksToRestore.size();
+                long restoreTimeBudget = 15_000_000L; // 15ms default
+                if (toRestore > 2_000_000) restoreTimeBudget = 35_000_000L;  // 35ms for huge regens
+                else if (toRestore > 500_000) restoreTimeBudget = 25_000_000L; // 25ms for large
+                else if (toRestore > 100_000) restoreTimeBudget = 20_000_000L; // 20ms for medium-large
+                scheduleNextRestoreBatch(challengeId, world, blocksToRestore, restored, restoreIndex, restoreTimeBudget, toRestore, restoreChunkSkipRetried, deferredGravityBlocks);
+            });
+        });
     }
 
     /**
@@ -20647,6 +21332,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         clone.passThroughDistance = original.passThroughDistance;
         clone.passThroughDistanceByBlockKey = original.passThroughDistanceByBlockKey != null ? new HashMap<>(original.passThroughDistanceByBlockKey) : new HashMap<>();
+        clone.flagsByArea = new HashMap<>();
+        if (original.flagsByArea != null) {
+            for (Map.Entry<Integer, AreaFlags> e : original.flagsByArea.entrySet()) {
+                AreaFlags copy = new AreaFlags();
+                copy.copyFrom(e.getValue());
+                clone.flagsByArea.put(e.getKey(), copy);
+            }
+        }
         return clone;
     }
 
@@ -20754,6 +21447,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
         }
         target.passThroughDistance = backup.passThroughDistance;
         target.passThroughDistanceByBlockKey = backup.passThroughDistanceByBlockKey != null ? new HashMap<>(backup.passThroughDistanceByBlockKey) : new HashMap<>();
+        target.flagsByArea = new HashMap<>();
+        if (backup.flagsByArea != null) {
+            for (Map.Entry<Integer, AreaFlags> e : backup.flagsByArea.entrySet()) {
+                AreaFlags copy = new AreaFlags();
+                copy.copyFrom(e.getValue());
+                target.flagsByArea.put(e.getKey(), copy);
+            }
+        }
     }
 
     /**
@@ -21288,47 +21989,103 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             findAndResetSpawnersAsync(cfg);
         });
     }
-    
+
+    /**
+     * Collects all bounding boxes (regen + challenge areas) for spawner operations so cooldown/level
+     * logic applies to every challenge area, not just area 1.
+     * @return List of boxes (each int[] is minX, maxX, minY, maxY, minZ, maxZ) and world, or null if no areas
+     */
+    private static class SpawnerBoundsResult {
+        final List<int[]> boxes = new ArrayList<>();
+        World world;
+    }
+
+    private SpawnerBoundsResult getSpawnerBoundsBoxes(ChallengeConfig cfg) {
+        if (cfg == null) return null;
+        SpawnerBoundsResult result = new SpawnerBoundsResult();
+        World world = null;
+        // Regen areas (all of them)
+        List<Location[]> regenAreas = new ArrayList<>();
+        if (cfg.regenerationAreas != null && !cfg.regenerationAreas.isEmpty()) {
+            for (Location[] ca : cfg.regenerationAreas) {
+                if (ca != null && ca.length >= 2) regenAreas.add(ca);
+            }
+        } else if (cfg.regenerationCorner1 != null && cfg.regenerationCorner2 != null) {
+            regenAreas.add(new Location[]{ cfg.regenerationCorner1, cfg.regenerationCorner2 });
+        }
+        for (Location[] corners : regenAreas) {
+            if (corners == null || corners.length < 2) continue;
+            World w = corners[0].getWorld();
+            if (w == null) continue;
+            if (world == null) world = w;
+            int minX = Math.min(corners[0].getBlockX(), corners[1].getBlockX());
+            int maxX = Math.max(corners[0].getBlockX(), corners[1].getBlockX());
+            int minZ = Math.min(corners[0].getBlockZ(), corners[1].getBlockZ());
+            int maxZ = Math.max(corners[0].getBlockZ(), corners[1].getBlockZ());
+            int minY, maxY;
+            if (cfg.regenerationAutoExtendY) {
+                minY = w.getMinHeight();
+                maxY = w.getMaxHeight() - 1;
+            } else {
+                minY = Math.min(corners[0].getBlockY(), corners[1].getBlockY());
+                maxY = Math.max(corners[0].getBlockY(), corners[1].getBlockY());
+            }
+            result.boxes.add(new int[]{ minX, maxX, minY, maxY, minZ, maxZ });
+        }
+        // Challenge areas (all of them)
+        List<Location[]> challengeAreas = new ArrayList<>();
+        if (cfg.challengeAreas != null && !cfg.challengeAreas.isEmpty()) {
+            for (Location[] ca : cfg.challengeAreas) {
+                if (ca != null && ca.length >= 2) challengeAreas.add(ca);
+            }
+        } else if (cfg.challengeCorner1 != null && cfg.challengeCorner2 != null) {
+            challengeAreas.add(new Location[]{ cfg.challengeCorner1, cfg.challengeCorner2 });
+        }
+        for (Location[] corners : challengeAreas) {
+            if (corners == null || corners.length < 2) continue;
+            World w = corners[0].getWorld();
+            if (w == null) continue;
+            if (world == null) world = w;
+            int minX = Math.min(corners[0].getBlockX(), corners[1].getBlockX());
+            int maxX = Math.max(corners[0].getBlockX(), corners[1].getBlockX());
+            int minY = Math.min(corners[0].getBlockY(), corners[1].getBlockY());
+            int maxY = Math.max(corners[0].getBlockY(), corners[1].getBlockY());
+            int minZ = Math.min(corners[0].getBlockZ(), corners[1].getBlockZ());
+            int maxZ = Math.max(corners[0].getBlockZ(), corners[1].getBlockZ());
+            result.boxes.add(new int[]{ minX, maxX, minY, maxY, minZ, maxZ });
+        }
+        if (result.boxes.isEmpty() || world == null) return null;
+        result.world = world;
+        return result;
+    }
+
+    /** Returns true if (x,y,z) is inside any of the boxes (each int[] is minX, maxX, minY, maxY, minZ, maxZ). */
+    private static boolean isInAnyBox(int x, int y, int z, List<int[]> boxes) {
+        for (int[] b : boxes) {
+            if (x >= b[0] && x <= b[1] && y >= b[2] && y <= b[3] && z >= b[4] && z <= b[5]) return true;
+        }
+        return false;
+    }
+
     private void findAndResetSpawnersAsync(ChallengeConfig cfg) {
         if (debugSpawnerLevels) {
             getLogger().info("Finding MythicMobs spawners to reset for challenge '" + cfg.id + "' (async)");
         }
         
-        // Check if MythicMobs is installed
         if (Bukkit.getPluginManager().getPlugin("MythicMobs") == null) {
             getLogger().fine("MythicMobs not installed, skipping spawner reset");
-            return; // MythicMobs not installed
+            return;
         }
-        
-        // Check if regeneration area is set
-        if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) {
-            getLogger().fine("No regeneration area set for challenge '" + cfg.id + "', skipping spawner reset");
-            return; // No regeneration area set
+
+        SpawnerBoundsResult bounds = getSpawnerBoundsBoxes(cfg);
+        if (bounds == null || bounds.boxes.isEmpty() || bounds.world == null) {
+            getLogger().fine("No regeneration or challenge areas set for challenge '" + cfg.id + "', skipping spawner reset");
+            return;
         }
-        
-        World world = cfg.regenerationCorner1.getWorld();
-        if (world == null) {
-            getLogger().fine("World not loaded for challenge '" + cfg.id + "', skipping spawner reset");
-            return; // World not loaded
-        }
-        
-        // Calculate regeneration area bounds
-        int minX = Math.min(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
-        int maxX = Math.max(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
-        int minY, maxY;
-        if (cfg.regenerationAutoExtendY) {
-            minY = world.getMinHeight();
-            maxY = world.getMaxHeight() - 1;
-        } else {
-            minY = Math.min(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
-            maxY = Math.max(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
-        }
-        int minZ = Math.min(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
-        int maxZ = Math.max(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
-        
+        World world = bounds.world;
         String worldName = world.getName();
         if (debugSpawnerLevels) {
-            getLogger().info("Regeneration area bounds: X[" + minX + " to " + maxX + "] Y[" + minY + " to " + maxY + "] Z[" + minZ + " to " + maxZ + "] in world '" + worldName + "'");
+            getLogger().info("Spawner reset: checking " + bounds.boxes.size() + " area(s) in world '" + worldName + "'");
         }
         
         try {
@@ -21496,32 +22253,34 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     if (getSpawnerAtMethod != null) {
                         java.util.List<Object> foundSpawners = new java.util.ArrayList<>();
                         if (debugSpawnerLevels) {
-                            getLogger().info("Checking all spawner blocks in regeneration area for MythicMobs spawners...");
+                            getLogger().info("Checking all spawner blocks in regen + challenge areas for MythicMobs spawners...");
                         }
                         int checkedBlocks = 0;
                         int spawnerBlocks = 0;
-                        // Check all blocks in the regeneration area
-                        for (int x = minX; x <= maxX; x++) {
-                            for (int y = minY; y <= maxY; y++) {
-                                for (int z = minZ; z <= maxZ; z++) {
-                                    checkedBlocks++;
-                                    Location checkLoc = new Location(world, x, y, z);
-                                    Block block = checkLoc.getBlock();
-                                    if (block.getType() == Material.SPAWNER) {
-                                        spawnerBlocks++;
-                                        try {
-                                            Object spawner = getSpawnerAtMethod.getParameterCount() == 1 && 
-                                                             getSpawnerAtMethod.getParameterTypes()[0] == Location.class
-                                                             ? getSpawnerAtMethod.invoke(spawnerManager, checkLoc)
-                                                             : getSpawnerAtMethod.invoke(spawnerManager, block);
-                                            if (spawner != null && !foundSpawners.contains(spawner)) {
-                                                foundSpawners.add(spawner);
-                                                if (debugSpawnerLevels) {
-                                                    getLogger().info("Found MythicMobs spawner at " + checkLoc);
+                        for (int[] box : bounds.boxes) {
+                            int bMinX = box[0], bMaxX = box[1], bMinY = box[2], bMaxY = box[3], bMinZ = box[4], bMaxZ = box[5];
+                            for (int x = bMinX; x <= bMaxX; x++) {
+                                for (int y = bMinY; y <= bMaxY; y++) {
+                                    for (int z = bMinZ; z <= bMaxZ; z++) {
+                                        checkedBlocks++;
+                                        Location checkLoc = new Location(world, x, y, z);
+                                        Block block = checkLoc.getBlock();
+                                        if (block.getType() == Material.SPAWNER) {
+                                            spawnerBlocks++;
+                                            try {
+                                                Object spawner = getSpawnerAtMethod.getParameterCount() == 1 && 
+                                                                 getSpawnerAtMethod.getParameterTypes()[0] == Location.class
+                                                                 ? getSpawnerAtMethod.invoke(spawnerManager, checkLoc)
+                                                                 : getSpawnerAtMethod.invoke(spawnerManager, block);
+                                                if (spawner != null && !foundSpawners.contains(spawner)) {
+                                                    foundSpawners.add(spawner);
+                                                    if (debugSpawnerLevels) {
+                                                        getLogger().info("Found MythicMobs spawner at " + checkLoc);
+                                                    }
                                                 }
+                                            } catch (Exception e) {
+                                                // Not a MythicMobs spawner or error
                                             }
-                                        } catch (Exception e) {
-                                            // Not a MythicMobs spawner or error
                                         }
                                     }
                                 }
@@ -21533,7 +22292,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         if (!foundSpawners.isEmpty()) {
                             spawners = foundSpawners;
                             if (debugSpawnerLevels) {
-                                getLogger().info("Found " + spawners.size() + " MythicMobs spawner(s) by checking blocks in area");
+                                getLogger().info("Found " + spawners.size() + " MythicMobs spawner(s) by checking blocks in area(s)");
                             }
                         }
                     }
@@ -21693,30 +22452,20 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                         continue; // Wrong world
                     }
                     
-                    // Check if spawner is within regeneration area bounds
-                    // Use block coordinates for precise comparison (avoid floating point issues)
+                    // Check if spawner is within any regen or challenge area
                     int x = spawnerLoc.getBlockX();
                     int y = spawnerLoc.getBlockY();
                     int z = spawnerLoc.getBlockZ();
-                    
                     checkedCount++;
-                    
-                    // Manual coordinate check to avoid precision errors
-                    boolean inBounds = (x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ);
-                    
-                    // Log first few spawners checked for debugging (only if in correct world)
+                    boolean inBounds = isInAnyBox(x, y, z, bounds.boxes);
                     if (debugSpawnerLevels && checkedCount <= 3) {
-                        getLogger().fine("Checking spawner at " + spawnerLoc + " (X:" + x + " Y:" + y + " Z:" + z + 
-                            ") - Bounds: X[" + minX + "-" + maxX + "] Y[" + minY + "-" + maxY + "] Z[" + minZ + "-" + maxZ + "] - In bounds: " + inBounds);
+                        getLogger().fine("Checking spawner at " + spawnerLoc + " (X:" + x + " Y:" + y + " Z:" + z + ") - In bounds: " + inBounds);
                     }
-                    
                     if (inBounds) {
-                        // Spawner is in the regeneration area - add to list for resetting
                         if (debugSpawnerLevels) {
-                            getLogger().info("Found spawner in regeneration area at " + spawnerLoc + " (X:" + x + " Y:" + y + " Z:" + z + ")");
+                            getLogger().info("Found spawner in area at " + spawnerLoc + " (X:" + x + " Y:" + y + " Z:" + z + ")");
                         }
                         spawnersToReset.add(spawner);
-                        
                     }
                 } catch (Exception e) {
                     // Skip this spawner if we can't process it
@@ -21735,7 +22484,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                 Bukkit.getScheduler().runTask(this, () -> scheduleNextCooldownResetBatch(finalSpawnersToReset, 0, cfg.id,
                     finalCheckedCount, finalNoLocationCount, finalWrongWorldCount, cooldownResetCount));
             } else {
-                getLogger().info("Checked " + finalCheckedCount + " MythicMobs spawner(s), no spawners found in regeneration area '" + cfg.id + "'");
+                getLogger().info("Checked " + finalCheckedCount + " MythicMobs spawner(s), no spawners found in regen/challenge areas '" + cfg.id + "'");
                 if (finalNoLocationCount > 0) {
                     getLogger().info("Could not get location for " + finalNoLocationCount + " spawner(s)");
                 }
@@ -21950,12 +22699,9 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
             getLogger().warning("MythicMobs not installed, cannot set spawner levels");
             return;
         }
-        if (cfg.regenerationCorner1 == null || cfg.regenerationCorner2 == null) {
-            getLogger().warning("No regeneration area set for challenge '" + cfg.id + "', cannot set spawner levels");
-            return;
-        }
-        if (cfg.regenerationCorner1.getWorld() == null) {
-            getLogger().warning("World not loaded for challenge '" + cfg.id + "', cannot set spawner levels");
+        SpawnerBoundsResult bounds = getSpawnerBoundsBoxes(cfg);
+        if (bounds == null || bounds.boxes.isEmpty() || bounds.world == null) {
+            getLogger().warning("No regeneration or challenge areas set for challenge '" + cfg.id + "', cannot set spawner levels");
             return;
         }
         originalSpawnerLevels.putIfAbsent(cfg.id, new HashMap<>());
@@ -21964,20 +22710,14 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
     }
 
     /**
-     * Async: finds MythicMobs spawners in the challenge regen area using the exact same logic as cooldown reset:
-     * getSpawners(), then for each spawner get location (with challenge world as fallback when unknown), then
-     * include only those whose coordinates are inside the regen bounds. No extra world strictness. Applies levels on main thread.
+     * Async: finds MythicMobs spawners in all regen + challenge areas (same logic as cooldown reset).
+     * Applies levels on main thread.
      */
     private void findSpawnersInAreaForLevelsAsync(ChallengeConfig cfg, String tier, int levelModifier) {
-        World world = cfg.regenerationCorner1.getWorld();
-        if (world == null) return;
+        SpawnerBoundsResult bounds = getSpawnerBoundsBoxes(cfg);
+        if (bounds == null || bounds.boxes.isEmpty() || bounds.world == null) return;
+        World world = bounds.world;
         String worldName = world.getName();
-        int minX = Math.min(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
-        int maxX = Math.max(cfg.regenerationCorner1.getBlockX(), cfg.regenerationCorner2.getBlockX());
-        int minY = cfg.regenerationAutoExtendY ? world.getMinHeight() : Math.min(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
-        int maxY = cfg.regenerationAutoExtendY ? world.getMaxHeight() - 1 : Math.max(cfg.regenerationCorner1.getBlockY(), cfg.regenerationCorner2.getBlockY());
-        int minZ = Math.min(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
-        int maxZ = Math.max(cfg.regenerationCorner1.getBlockZ(), cfg.regenerationCorner2.getBlockZ());
         java.util.Collection<?> spawners = null;
         try {
             Class<?> mythicAPI = Class.forName("io.lumine.mythic.bukkit.MythicBukkit");
@@ -22057,7 +22797,7 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     if (spawnerLoc == null) continue;
                     if (spawnerLoc.getWorld() == null || !spawnerLoc.getWorld().getName().equals(worldName)) continue;
                     int x = spawnerLoc.getBlockX(), y = spawnerLoc.getBlockY(), z = spawnerLoc.getBlockZ();
-                    if (x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ)
+                    if (isInAnyBox(x, y, z, bounds.boxes))
                         spawnersInArea.add(spawner);
                 } catch (Exception e) {
                     getLogger().fine("Error processing spawner for level: " + e.getMessage());

@@ -393,8 +393,10 @@ public class ChallengeScriptManager {
         if (tr == ScriptTrigger.USE_ITEM) {
             String keyMat = String.valueOf(ctx.node.functionData.getOrDefault("keyItemMaterial", ""));
             String keyDisp = String.valueOf(ctx.node.functionData.getOrDefault("keyItemDisplayName", ctx.node.functionData.getOrDefault("itemDisplayName", "")));
-            String keyLabel = keyMat.isEmpty() && keyDisp.isEmpty() ? "(none)" : (keyMat.isEmpty() ? keyDisp : keyMat + (keyDisp.isEmpty() ? "" : " - " + truncate(keyDisp, 12)));
-            inv.setItem(0, makeGuiItem(Material.TRIPWIRE_HOOK, ChatColor.YELLOW + "Key item (trigger)", "§7Close GUI, hold item, right-click any block", "§7Current: " + truncate(keyLabel, 20)));
+            Object cmdObj = ctx.node.functionData.get("keyItemCustomModelData");
+            Integer keyCmd = cmdObj instanceof Number ? ((Number) cmdObj).intValue() : null;
+            String keyLabel = keyMat.isEmpty() && keyDisp.isEmpty() && keyCmd == null ? "(none)" : (keyMat.isEmpty() ? keyDisp : keyMat + (keyDisp.isEmpty() ? "" : " - " + truncate(keyDisp, 12)) + (keyCmd != null ? " [CMD:" + keyCmd + "]" : ""));
+            inv.setItem(0, makeGuiItem(Material.TRIPWIRE_HOOK, ChatColor.YELLOW + "Key item (trigger)", "§7Close GUI, hold item, right-click any block", "§7Current: " + truncate(keyLabel, 28)));
             inv.setItem(1, makeGuiItem(Material.BONE, ChatColor.YELLOW + "Amount to consume (chat)", "§7Per use (0 = no consume)", "§7Current: " + ctx.node.functionData.getOrDefault("amount", 1)));
         } else if (tr == ScriptTrigger.SIGNAL_RECEIVER) {
             inv.setItem(0, makeGuiItem(Material.REPEATER, ChatColor.YELLOW + "Signal name (chat)", "§7Listen for this signal", "§7Current: " + String.valueOf(ctx.node.functionData.getOrDefault("signal", ""))));
@@ -405,12 +407,22 @@ public class ChallengeScriptManager {
             inv.setItem(1, makeGuiItem(Material.LEATHER_BOOTS, ChatColor.YELLOW + "Distance (chat)", "§7Blocks from trigger block", "§7Current: " + dist + " block(s)"));
         } else if (tr == ScriptTrigger.MOB_DEATH) {
             inv.setItem(0, makeGuiItem(Material.SKELETON_SKULL, ChatColor.GRAY + "Mob death trigger", "§7Fires when a mob dies within 5 blocks", "§7No extra options"));
+        } else if (tr == ScriptTrigger.BLOCK_INTERACT) {
+            inv.setItem(0, makeGuiItem(Material.STONE_BUTTON, ChatColor.GRAY + "Block interact trigger", "§7Fires when a player right-clicks this block", "§7No extra options"));
+        } else if (tr == ScriptTrigger.BLOCK_BREAK) {
+            inv.setItem(0, makeGuiItem(Material.DIAMOND_PICKAXE, ChatColor.GRAY + "Block break trigger", "§7Fires when this block is broken", "§7No extra options"));
+        } else if (tr == ScriptTrigger.BLOCK_PLACE) {
+            inv.setItem(0, makeGuiItem(Material.GRASS_BLOCK, ChatColor.GRAY + "Block place trigger", "§7Fires when a block is placed here", "§7No extra options"));
+        } else if (tr == ScriptTrigger.REDSTONE_RECEIVER) {
+            inv.setItem(0, makeGuiItem(Material.REDSTONE_TORCH, ChatColor.GRAY + "Redstone receiver trigger", "§7Fires when this block receives redstone power", "§7No extra options"));
         }
         if (ft == ScriptFunctionType.REMOVE_BLOCK_WHEN_ITEM_NEAR) {
             String keyMat = String.valueOf(ctx.node.functionData.getOrDefault("keyItemMaterial", ""));
             String keyDisp = String.valueOf(ctx.node.functionData.getOrDefault("keyItemDisplayName", ""));
-            String keyLabel = keyMat.isEmpty() && keyDisp.isEmpty() ? "(none)" : (keyMat.isEmpty() ? keyDisp : keyMat + (keyDisp.isEmpty() ? "" : " - " + truncate(keyDisp, 12)));
-            inv.setItem(0, makeGuiItem(Material.TRIPWIRE_HOOK, ChatColor.YELLOW + "Key item (remove block)", "§7Close GUI, hold item, right-click block", "§7Current: " + truncate(keyLabel, 20)));
+            Object cmdObj = ctx.node.functionData.get("keyItemCustomModelData");
+            Integer keyCmd = cmdObj instanceof Number ? ((Number) cmdObj).intValue() : null;
+            String keyLabel = keyMat.isEmpty() && keyDisp.isEmpty() && keyCmd == null ? "(none)" : (keyMat.isEmpty() ? keyDisp : keyMat + (keyDisp.isEmpty() ? "" : " - " + truncate(keyDisp, 12)) + (keyCmd != null ? " [CMD:" + keyCmd + "]" : ""));
+            inv.setItem(0, makeGuiItem(Material.TRIPWIRE_HOOK, ChatColor.YELLOW + "Key item (remove block)", "§7Close GUI, hold item, right-click block", "§7Current: " + truncate(keyLabel, 28)));
             inv.setItem(1, makeGuiItem(Material.BONE, ChatColor.YELLOW + "Amount (chat)", "§7Consumed per use", "§7Current: " + ctx.node.functionData.getOrDefault("amount", 1)));
             Object lb = ctx.node.functionData.get("linkedBlocks");
             int linkedCount = lb instanceof List ? ((List<?>) lb).size() : 0;
@@ -513,6 +525,7 @@ public class ChallengeScriptManager {
             case REMOVE_BLOCK_WHEN_ITEM_NEAR:
                 ctx.node.functionData.putIfAbsent("keyItemMaterial", "");
                 ctx.node.functionData.putIfAbsent("keyItemDisplayName", "");
+                ctx.node.functionData.putIfAbsent("keyItemCustomModelData", null);
                 ctx.node.functionData.putIfAbsent("amount", 1);
                 ctx.node.functionData.putIfAbsent("linkedBlocks", new ArrayList<String>());
                 break;
@@ -526,6 +539,7 @@ public class ChallengeScriptManager {
         if (ctx.node.trigger == ScriptTrigger.USE_ITEM) {
             ctx.node.functionData.putIfAbsent("keyItemMaterial", "");
             ctx.node.functionData.putIfAbsent("keyItemDisplayName", "");
+            ctx.node.functionData.putIfAbsent("keyItemCustomModelData", null);
             ctx.node.functionData.putIfAbsent("amount", 1);
         }
         if (ctx.node.trigger == ScriptTrigger.AND_GATE || ctx.node.trigger == ScriptTrigger.OR_GATE)
@@ -803,11 +817,31 @@ public class ChallengeScriptManager {
         if (awaitKeyCtx != null && awaitKeyCtx.step == ScriptGuiStep.CONFIGURE_AWAIT_KEY_ITEM) {
             if (hand != null && !hand.getType().isAir() && !isFunctionTool(hand)) {
                 event.setCancelled(true);
+                org.bukkit.inventory.meta.ItemMeta meta = hand.getItemMeta();
                 awaitKeyCtx.node.functionData.put("keyItemMaterial", hand.getType().name());
-                awaitKeyCtx.node.functionData.put("keyItemDisplayName", hand.hasItemMeta() && hand.getItemMeta().hasDisplayName() ? hand.getItemMeta().getDisplayName() : "");
+                // Save custom/display name for custom items (MythicMobs, resource pack, etc.)
+                String displayName = "";
+                if (meta != null) {
+                    if (meta.hasDisplayName() && meta.getDisplayName() != null && !meta.getDisplayName().trim().isEmpty()) {
+                        displayName = meta.getDisplayName();
+                    } else if (meta.hasLore() && meta.getLore() != null && !meta.getLore().isEmpty() && meta.getLore().get(0) != null && !meta.getLore().get(0).trim().isEmpty()) {
+                        // Fallback: some custom items put the name in first lore line
+                        displayName = meta.getLore().get(0);
+                    }
+                }
+                awaitKeyCtx.node.functionData.put("keyItemDisplayName", displayName);
+                // Save CustomModelData for resource pack / MythicMobs custom items
+                if (meta != null && meta.hasCustomModelData()) {
+                    awaitKeyCtx.node.functionData.put("keyItemCustomModelData", meta.getCustomModelData());
+                } else {
+                    awaitKeyCtx.node.functionData.put("keyItemCustomModelData", null);
+                }
                 awaitKeyCtx.step = ScriptGuiStep.CONFIGURE;
                 scriptGuiContext.put(player.getUniqueId(), awaitKeyCtx);
-                player.sendMessage(ChatColor.GREEN + "Key item set: " + hand.getType().name() + (hand.getItemMeta() != null && hand.getItemMeta().hasDisplayName() ? " - " + ChatColor.stripColor(hand.getItemMeta().getDisplayName()) : ""));
+                String msg = hand.getType().name();
+                if (!displayName.isEmpty()) msg += " - " + ChatColor.stripColor(displayName);
+                if (meta != null && meta.hasCustomModelData()) msg += " (CMD: " + meta.getCustomModelData() + ")";
+                player.sendMessage(ChatColor.GREEN + "Key item set: " + msg);
                 openScriptConfigureGui(player, awaitKeyCtx);
             }
             return;
@@ -1239,14 +1273,30 @@ public class ChallengeScriptManager {
         String materialName = fd != null && fd.get("keyItemMaterial") != null ? String.valueOf(fd.get("keyItemMaterial")).trim() : "";
         String displayName = fd != null && fd.get("keyItemDisplayName") != null ? String.valueOf(fd.get("keyItemDisplayName")).trim() : "";
         if (displayName.isEmpty() && fd != null && fd.get("itemDisplayName") != null) displayName = String.valueOf(fd.get("itemDisplayName")).trim();
-        if (materialName.isEmpty() && displayName.isEmpty()) return false;
+        Object cmdObj = fd != null ? fd.get("keyItemCustomModelData") : null;
+        Integer storedCmd = null;
+        if (cmdObj instanceof Number) storedCmd = ((Number) cmdObj).intValue();
+        else if (cmdObj != null && !"".equals(String.valueOf(cmdObj).trim())) {
+            try { storedCmd = Integer.parseInt(String.valueOf(cmdObj).trim()); } catch (NumberFormatException ignored) { }
+        }
+        if (materialName.isEmpty() && displayName.isEmpty() && storedCmd == null) return false;
         if (!materialName.isEmpty() && !stack.getType().name().equalsIgnoreCase(materialName)) return false;
         if (!displayName.isEmpty()) {
             org.bukkit.inventory.meta.ItemMeta meta = stack.getItemMeta();
-            if (meta == null || !meta.hasDisplayName()) return false;
-            String normItem = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', meta.getDisplayName())).trim();
+            if (meta == null) return false;
             String normStored = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', displayName)).trim();
-            if (!normItem.equalsIgnoreCase(normStored)) return false;
+            String normItem = null;
+            if (meta.hasDisplayName() && meta.getDisplayName() != null && !meta.getDisplayName().trim().isEmpty()) {
+                normItem = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', meta.getDisplayName())).trim();
+            } else if (meta.hasLore() && meta.getLore() != null && !meta.getLore().isEmpty() && meta.getLore().get(0) != null) {
+                normItem = ChatColor.stripColor(ChatColor.translateAlternateColorCodes('&', meta.getLore().get(0))).trim();
+            }
+            if (normItem == null || !normItem.equalsIgnoreCase(normStored)) return false;
+        }
+        // Match CustomModelData for resource pack / MythicMobs custom items
+        if (storedCmd != null) {
+            org.bukkit.inventory.meta.ItemMeta meta = stack.getItemMeta();
+            if (meta == null || !meta.hasCustomModelData() || meta.getCustomModelData() != storedCmd) return false;
         }
         return true;
     }
@@ -1315,6 +1365,7 @@ public class ChallengeScriptManager {
                     if (cfg != null) {
                         ctx.node.functionData.putIfAbsent("keyItemMaterial", "");
                         ctx.node.functionData.putIfAbsent("keyItemDisplayName", "");
+                        ctx.node.functionData.putIfAbsent("keyItemCustomModelData", null);
                         ctx.node.functionData.putIfAbsent("amount", 1);
                         ctx.node.functionData.putIfAbsent("linkedBlocks", new ArrayList<String>());
                         if (cfg.scriptNodes == null) cfg.scriptNodes = new ArrayList<>();
