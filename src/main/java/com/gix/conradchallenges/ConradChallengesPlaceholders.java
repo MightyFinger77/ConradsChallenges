@@ -345,13 +345,14 @@ public class ConradChallengesPlaceholders {
         }
 
         // %conradchallenges_besttime_<challengeid>% - Best time for player in challenge (in seconds)
-        // Supports "active" as challenge ID to use current active challenge
-        if (args.length >= 2 && args[0].equalsIgnoreCase("besttime")) {
+        // Supports "active" as challenge ID to use current active challenge.
+        // Always returns a number for ajLeaderboards: no time / not completed / invalid id -> 999999 (sorts at bottom).
+        if (args.length >= 2 && args[0].equalsIgnoreCase("besttime") && !args[1].equalsIgnoreCase("formatted")) {
             String challengeId = resolveChallengeId(uuid, args[1]);
-            if (challengeId == null) return "N/A";
+            if (challengeId == null) return "999999";
             Long bestTime = plugin.getBestTime(uuid, challengeId);
-            if (bestTime == null) return "N/A";
-            return String.valueOf(bestTime);
+            if (bestTime != null) return String.valueOf(bestTime);
+            return "999999"; // No time recorded; numeric so ajLeaderboards never sees N/A
         }
 
         // %conradchallenges_besttime_formatted_<challengeid>% - Best time formatted (e.g., "1m 30s")

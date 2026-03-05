@@ -7387,6 +7387,13 @@ public class ConradChallengesPlugin extends JavaPlugin implements Listener {
                     }
                 } else if (cfg.completionType == CompletionType.NORMAL) {
                     completedChallenges.put(memberUuid, challengeId);
+                    markEverCompleted(cfg, memberUuid);
+                    // Record completion time for leaderboard (all challenge types, not just SPEED)
+                    Long start = challengeStartTimes.get(memberUuid);
+                    if (start != null) {
+                        long elapsed = (System.currentTimeMillis() - start) / 1000L;
+                        updateBestTime(challengeId, memberUuid, elapsed);
+                    }
                 }
 
                 // Teleport all party members (allow this teleport in onPlayerTeleport so /hub etc stay blocked during run)
