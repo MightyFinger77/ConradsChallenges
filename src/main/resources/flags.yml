@@ -2,16 +2,20 @@
 # New challenges use these when a flag is not set in challenges.yml.
 # Edit and use /conradchallenges reload to apply changes live.
 # Flags config version - do not modify
-flags_version: 2
+flags_version: 4
 
-# Master switch: when false, the plugin ignores all flags below (WG/GriefDefender can control). Toggle per-challenge via Options GUI.
+# Master switch default for NEW challenges only. When false, new challenges start with "Flags" off
+# (plugin does not enforce any flags; WG/GriefDefender can control). When you turn Flags ON for a
+# challenge in the Options GUI, that challenge's flags apply regardless of this default.
 flags-applied: false
-# Allow breaking blocks in the challenge area
+# When true: restrict breaking (only allow list + blocks they placed). When false: allow all breaking.
 block-break-enabled: false
-# Allow placing blocks in the challenge area
+# When true: restrict placing (only allow list). When false: allow all placing.
 block-place-enabled: false
-# Allow interacting with blocks (buttons, levers, doors, etc.) in the challenge area
+# When true: restrict right-click (only allow list – doors, levers, etc.). When false: allow all.
 block-interact-enabled: false
+# When true: block pressure plates (step-on does nothing). When false: pressure plates work normally.
+block-pressure-plate-enabled: false
 # Allow mob/entity spawning (natural and spawn eggs) in the challenge area
 entity-spawn-enabled: false
 # Allow damaging entities (mobs, animals) in the challenge area
@@ -84,6 +88,8 @@ endcrystal-use: false
 entity-armorstand-damage: false
 # Allow damaging item frames in the challenge area
 entity-itemframe-damage: false
+# Allow damaging interaction entities (custom furniture: plushies, bug jars, etc.) in the challenge area
+entity-interaction-damage: false
 # Allow mobs to drop experience orbs when killed in the challenge area
 exp-drop: true
 # Allow fall damage to entities (mobs, animals) in the challenge area

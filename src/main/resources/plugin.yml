@@ -1,7 +1,8 @@
 name: ConradChallenges
-version: '${project.version}'
+version: '4.3.0-Dev1a'
 main: com.gix.conradchallenges.ConradChallengesPlugin
 api-version: '1.21'
+folia-supported: true
 authors: [OfficerConradd, MightyFinger77]
 description: GateKeeper-based challenge system using written books, NPCs, parties, time limits, and anti-forgery.
 softdepend:
@@ -19,6 +20,7 @@ commands:
   challenge:
     description: Shortcut for /conradchallenges challenge commands
     usage: /<command> [addreward|cancel|captureregeneration|clearbook|clearregenerationarea|clearrewards|create|delete|edit|info|list|lockdown|save|setautoregenerationy|setbook|setboss|setcooldown|setdestination|setitem|setmaxparty|setregenerationarea|setspeed|settimelimit|settimer|settype|unlockdown]
+    aliases: [ch]
   challenger:
     description: Browse playable challenges and read their books
     usage: /<command>
@@ -93,6 +95,9 @@ permissions:
   conradchallenges.admin:
     description: Allows admin to manage Conrad Challenge NPCs and challenges
     default: op
+  conradchallenges.leaderboard.ignore:
+    description: Excludes this player from leaderboard placeholders (top times, best time, rank). Use for admins so test runs do not appear on scoreboards.
+    default: op
   conradchallenges.party:
     description: Allows the player to use party commands
     default: true
@@ -102,3 +107,5 @@ permissions:
   conradchallenges.confirm:
     description: Allows the player to confirm a party challenge
     default: true
+folia-supported: true
+

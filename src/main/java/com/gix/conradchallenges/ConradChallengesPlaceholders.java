@@ -400,21 +400,23 @@ public class ConradChallengesPlaceholders {
             return String.valueOf(plugin.getCompletionCount(uuid, challengeId));
         }
 
-        // %conradchallenges_top_<challengeid>_<position>% - Player name at position in leaderboard
+        // %conradchallenges_top_time_formatted_<challengeid>_<position>% - Time at position formatted
+        // Must be checked before top_time and top so "formatted" isn't parsed as position
         // Supports "active" as challenge ID to use current active challenge
-        if (args.length >= 3 && args[0].equalsIgnoreCase("top")) {
-            String challengeId = resolveChallengeId(uuid, args[1]);
+        if (args.length >= 5 && args[0].equalsIgnoreCase("top") && args[1].equalsIgnoreCase("time") && args[2].equalsIgnoreCase("formatted")) {
+            String challengeId = resolveChallengeId(uuid, args[3]);
             if (challengeId == null) return "N/A";
             try {
-                int position = Integer.parseInt(args[2]);
-                String topPlayer = plugin.getTopPlayer(challengeId, position);
-                return topPlayer != null ? topPlayer : "N/A";
+                int position = Integer.parseInt(args[4]);
+                Long topTime = plugin.getTopTime(challengeId, position);
+                return topTime != null ? formatTime(topTime) : "N/A";
             } catch (NumberFormatException e) {
                 return "Invalid";
             }
         }
 
         // %conradchallenges_top_time_<challengeid>_<position>% - Time at position in leaderboard (seconds)
+        // Must be checked before generic "top" so "time" isn't parsed as challenge ID
         // Supports "active" as challenge ID to use current active challenge
         if (args.length >= 4 && args[0].equalsIgnoreCase("top") && args[1].equalsIgnoreCase("time")) {
             String challengeId = resolveChallengeId(uuid, args[2]);
@@ -428,15 +430,15 @@ public class ConradChallengesPlaceholders {
             }
         }
 
-        // %conradchallenges_top_time_formatted_<challengeid>_<position>% - Time at position formatted
+        // %conradchallenges_top_<challengeid>_<position>% - Player name at position in leaderboard
         // Supports "active" as challenge ID to use current active challenge
-        if (args.length >= 5 && args[0].equalsIgnoreCase("top") && args[1].equalsIgnoreCase("time") && args[2].equalsIgnoreCase("formatted")) {
-            String challengeId = resolveChallengeId(uuid, args[3]);
+        if (args.length >= 3 && args[0].equalsIgnoreCase("top")) {
+            String challengeId = resolveChallengeId(uuid, args[1]);
             if (challengeId == null) return "N/A";
             try {
-                int position = Integer.parseInt(args[4]);
-                Long topTime = plugin.getTopTime(challengeId, position);
-                return topTime != null ? formatTime(topTime) : "N/A";
+                int position = Integer.parseInt(args[2]);
+                String topPlayer = plugin.getTopPlayer(challengeId, position);
+                return topPlayer != null ? topPlayer : "N/A";
             } catch (NumberFormatException e) {
                 return "Invalid";
             }

@@ -522,6 +522,8 @@ admin:
   # Edit mode actionbar (placeholder: %challenge% = challenge alias or id)
   edit-mode-actionbar: "&d&lEdit Mode &8| &5%challenge%"
   edit-mode-actionbar-flash: "&3&lEdit Mode &c| &b%challenge%"
+  # Challenger actionbar (placeholders: %challenge%, %lives%, %time_in%, %time_left% = challenge name, lives left, time elapsed, time left segment or empty)
+  challenger-actionbar: "&a&l%challenge% &8| &e❤ %lives% &8| &b⏱ %time_in%%time_left%"
   challenge-edit-returned-before-edit: "&aYou have been returned to your location before entering edit mode."
   challenge-edit-reconnected-welcome: "&aYou reconnected! Welcome back to the challenge."
   challenge-disconnect-returned-to-spawn: "&cYou disconnected from the challenge. You have been returned to spawn."
@@ -634,10 +636,22 @@ completion-gui:
   item-buyback-success: "&aItems recovered! $%fee% was deducted."
   buyback: "&aBuy back into challenge"
   buyback-lore: "&7Pay $%fee% to re-enter with lives"
+  spectate: "&eSpectate"
+  spectate-lore: "&7Enter the challenge in spectator mode. Use &e/exit &7to leave."
   confirm-yes: "&aYes, close"
   confirm-yes-lore: "&7Close the stats menu"
   confirm-no: "&cNo, go back"
   confirm-no-lore: "&7Return to stats menu"
+
+# Spectator mode (death stats Spectate button or Gatekeeper shift-click)
+spectate:
+  entered: "&aYou are now spectating. You cannot leave the challenge area."
+  exit-to-leave: "&7Use &e/exit &7to leave and return to spawn."
+  cycle-hint: "&7Left-click: next challenger | Right-click: previous challenger"
+  now-spectating: "&7Now spectating &e%name%&7."
+  left: "&7You left spectator mode."
+  gatekeeper-joined: "&aYou are now spectating &6%challenge%&a. Use &e/exit &7to leave."
+  no-active: "&cNo one is currently running &6%challenge%&c. Shift-click a challenge with an active run to spectate."
 
 # Loot table manager (GUI prompts and feedback)
 loottable:
@@ -648,6 +662,7 @@ loottable:
   icon-updated: "&aLoot table icon updated to %material%."
   loot-type-set: "&aLoot type set to %type%."
   rarity-set: "&aRarity set to %rarity%."
+  guaranteed-area-set: "&aGuaranteed loot chest will use regen area %area%."
   deleted: "&aLoot table deleted."
   icon-cancelled: "&7Icon change cancelled."
   unknown-item: "&cUnknown item: \"%item%\". Use a valid name (e.g. ender_pearl, diamond)."

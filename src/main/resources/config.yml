@@ -1,5 +1,8 @@
 # Config version - do not modify
-config_version: 7
+config_version: 8
+
+update-checker:
+  enabled: true
 
 # World players are sent to when using /challengecomplete or when time limit expires. (sends to world spawn)
 spawn-world: world
@@ -26,7 +29,9 @@ capture-initial-state-on-load: true
 # Spawner level updates (when setting difficulty tier on challenge start). Lower = less lag per tick, longer total time.
 spawner-level-batch-size: 2          # How many spawners to update per batch (default 2; use 1 if TPS drops)
 spawner-level-ticks-between-batches: 2  # Ticks to wait between batches (default 2; increase if server is laggy)
-spawner-scan-chunks-per-tick: 0       # Max chunks to load per tick during capture/regen pre-load. 0 = no cap (time budget only). Set 1+ to limit and reduce TPS spikes on huge areas.
+# Chunk loading caps (0 = no cap, use time budget only). Reduces TPS spikes when loading many chunks.
+spawner-scan-chunks-per-tick: 0       # Max chunks per tick during spawner scan / capture pre-load. Set 4-8 if capture lags.
+regen-chunks-per-tick: 0              # Max chunks per tick during regeneration pre-load. Set 4-8 to smooth TPS during regen on large areas.
 
 # Difficulty tier level modifiers (adds to spawner's base mob_level)
 difficulty-tiers:
@@ -35,8 +40,10 @@ difficulty-tiers:
   hard: 35     # Adds 35 levels
   extreme: 75  # Adds 100 levels
 
-# Difficulty tier reward multipliers (direct multiplier vs Easy)
-# Each value is the reward multiplier relative to Easy (1.0).
+# Difficulty tier reward multipliers (x Easy). Used for both fallback rewards and tier rewards.
+# For tier rewards: same tier = 1.0 (a tier does not multiply its own rewards). When you roll a reward
+# from a LOWER tier, that reward uses its tier's value here (e.g. extreme roll + medium reward = medium's 1.5x;
+# extreme roll + hard reward = hard's 3x). Fallback rewards use the achieved tier's value directly.
 difficulty-reward-multipliers:
   easy: 1.0      # Base
   medium: 1.5    # 1.5x Easy
@@ -46,6 +53,7 @@ difficulty-reward-multipliers:
 # Lives system: Number of lives per difficulty tier
 # When a player dies, they keep inventory and are teleported back to challenge destination
 # When lives run out, they're removed from challenge and drop inventory
+# Can be edited per-challenge via challenge GUI
 lives-per-tier:
   easy: 4        # Easy tier gets 3 lives
   medium: 3      # Medium tier gets 2 lives
@@ -63,8 +71,11 @@ buy-back-fees:
 # and let them pay a fee to get them back from the death stats GUI. If they died during an invasion, items drop
 # on the floor and this option is disabled.
 item-buyback-enabled: true
-# Per-difficulty item buyback fees (cost to recover items from death stats GUI). Easy keeps inventory on lives lost so not listed.
+# When true, easy mode keeps inventory when lives are exhausted (easy item-buyback fee is ignored). When false, easy uses item-buyback like other tiers.
+easy-keep-inv: true
+# Per-difficulty item buyback fees (cost to recover items from death stats GUI). Easy fee is ignored when easy-keep-inv is true.
 item-buyback-fees:
+  easy: 0    # Easy fee is ignored when easy-keep-inv is true.
   medium: 30000.0
   hard: 60000.0
   extreme: 120000.0

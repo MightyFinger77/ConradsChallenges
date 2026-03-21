@@ -11,6 +11,7 @@ A comprehensive guide for setting up and managing challenges in ConradChallenges
 - [Rewards System](#rewards-system)
 - [Challenge Area System](#challenge-area-system)
 - [Regeneration System](#regeneration-system)
+- [Challenge Areas vs Regeneration Areas](#challenge-areas-vs-regeneration-areas)
 - [Block breaking in challenges](#block-breaking-in-challenges)
 - [Edit Mode](#edit-mode)
 - [Difficulty Tiers](#difficulty-tiers)
@@ -303,10 +304,13 @@ Player gets:
 
 ## Challenge Area System
 
-The challenge area defines the playable boundaries for the challenge. This is separate from the regeneration area and is used for:
-- Teleport restrictions (players can only teleport within the challenge area)
-- Explosion protection (blocks in challenge area are protected from creepers, TNT, etc.)
-- Area validation
+The challenge area is one of two area types (the other is the regeneration area). It is used for:
+- **Barrier boxing** (optional): invisible barrier walls are placed around the challenge area
+- **Blocked-use items**: items you block cannot be used inside the challenge area
+- **Teleport-into rule**: non-admins cannot teleport into a challenge area; they must use the challenge book at the GateKeeper
+- **Explosion protection**: blocks in the challenge area are protected from creepers, TNT, etc.
+
+**Flags** (block break/place, entity spawn, etc.) are tied to the **regeneration area** and are **per-regen area** (regen area 1, 2, 3, …). Each regen area has its own flag set in the Flags GUI. If no regen area is set, flags fall back to **challenge area** (per-challenge area). See [Challenge Areas vs Regeneration Areas](#challenge-areas-vs-regeneration-areas) for how the two area types work together and which one controls movement boundaries.
 
 ### Setting Up Challenge Area
 
@@ -349,11 +353,7 @@ When enabled, barrier blocks are placed around the challenge area (only replacin
 
 The regeneration system automatically resets the challenge area when new players enter, restoring broken blocks, refilled chests, and other changes.
 
-**Important**: Regeneration area and challenge area are separate:
-- **Challenge Area**: Defines playable boundaries (teleport restrictions, explosion protection)
-- **Regeneration Area**: Defines what gets reset when players enter
-
-They can overlap or be different sizes. The regeneration area should typically be larger than or equal to the challenge area.
+**Important**: Regeneration area and challenge area are separate. **Flags are tied to the regeneration area** and are **per-regen area** (each regen area 1, 2, 3, … has its own flag set). See [Challenge Areas vs Regeneration Areas](#challenge-areas-vs-regeneration-areas) for full details on what each area does and how boundaries work.
 
 ### Setting Up Regeneration Area
 
@@ -423,6 +423,60 @@ While in edit mode:
 ```
 /challenge clearregenerationarea
 ```
+
+---
+
+## Challenge Areas vs Regeneration Areas
+
+Each challenge can have two kinds of areas: **challenge area(s)** and **regeneration area(s)**. Both can have multiple boxes (e.g. area 1, 2, 3, 4). Understanding the difference avoids confusion about boundaries and rules.
+
+### What each area is used for
+
+**Challenge area**
+- **Barrier boxing** (optional): barrier blocks are placed around the challenge area only.
+- **Blocked-use items**: materials you block cannot be used (right-click) inside the challenge area.
+- **Teleport-into rule**: non-admins cannot teleport into a challenge area; they must use a Conrad Challenge Book at the GateKeeper. The challenge area defines “the challenge zone” for entry.
+- **Explosion protection**: blocks in the challenge area are protected from creepers, TNT, etc.
+- **PvP**: when enabled in config, PvP between players in the same challenge is blocked (applies to the whole challenge, not a specific box).
+
+**Regeneration area**
+- **Player boundary**: when the challenge has any regen area set, **movement and teleport are restricted to the regen area(s)**. Players cannot leave the regeneration area (they get “You cannot leave the regeneration area!” and are teleported back).
+- **Block state capture and restore**: the initial block state is captured for the regen box(es). When a run ends or a new one starts, only the **regen area** is restored to that state.
+- **Flags**: **flags are tied to the regeneration area** and are **per-regen area**. Each regen area (1, 2, 3, …) has its own set of flags (block break/place/interact, entity spawn, entity damage, pressure plates, etc.). If no regen area is set, flags use **challenge area** index instead. For event checks, both “in challenge area” and “in regen area” may be considered so that rules apply consistently in overlapping or adjacent zones.
+- **Loot**: chest/barrel/shulker candidates for loot tables are taken from the regen area(s). Guaranteed loot uses a chosen regen area.
+- **Block place restriction**: non-editors and non-challengers cannot place blocks in the regen area (“Enter edit mode to make changes to this area”).
+
+### Stipulations and restrictions
+
+**Leaving / movement**
+- Players **cannot** walk or move outside the **boundary**.
+- The boundary is chosen in this order:
+  1. If the challenge has a **regen area** → boundary = **regen area**. Message: “You cannot leave the **regeneration** area! Use /exit or /challengecomplete to leave.”
+  2. Else if it has a **challenge area** → boundary = **challenge area**. Message: “You cannot leave the **challenge** area! …”
+  3. Else → boundary = destination **world** only (no box).
+
+So when a regen area is set, players are confined to the **regen** area, not the challenge area.
+
+**Teleport**
+- **While in a challenge:** teleport is allowed only inside the same boundary (regen area if set, else challenge area, else world). The “teleport outside regeneration area” vs “teleport outside challenge area” message matches that choice.
+- **From outside:** players cannot teleport **into** a **challenge** area unless they are admin, the challenge is in edit mode, or an admin is near the destination. Otherwise they must use the challenge book at the GateKeeper.
+
+**Overlap**
+- A regen area must not overlap with any **other** challenge’s challenge or regen areas.
+- A challenge area must not overlap with any **other** challenge’s challenge or regen areas.
+
+**Edit mode**
+- In edit mode, movement/teleport restrictions are bypassed for that player.
+
+### Why two different areas?
+
+- **Challenge area** = where “challenge zone” rules apply for entry (no teleport in), barrier boxing, and blocked-use items. You can have multiple challenge areas (e.g. different rooms).
+- **Regeneration area** = what gets **reset** and where players are **allowed to be**. Flags are **per-regen area**, so each regen box can have its own break/place/spawn rules.
+
+You can:
+- Have a **regen** area larger than the **challenge** area (e.g. whole dungeon resets, but only part has barrier/entry rules),
+- Have a **challenge** area larger than **regen** (e.g. a non-regen lobby that still has challenge rules), or
+- Keep them in sync with `/challenge areasync` so one box does both.
 
 ---
 

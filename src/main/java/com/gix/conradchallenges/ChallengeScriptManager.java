@@ -382,10 +382,10 @@ public class ChallengeScriptManager {
         player.openInventory(inv);
     }
 
-    /** Configure GUI slot layout: 0-2 = trigger options, 3-5 = function options, 6 = Remove, 7 = Save, 8 = Back */
+    /** Configure GUI slot layout: 0-2 = trigger options, 3-5 = function options, 6 = Remove, 7 = Save, 8 = Back; row 2 center (13) = Change trigger */
     private void openScriptConfigureGui(Player player, ScriptGuiContext ctx) {
         ctx.step = ScriptGuiStep.CONFIGURE;
-        Inventory inv = Bukkit.createInventory(null, 9, SCRIPT_GUI_TITLE_PREFIX + "Configure");
+        Inventory inv = Bukkit.createInventory(null, 18, SCRIPT_GUI_TITLE_PREFIX + "Configure");
         ScriptFunctionType ft = ctx.node.functionType;
         ScriptTrigger tr = ctx.node.trigger;
 
@@ -395,7 +395,7 @@ public class ChallengeScriptManager {
             String keyDisp = String.valueOf(ctx.node.functionData.getOrDefault("keyItemDisplayName", ctx.node.functionData.getOrDefault("itemDisplayName", "")));
             Object cmdObj = ctx.node.functionData.get("keyItemCustomModelData");
             Integer keyCmd = cmdObj instanceof Number ? ((Number) cmdObj).intValue() : null;
-            String keyLabel = keyMat.isEmpty() && keyDisp.isEmpty() && keyCmd == null ? "(none)" : (keyMat.isEmpty() ? keyDisp : keyMat + (keyDisp.isEmpty() ? "" : " - " + truncate(keyDisp, 12)) + (keyCmd != null ? " [CMD:" + keyCmd + "]" : ""));
+            String keyLabel = formatKeyItemLabel(keyMat, keyDisp, keyCmd);
             inv.setItem(0, makeGuiItem(Material.TRIPWIRE_HOOK, ChatColor.YELLOW + "Key item (trigger)", "§7Close GUI, hold item, right-click any block", "§7Current: " + truncate(keyLabel, 28)));
             inv.setItem(1, makeGuiItem(Material.BONE, ChatColor.YELLOW + "Amount to consume (chat)", "§7Per use (0 = no consume)", "§7Current: " + ctx.node.functionData.getOrDefault("amount", 1)));
         } else if (tr == ScriptTrigger.SIGNAL_RECEIVER) {
@@ -421,7 +421,7 @@ public class ChallengeScriptManager {
             String keyDisp = String.valueOf(ctx.node.functionData.getOrDefault("keyItemDisplayName", ""));
             Object cmdObj = ctx.node.functionData.get("keyItemCustomModelData");
             Integer keyCmd = cmdObj instanceof Number ? ((Number) cmdObj).intValue() : null;
-            String keyLabel = keyMat.isEmpty() && keyDisp.isEmpty() && keyCmd == null ? "(none)" : (keyMat.isEmpty() ? keyDisp : keyMat + (keyDisp.isEmpty() ? "" : " - " + truncate(keyDisp, 12)) + (keyCmd != null ? " [CMD:" + keyCmd + "]" : ""));
+            String keyLabel = formatKeyItemLabel(keyMat, keyDisp, keyCmd);
             inv.setItem(0, makeGuiItem(Material.TRIPWIRE_HOOK, ChatColor.YELLOW + "Key item (remove block)", "§7Close GUI, hold item, right-click block", "§7Current: " + truncate(keyLabel, 28)));
             inv.setItem(1, makeGuiItem(Material.BONE, ChatColor.YELLOW + "Amount (chat)", "§7Consumed per use", "§7Current: " + ctx.node.functionData.getOrDefault("amount", 1)));
             Object lb = ctx.node.functionData.get("linkedBlocks");
@@ -457,16 +457,36 @@ public class ChallengeScriptManager {
             inv.setItem(3, makeGuiItem(Material.REPEATER, ChatColor.YELLOW + "Signal name (chat)", "§7Current: " + String.valueOf(ctx.node.functionData.getOrDefault("signal", ""))));
         } else if (ft == ScriptFunctionType.CHECKPOINT) {
             int num = ctx.node.functionData.get("checkpointNumber") instanceof Number ? ((Number) ctx.node.functionData.get("checkpointNumber")).intValue() : 1;
+            int visDist = ctx.node.functionData.get("hologramVisibilityDistance") instanceof Number ? ((Number) ctx.node.functionData.get("hologramVisibilityDistance")).intValue() : 15;
             inv.setItem(3, makeGuiItem(Material.LODESTONE, ChatColor.GOLD + "Checkpoint number (chat)", "§7Order this checkpoint triggers in (1, 2, 3...)", "§7Current: #" + num));
+            inv.setItem(4, makeGuiItem(Material.SPYGLASS, ChatColor.YELLOW + "Hologram visibility distance (chat)", "§7Blocks at which hologram is visible (1–64)", "§7Current: " + visDist + " block(s)"));
         }
 
         if (ctx.editingNodeIndex >= 0) {
             inv.setItem(6, makeGuiItem(Material.RED_CONCRETE, ChatColor.RED + "Remove", "§7Delete this script"));
         }
         inv.setItem(7, makeGuiItem(Material.LIME_CONCRETE, ChatColor.GREEN + "Save", ctx.editingNodeIndex >= 0 ? "§7Save changes and close" : "§7Continue to confirm"));
-        inv.setItem(8, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", "§7Back to trigger"));
+        inv.setItem(8, makeGuiItem(Material.ARROW, ChatColor.GRAY + "Back", ctx.editingNodeIndex >= 0 ? "§7Back to block menu" : "§7Back to trigger"));
+        inv.setItem(13, makeGuiItem(Material.DIAMOND_CHESTPLATE, ChatColor.YELLOW + "Change trigger", "§7Current: " + triggerDisplayName(tr), "§7Opens trigger list to pick a different trigger"));
         scriptGuiContext.put(player.getUniqueId(), ctx);
         player.openInventory(inv);
+    }
+
+    private static String triggerDisplayName(ScriptTrigger tr) {
+        if (tr == null) return "?";
+        switch (tr) {
+            case BLOCK_INTERACT: return "Block interact";
+            case BLOCK_BREAK: return "Block break";
+            case BLOCK_PLACE: return "Block place";
+            case PLAYER_ENTER_AREA: return "Player enter area";
+            case MOB_DEATH: return "Mob death";
+            case USE_ITEM: return "Use item";
+            case SIGNAL_RECEIVER: return "Signal receiver";
+            case REDSTONE_RECEIVER: return "Redstone receiver";
+            case AND_GATE: return "AND gate";
+            case OR_GATE: return "OR gate";
+            default: return tr.name();
+        }
     }
 
     /** Saves the current script (update existing or add new) and closes. Call from Configure (Save) or Confirm. */
@@ -534,8 +554,10 @@ public class ChallengeScriptManager {
             ctx.node.functionData.putIfAbsent("signal", "");
         if (ctx.node.trigger == ScriptTrigger.PLAYER_ENTER_AREA)
             ctx.node.functionData.putIfAbsent("enterAreaDistance", 3);
-        if (ctx.node.functionType == ScriptFunctionType.CHECKPOINT)
+        if (ctx.node.functionType == ScriptFunctionType.CHECKPOINT) {
             ctx.node.functionData.putIfAbsent("checkpointNumber", 1);
+            ctx.node.functionData.putIfAbsent("hologramVisibilityDistance", 15);
+        }
         if (ctx.node.trigger == ScriptTrigger.USE_ITEM) {
             ctx.node.functionData.putIfAbsent("keyItemMaterial", "");
             ctx.node.functionData.putIfAbsent("keyItemDisplayName", "");
@@ -551,6 +573,13 @@ public class ChallengeScriptManager {
         return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 
+    /** Format key item for display: prefer display name (e.g. "Skeletons Lockpick") over material ID. */
+    private static String formatKeyItemLabel(String keyMat, String keyDisp, Integer keyCmd) {
+        if (keyMat.isEmpty() && (keyDisp == null || keyDisp.isEmpty()) && keyCmd == null) return "(none)";
+        String base = (keyDisp != null && !keyDisp.isEmpty()) ? keyDisp : (keyMat != null && !keyMat.isEmpty() ? keyMat : "(none)");
+        return base + (keyCmd != null ? " [CMD:" + keyCmd + "]" : "");
+    }
+
     private void handleConfigureGuiClick(Player player, ScriptGuiContext ctx, int slot) {
         ScriptFunctionType ft = ctx.node.functionType;
         ScriptTrigger tr = ctx.node.trigger;
@@ -562,6 +591,10 @@ public class ChallengeScriptManager {
             } else {
                 openScriptTriggerGui(player, ctx);
             }
+            return;
+        }
+        if (slot == 13) {
+            openScriptTriggerGui(player, ctx);
             return;
         }
         if (slot == 7) {
@@ -673,6 +706,10 @@ public class ChallengeScriptManager {
             startChatInput(player, ctx, "checkpointNumber", "Type checkpoint number (1, 2, 3...) or 'cancel':");
             return;
         }
+        if (slot == 4 && ft == ScriptFunctionType.CHECKPOINT) {
+            startChatInput(player, ctx, "hologramVisibilityDistance", "Type hologram visibility distance in blocks (1–64) or 'cancel':");
+            return;
+        }
     }
 
     private void startChatInput(Player player, ScriptGuiContext ctx, String field, String prompt) {
@@ -737,6 +774,12 @@ public class ChallengeScriptManager {
             try {
                 int n = Integer.parseInt(message.trim());
                 if (n > 0) ctx.node.functionData.put("checkpointNumber", n);
+            } catch (NumberFormatException ignored) { }
+        } else if ("hologramVisibilityDistance".equals(field)) {
+            try {
+                int d = Integer.parseInt(message.trim());
+                d = Math.max(1, Math.min(64, d));
+                ctx.node.functionData.put("hologramVisibilityDistance", d);
             } catch (NumberFormatException ignored) { }
         } else if ("teleportCoords".equals(field)) {
             String[] parts = message.trim().replace(',', ' ').split("\\s+");
@@ -838,8 +881,7 @@ public class ChallengeScriptManager {
                 }
                 awaitKeyCtx.step = ScriptGuiStep.CONFIGURE;
                 scriptGuiContext.put(player.getUniqueId(), awaitKeyCtx);
-                String msg = hand.getType().name();
-                if (!displayName.isEmpty()) msg += " - " + ChatColor.stripColor(displayName);
+                String msg = (displayName != null && !displayName.trim().isEmpty()) ? ChatColor.stripColor(displayName) : hand.getType().name();
                 if (meta != null && meta.hasCustomModelData()) msg += " (CMD: " + meta.getCustomModelData() + ")";
                 player.sendMessage(ChatColor.GREEN + "Key item set: " + msg);
                 openScriptConfigureGui(player, awaitKeyCtx);
@@ -1432,6 +1474,17 @@ public class ChallengeScriptManager {
                 if (isShulkerType && "OFF".equalsIgnoreCase(String.valueOf(cfg.loottableShulkerFill))) {
                     player.sendMessage(ChatColor.RED + "Shulker boxes are not included in loot tables for this challenge. Enable shulker boxes (all/half/quarter) first.");
                     return;
+                }
+                if (isChest) {
+                    int chestSize = (block.getState() instanceof org.bukkit.block.Chest cs) ? cs.getInventory().getSize() : 27;
+                    if (chestSize == 27 && "OFF".equalsIgnoreCase(String.valueOf(cfg.loottableChestFill))) {
+                        player.sendMessage(ChatColor.RED + "Single chests are not included in loot tables for this challenge. Enable single chests (all/half/quarter) in the options GUI first.");
+                        return;
+                    }
+                    if (chestSize == 54 && "OFF".equalsIgnoreCase(String.valueOf(cfg.loottableDoubleChestFill))) {
+                        player.sendMessage(ChatColor.RED + "Double chests are not included in loot tables for this challenge. Enable double chests (all/half/quarter) in the options GUI first.");
+                        return;
+                    }
                 }
                 List<Block> toToggle = ConradChallengesPlugin.getContainerBlocksForIgnore(block);
                 if (cfg.ignoredChestKeys == null) cfg.ignoredChestKeys = new java.util.HashSet<>();
